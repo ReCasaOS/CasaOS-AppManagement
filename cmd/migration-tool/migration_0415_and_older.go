@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	interfaces "github.com/IceWhaleTech/CasaOS-Common"
+	interfaces "github.com/inkly/CasaOS-Common"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/config"
+	"github.com/inkly/CasaOS-AppManagement/pkg/config"
 )
 
 type UrlReplacement struct {

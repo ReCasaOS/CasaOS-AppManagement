@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/docker"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/random"
+	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/inkly/CasaOS-Common/utils/random"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"

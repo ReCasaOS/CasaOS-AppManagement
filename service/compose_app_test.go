@@ -5,16 +5,16 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/docker"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/service"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
+	"github.com/inkly/CasaOS-AppManagement/common"
+	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/inkly/CasaOS-AppManagement/service"
+	"github.com/inkly/CasaOS-Common/utils/logger"
 	"go.uber.org/goleak"
 	"gotest.tools/v3/assert"
 )
 
 func TestUpdateEventPropertiesFromStoreInfo(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
+	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1), goleak.IgnoreAnyFunction(ecacheClock)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
 
 	defer func() {
 		// workaround due to https://github.com/patrickmn/go-cache/issues/166
@@ -55,7 +55,7 @@ func TestUpdateEventPropertiesFromStoreInfo(t *testing.T) {
 }
 
 func TestNameAndTitle(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
+	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1), goleak.IgnoreAnyFunction(ecacheClock)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
 
 	defer func() {
 		// workaround due to https://github.com/patrickmn/go-cache/issues/166

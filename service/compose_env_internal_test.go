@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
+	"github.com/inkly/CasaOS-AppManagement/common"
+	"github.com/inkly/CasaOS-Common/utils/logger"
 	"github.com/docker/docker/api/types/container"
 	"gotest.tools/v3/assert"
 )

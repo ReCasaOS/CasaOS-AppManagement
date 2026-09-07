@@ -3,9 +3,9 @@ package v2
 import (
 	"net/http"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/codegen"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/docker"
-	"github.com/IceWhaleTech/CasaOS-Common/utils"
+	"github.com/inkly/CasaOS-AppManagement/codegen"
+	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/inkly/CasaOS-Common/utils"
 	"github.com/labstack/echo/v4"
 )
 

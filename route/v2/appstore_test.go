@@ -5,11 +5,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/codegen"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
-	v2 "github.com/IceWhaleTech/CasaOS-AppManagement/route/v2"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/service"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
+	"github.com/inkly/CasaOS-AppManagement/codegen"
+	"github.com/inkly/CasaOS-AppManagement/common"
+	v2 "github.com/inkly/CasaOS-AppManagement/route/v2"
+	"github.com/inkly/CasaOS-AppManagement/service"
+	"github.com/inkly/CasaOS-Common/utils/logger"
 	"github.com/compose-spec/compose-go/v2/types"
 )
 

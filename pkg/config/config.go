@@ -3,7 +3,7 @@ package config
 import (
 	"path/filepath"
 
-	"github.com/IceWhaleTech/CasaOS-Common/utils/constants"
+	"github.com/inkly/CasaOS-Common/utils/constants"
 )
 
 var (

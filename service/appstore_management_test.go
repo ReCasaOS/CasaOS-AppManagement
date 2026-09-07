@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/codegen"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/config"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/docker"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/service"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
+	"github.com/inkly/CasaOS-AppManagement/codegen"
+	"github.com/inkly/CasaOS-AppManagement/common"
+	"github.com/inkly/CasaOS-AppManagement/pkg/config"
+	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/inkly/CasaOS-AppManagement/service"
+	"github.com/inkly/CasaOS-Common/utils/file"
+	"github.com/inkly/CasaOS-Common/utils/logger"
 	"go.uber.org/goleak"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v3"
@@ -21,7 +21,7 @@ import (
 )
 
 func TestAppStoreList(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
+	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1), goleak.IgnoreAnyFunction(ecacheClock)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
 
 	defer func() {
 		// workaround due to https://github.com/patrickmn/go-cache/issues/166
@@ -88,7 +88,7 @@ func TestAppStoreList(t *testing.T) {
 }
 
 func TestIsUpgradable(t *testing.T) {
-	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
+	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1), goleak.IgnoreAnyFunction(ecacheClock)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
 
 	defer func() {
 		// workaround due to https://github.com/patrickmn/go-cache/issues/166

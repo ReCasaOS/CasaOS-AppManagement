@@ -14,18 +14,18 @@ import (
 	"strings"
 	"time"
 
-	v1 "github.com/IceWhaleTech/CasaOS-AppManagement/service/v1"
+	v1 "github.com/inkly/CasaOS-AppManagement/service/v1"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/codegen"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/config"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/docker"
-	"github.com/IceWhaleTech/CasaOS-Common/external"
-	"github.com/IceWhaleTech/CasaOS-Common/utils"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/port"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/random"
+	"github.com/inkly/CasaOS-AppManagement/codegen"
+	"github.com/inkly/CasaOS-AppManagement/common"
+	"github.com/inkly/CasaOS-AppManagement/pkg/config"
+	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/inkly/CasaOS-Common/external"
+	"github.com/inkly/CasaOS-Common/utils"
+	"github.com/inkly/CasaOS-Common/utils/file"
+	"github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/inkly/CasaOS-Common/utils/port"
+	"github.com/inkly/CasaOS-Common/utils/random"
 	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -1044,16 +1044,16 @@ func LoadComposeAppFromConfigFile(appID string, configFile string) (*ComposeApp,
 	return (*ComposeApp)(project), err
 }
 
-var gpuCache *([]external.GPUInfo) = nil
+var gpuCache *([]external.NvidiaGPUInfo) = nil
 
 func removeRuntime(a *ComposeApp) {
 	if config.RemoveRuntimeIfNoNvidiaGPUFlag {
 
 		// if gpuCache is nil, it means it is first time fetching gpu info
 		if gpuCache == nil {
-			value, err := external.GPUInfoList()
+			value, err := external.NvidiaGPUInfoList()
 			if err != nil {
-				gpuCache = &([]external.GPUInfo{})
+				gpuCache = &([]external.NvidiaGPUInfo{})
 			} else {
 				gpuCache = &value
 			}

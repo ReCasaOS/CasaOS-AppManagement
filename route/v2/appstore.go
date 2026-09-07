@@ -9,19 +9,19 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/codegen"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/common"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/config"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/pkg/docker"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/service"
-	"github.com/IceWhaleTech/CasaOS-Common/utils"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
+	"github.com/inkly/CasaOS-AppManagement/codegen"
+	"github.com/inkly/CasaOS-AppManagement/common"
+	"github.com/inkly/CasaOS-AppManagement/pkg/config"
+	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/inkly/CasaOS-AppManagement/service"
+	"github.com/inkly/CasaOS-Common/utils"
+	"github.com/inkly/CasaOS-Common/utils/logger"
 	"github.com/labstack/echo/v4"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	pkg_utils "github.com/IceWhaleTech/CasaOS-AppManagement/pkg/utils"
+	pkg_utils "github.com/inkly/CasaOS-AppManagement/pkg/utils"
 )
 
 func (a *AppManagement) AppStoreList(ctx echo.Context) error {

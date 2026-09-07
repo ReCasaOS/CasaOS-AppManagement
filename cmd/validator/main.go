@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/IceWhaleTech/CasaOS-AppManagement/cmd/validator/pkg"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
-	utils_logger "github.com/IceWhaleTech/CasaOS-Common/utils/logger"
+	"github.com/inkly/CasaOS-AppManagement/cmd/validator/pkg"
+	"github.com/inkly/CasaOS-Common/utils/file"
+	utils_logger "github.com/inkly/CasaOS-Common/utils/logger"
 )
 
 var logger = NewLogger()

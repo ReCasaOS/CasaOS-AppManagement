@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	appdocker "github.com/IceWhaleTech/CasaOS-AppManagement/pkg/docker"
-	"github.com/IceWhaleTech/CasaOS-AppManagement/service"
+	appdocker "github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/inkly/CasaOS-AppManagement/service"
 	"github.com/docker/compose/v2/pkg/api"
 )
 
