@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bluele/gcache"
+	"github.com/docker/docker/client"
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/common"
 	"github.com/inkly/CasaOS-AppManagement/pkg/config"
@@ -15,8 +17,6 @@ import (
 	"github.com/inkly/CasaOS-Common/utils"
 	"github.com/inkly/CasaOS-Common/utils/file"
 	"github.com/inkly/CasaOS-Common/utils/logger"
-	"github.com/bluele/gcache"
-	"github.com/docker/docker/client"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 )

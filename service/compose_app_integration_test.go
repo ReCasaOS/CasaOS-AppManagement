@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/compose/v2/pkg/api"
 	appdocker "github.com/inkly/CasaOS-AppManagement/pkg/docker"
 	"github.com/inkly/CasaOS-AppManagement/service"
-	"github.com/docker/compose/v2/pkg/api"
 )
 
 func TestComposeAppLifecycle(t *testing.T) {

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/deepmap/oapi-codegen/pkg/middleware"
+	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	v2 "github.com/inkly/CasaOS-AppManagement/route/v2"
 	"github.com/inkly/CasaOS-Common/utils/logger"
-	"github.com/deepmap/oapi-codegen/pkg/middleware"
-	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/labstack/echo/v4"
 	"gotest.tools/v3/assert"
 )

@@ -16,6 +16,10 @@ import (
 
 	v1 "github.com/inkly/CasaOS-AppManagement/service/v1"
 
+	"github.com/compose-spec/compose-go/v2/cli"
+	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
+	composeCmd "github.com/docker/compose/v2/cmd/compose"
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/common"
 	"github.com/inkly/CasaOS-AppManagement/pkg/config"
@@ -26,10 +30,6 @@ import (
 	"github.com/inkly/CasaOS-Common/utils/logger"
 	"github.com/inkly/CasaOS-Common/utils/port"
 	"github.com/inkly/CasaOS-Common/utils/random"
-	"github.com/compose-spec/compose-go/v2/cli"
-	"github.com/compose-spec/compose-go/v2/loader"
-	"github.com/compose-spec/compose-go/v2/types"
-	composeCmd "github.com/docker/compose/v2/cmd/compose"
 
 	"github.com/docker/compose/v2/cmd/formatter"
 	"github.com/docker/compose/v2/pkg/api"

@@ -5,12 +5,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/common"
 	v2 "github.com/inkly/CasaOS-AppManagement/route/v2"
 	"github.com/inkly/CasaOS-AppManagement/service"
 	"github.com/inkly/CasaOS-Common/utils/logger"
-	"github.com/compose-spec/compose-go/v2/types"
 )
 
 func TestFilterCatalogByCategory(t *testing.T) {

@@ -10,12 +10,12 @@ import (
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/pkg/config"
 
-	v2Route "github.com/inkly/CasaOS-AppManagement/route/v2"
-	"github.com/inkly/CasaOS-Common/external"
-	"github.com/inkly/CasaOS-Common/utils/jwt"
 	"github.com/deepmap/oapi-codegen/pkg/middleware"
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
+	v2Route "github.com/inkly/CasaOS-AppManagement/route/v2"
+	"github.com/inkly/CasaOS-Common/external"
+	"github.com/inkly/CasaOS-Common/utils/jwt"
 	"github.com/labstack/echo/v4"
 	echo_middleware "github.com/labstack/echo/v4/middleware"
 )

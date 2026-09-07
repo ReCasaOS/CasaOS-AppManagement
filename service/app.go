@@ -1,11 +1,11 @@
 package service
 
 import (
+	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/common"
 	"github.com/inkly/CasaOS-Common/utils/logger"
-	"github.com/compose-spec/compose-go/v2/loader"
-	"github.com/compose-spec/compose-go/v2/types"
 )
 
 type App types.ServiceConfig

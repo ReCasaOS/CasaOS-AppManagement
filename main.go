@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/coreos/go-systemd/daemon"
 	"github.com/inkly/CasaOS-AppManagement/common"
 	"github.com/inkly/CasaOS-AppManagement/pkg/config"
 	"github.com/inkly/CasaOS-AppManagement/route"
@@ -21,7 +22,6 @@ import (
 	"github.com/inkly/CasaOS-Common/model"
 	"github.com/inkly/CasaOS-Common/utils/file"
 	"github.com/inkly/CasaOS-Common/utils/logger"
-	"github.com/coreos/go-systemd/daemon"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 
