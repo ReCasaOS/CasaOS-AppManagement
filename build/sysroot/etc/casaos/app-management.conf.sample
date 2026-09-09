@@ -7,6 +7,9 @@ LogSaveName = app-management
 LogFileExt = log
 AppStorePath = /var/lib/casaos/appstore
 AppsPath = /var/lib/casaos/apps
+; how long an app is given to report itself running or healthy after it is started,
+; before it is reported as started but not confirmed. Needs a unit. Default 5m.
+; UpWaitTimeout = 5m
 
 [server]
 appstore = https://cdn.jsdelivr.net/gh/IceWhaleTech/CasaOS-AppStore@gh-pages/store/main.zip

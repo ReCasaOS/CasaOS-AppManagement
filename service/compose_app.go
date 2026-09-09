@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -499,8 +500,9 @@ func (a *ComposeApp) injectEnvVariableToComposeApp() {
 	}
 }
 
-// upWaitTimeout bounds how long we wait for an app's containers to become
-// running-or-healthy. A var, not a const, so the test can shorten it.
+// defaultUpWaitTimeout bounds how long we wait for an app's containers to become
+// running-or-healthy, when `UpWaitTimeout` is not set in the `[app]` section of
+// app-management.conf.
 //
 // The pull already happened by the time we get here, so this budget covers create,
 // start and healthcheck convergence only. The other container waits in this service
@@ -508,43 +510,83 @@ func (a *ComposeApp) injectEnvVariableToComposeApp() {
 // the one long wait, 30 minutes, is the boot window for /DATA to mount, which is a
 // different kind of waiting. Five minutes sits between them on purpose: enough for a
 // dependency chain of healthchecks with 60s start_periods on a slow ARM box, short
-// enough that a stack which will never converge is diagnosed and rolled back while
-// the owner is still looking at the page.
-var upWaitTimeout = 5 * time.Minute
+// enough that a stack which will never converge is reported while the owner is still
+// looking at the page. A box slower than that -- or a stack with a longer honest
+// convergence -- sets the config key.
+const defaultUpWaitTimeout = 5 * time.Minute
+
+// errUpNotConfirmed marks a wait that ran out of time. It is not the same failure as
+// compose refusing to start the app: the containers were created and started, only
+// their running-or-healthy confirmation never arrived. It can be an app that is still
+// converging, or a stack whose one-shot init container -- a db-migrate, a chown
+// sidecar -- exits 0 and can never be "running or healthy", which is what compose
+// waits for on every service nothing depends on with service_completed_successfully
+// (getDependencyCondition, pkg/compose/start.go).
+var errUpNotConfirmed = errors.New("not confirmed running or healthy")
+
+// upWaitTimeout is the deadline in force, from `UpWaitTimeout` under `[app]`.
+func upWaitTimeout() time.Duration {
+	// ini leaves the field at zero for a missing key, and parses a unit-less number as
+	// nanoseconds, so anything under a second is an unset key or a typo, not a choice.
+	if d := config.AppInfo.UpWaitTimeout; d >= time.Second {
+		return d
+	}
+	return defaultUpWaitTimeout
+}
 
 // waitForApp runs a compose operation that was asked to wait for containers, under a
-// deadline, and reports a blown deadline as the failure it is.
+// deadline, and reports a blown deadline as errUpNotConfirmed.
 //
 // Both halves are needed. api.StartOptions.Wait polls every 500ms for every service
 // to be running-or-healthy and only wraps the context in a deadline of its own when
 // WaitTimeout > 0 (pkg/compose/start.go), so without one it never gives up: a gluetun
 // stack, whose services cannot start until the VPN container is healthy, parks here
-// for ever and the caller's rollback never runs. And compose v2.27 swallows the
+// for ever and the caller never hears about it. And compose v2.27 swallows the
 // cancellation -- waitDependencies returns nil for every service once the context is
 // done (pkg/compose/convergence.go), and progress.Run passes that nil straight
-// through -- so a wait that timed out comes back as success unless we look.
+// through -- so a wait that timed out comes back as success unless we look. That is
+// also why passing our budget as StartOptions.WaitTimeout instead would not do: the
+// deadline compose sets for itself is swallowed by the same nil.
 func waitForApp(ctx context.Context, name string, up func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(ctx, upWaitTimeout)
+	timeout := upWaitTimeout()
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := up(ctx); err != nil {
+	if err := up(waitCtx); err != nil {
 		return err
 	}
 
 	if ctx.Err() != nil {
-		return fmt.Errorf("compose app `%s` was not running or healthy after %s", name, upWaitTimeout)
+		// the caller gave up on us, not the other way around
+		return fmt.Errorf("wait for compose app `%s` was cancelled: %w", name, ctx.Err())
+	}
+
+	if waitCtx.Err() != nil {
+		return fmt.Errorf("compose app `%s` was started but %w after %s", name, errUpNotConfirmed, timeout)
 	}
 
 	return nil
 }
 
 func (a *ComposeApp) Up(ctx context.Context, service api.Service) error {
+	return a.up(ctx, service, false)
+}
+
+// up starts the app. removeOrphans is for the rollback path only: the definition being
+// replaced may have declared a service the restored one does not, and a container left
+// over from it would keep running under no compose file at all. It stays off elsewhere,
+// where an unknown container of this project is an adopted one, not a leftover.
+func (a *ComposeApp) up(ctx context.Context, service api.Service, removeOrphans bool) error {
 	a.injectEnvVariableToComposeApp()
 
 	// no OnExit: compose only reads it when Start.Attach is set, and we never attach
 	// (pkg/compose/up.go) -- CascadeStop here was decoration.
 	if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
 		return service.Up(ctx, (*codegen.ComposeApp)(a), api.UpOptions{
+			Create: api.CreateOptions{
+				RemoveOrphans: removeOrphans,
+			},
 			Start: api.StartOptions{
 				Wait: true,
 			},
@@ -644,7 +686,9 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 				}
 			}
 
-			if err := a.Up(ctx, service); err != nil {
+			// with RemoveOrphans: the new file may have added a service, and its container
+			// is not in the definition we just restored
+			if err := a.up(ctx, service, true); err != nil {
 				logger.Error("failed to start original compose app", zap.Error(err), zap.String("name", a.Name))
 				return
 			}
@@ -679,8 +723,22 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 	// an app that fails to start counts as a failed apply: the files are put back and the
 	// previous app started from them, so disk and running state never diverge
 	err = newComposeApp.UpWithCheckRequire(ctx, service)
-	success = err == nil
+	success = keepNewDefinition(err)
 	return err
+}
+
+// keepNewDefinition reports whether an apply that ended with err must leave the new
+// compose file and `.env` on disk.
+//
+// A wait that only ran out of time is not a failed apply: compose created and started
+// the containers from the new definition and they are running right now. Restoring the
+// backup over it and re-upping the old definition would take away an edit that worked
+// -- the case that made this deliberate: a stack with a one-shot init container nobody
+// depends on can never satisfy compose's running-or-healthy wait, however long it is
+// given. The error still travels to the caller, so the owner is told the app was
+// started but never confirmed healthy, rather than being told nothing.
+func keepNewDefinition(err error) bool {
+	return err == nil || errors.Is(err, errUpNotConfirmed)
 }
 
 func (a *ComposeApp) Create(ctx context.Context, options api.CreateOptions, service api.Service) error {

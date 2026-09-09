@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 type CommonModel struct {
 	RuntimePath string
 }
@@ -10,6 +12,11 @@ type APPModel struct {
 	LogFileExt   string
 	AppStorePath string
 	AppsPath     string
+
+	// UpWaitTimeout bounds how long an app is given to report itself running or
+	// healthy after it is started. Zero (the key absent) keeps the built-in default.
+	// A duration with a unit: "5m", "20m".
+	UpWaitTimeout time.Duration
 }
 
 type ServerModel struct {
