@@ -37,6 +37,8 @@ import (
 	"github.com/docker/docker/api/types/system"
 	client2 "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+
+	"github.com/docker/compose/v2/pkg/api"
 )
 
 var (
@@ -323,17 +325,23 @@ func (ds *dockerService) GetContainerAppList(name, image, state *string) (*[]mod
 			casaOSApps = append(casaOSApps, casaOSApp)
 		} else {
 			localApp := model.MyAppList{
-				Name:     strings.ReplaceAll(m.Names[0], "/", ""),
-				Icon:     "",
-				State:    m.State,
-				CustomID: m.ID,
-				ID:       m.ID,
-				Port:     "",
-				Latest:   false,
-				Host:     "",
-				Protocol: "",
-				Image:    m.Image,
-				Created:  m.Created,
+				// The project a compose stack claims this container for, empty when
+				// none does. A stack whose config file this host cannot read is not in
+				// the compose list at all, so its containers reach the dashboard as
+				// plain containers: this label is the only thing that still says whose
+				// they are.
+				ComposeProject: m.Labels[api.ProjectLabel],
+				Name:           strings.ReplaceAll(m.Names[0], "/", ""),
+				Icon:           "",
+				State:          m.State,
+				CustomID:       m.ID,
+				ID:             m.ID,
+				Port:           "",
+				Latest:         false,
+				Host:           "",
+				Protocol:       "",
+				Image:          m.Image,
+				Created:        m.Created,
 			}
 
 			localApps = append(localApps, localApp)

@@ -211,5 +211,14 @@ func WebAppGridItemAdapterContainer(container *model.MyAppList) (*codegen.WebApp
 		IsUncontrolled: &container.IsUncontrolled,
 	}
 
+	// Set only when a compose project claims the container. It reaches this adapter
+	// only when the compose list did not claim it -- which it silently does not for a
+	// project whose config file cannot be loaded -- so `container` here does not mean
+	// "belongs to no stack", and the dashboard has to be told which it is before it
+	// offers an operation that would clone the container out of its project.
+	if container.ComposeProject != "" {
+		item.ComposeProject = &container.ComposeProject
+	}
+
 	return item, nil
 }

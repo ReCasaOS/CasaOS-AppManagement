@@ -87,6 +87,7 @@ type MyAppList struct {
 	Created        int64  `json:"created"`
 	AppStoreID     uint   `json:"appstore_id"`
 	IsUncontrolled bool   `json:"is_uncontrolled"`
+	ComposeProject string `json:"compose_project,omitempty"`
 }
 
 type Ports struct {

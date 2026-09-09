@@ -7,6 +7,7 @@ import (
 
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/common"
+	"github.com/inkly/CasaOS-AppManagement/model"
 	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
 	v2 "github.com/inkly/CasaOS-AppManagement/route/v2"
 	"github.com/inkly/CasaOS-AppManagement/service"
@@ -66,4 +67,23 @@ func TestWebAppGridItemAdapter(t *testing.T) {
 	assert.DeepEqual(t, *gridItem.Title, storeInfo.Title)
 	assert.Equal(t, *gridItem.AuthorType, codegen.ByCasaos)
 	assert.Equal(t, *gridItem.IsUncontrolled, false)
+}
+
+// An adopted container is offered operations that are not compose-aware, so the grid
+// item has to say whether a project owns it. A project whose config file cannot be
+// loaded is missing from the compose list and its containers arrive here one by one,
+// looking exactly like a container nothing owns - the label they carry is the only
+// thing that tells them apart.
+func TestWebAppGridItemAdapterContainerReportsItsComposeProject(t *testing.T) {
+	claimed, err := v2.WebAppGridItemAdapterContainer(&model.MyAppList{
+		ID:             "3f1c",
+		Name:           "immich_server_1",
+		ComposeProject: "immich",
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, *claimed.ComposeProject, "immich")
+
+	adopted, err := v2.WebAppGridItemAdapterContainer(&model.MyAppList{ID: "9a2b", Name: "plex"})
+	assert.NilError(t, err)
+	assert.Assert(t, adopted.ComposeProject == nil)
 }
