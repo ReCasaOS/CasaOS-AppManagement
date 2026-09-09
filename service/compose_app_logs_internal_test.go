@@ -38,6 +38,22 @@ func TestLogsAskTheDaemonForTimestamps(t *testing.T) {
 	}
 }
 
+// The per-container viewer asks for ONE service. If that name stopped reaching the
+// daemon, the panel would quietly go back to showing the whole stack interleaved --
+// which is exactly what it looks like when it is right.
+func TestLogsAskTheDaemonForOneNamedService(t *testing.T) {
+	app := &ComposeApp{Services: types.Services{
+		"web": types.ServiceConfig{Name: "web"},
+		"db":  types.ServiceConfig{Name: "db"},
+	}}
+
+	options := app.logOptions(100, "db")
+
+	if strings.Join(options.Services, ",") != "db" {
+		t.Errorf("services are %v, want only the one asked for", options.Services)
+	}
+}
+
 // And the consumer must leave that timestamp alone. Its own timestamp flag stamps
 // time.Now() at READ time, which would put this instant in front of the daemon's real
 // one on every line of a tail.

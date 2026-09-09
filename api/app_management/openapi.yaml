@@ -678,6 +678,14 @@ paths:
           schema:
             type: integer
             default: 1000
+        - name: service
+          in: query
+          description: |
+            Name of the compose service to show the logs of.
+
+            - show the logs of every service if omitted
+          schema:
+            type: string
       responses:
         "200":
           $ref: "#/components/responses/ComposeAppLogsOK"

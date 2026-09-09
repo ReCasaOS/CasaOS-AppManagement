@@ -624,7 +624,22 @@ func (a *AppManagement) ComposeAppLogs(ctx echo.Context, id codegen.ComposeAppID
 	}
 
 	lines := lo.If(params.Lines == nil, 1000).Else(*params.Lines)
-	logs, err := composeApp.Logs(ctx.Request().Context(), lines)
+
+	// No service named means the whole app, which is what the app-wide viewer asks for.
+	// A named one that the app does not declare is the client asking for the wrong thing
+	// -- answering with an empty log would read as a container that never said anything.
+	var services []string
+
+	if params.Service != nil && *params.Service != "" {
+		if _, ok := composeApp.Services[*params.Service]; !ok {
+			message := fmt.Sprintf("service `%s` not found in compose app `%s`", *params.Service, id)
+			return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
+		}
+
+		services = append(services, *params.Service)
+	}
+
+	logs, err := composeApp.Logs(ctx.Request().Context(), lines, services...)
 	if err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})

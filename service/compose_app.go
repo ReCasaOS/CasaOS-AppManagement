@@ -1052,7 +1052,9 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 	return nil
 }
 
-func (a *ComposeApp) Logs(ctx context.Context, lines int) ([]byte, error) {
+// Logs returns the logs of the app. Naming services narrows it to those; naming none
+// keeps every service of the app, which is what the app-wide viewer asks for.
+func (a *ComposeApp) Logs(ctx context.Context, lines int, services ...string) ([]byte, error) {
 	service, dockerClient, err := apiService()
 	if err != nil {
 		return nil, err
@@ -1061,7 +1063,7 @@ func (a *ComposeApp) Logs(ctx context.Context, lines int) ([]byte, error) {
 
 	var buf bytes.Buffer
 
-	if err := service.Logs(ctx, a.Name, newLogConsumer(ctx, &buf), a.logOptions(lines)); err != nil {
+	if err := service.Logs(ctx, a.Name, newLogConsumer(ctx, &buf), a.logOptions(lines, services...)); err != nil {
 		return nil, err
 	}
 
@@ -1073,10 +1075,14 @@ func (a *ComposeApp) Logs(ctx context.Context, lines int) ([]byte, error) {
 //
 // Split out from the call so it can be read back without a daemon -- everything below
 // is a promise to the viewer that nothing else in this package can check.
-func (a *ComposeApp) logOptions(lines int) api.LogOptions {
+func (a *ComposeApp) logOptions(lines int, services ...string) api.LogOptions {
+	if len(services) == 0 {
+		services = sortedServiceNames(a.Services)
+	}
+
 	return api.LogOptions{
 		Project:    (*codegen.ComposeApp)(a),
-		Services:   sortedServiceNames(a.Services),
+		Services:   services,
 		Follow:     false,
 		Timestamps: true,
 		Tail:       lo.If(lines < 0, "all").Else(strconv.Itoa(lines)),
