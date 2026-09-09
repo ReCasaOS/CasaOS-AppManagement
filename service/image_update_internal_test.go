@@ -1,6 +1,8 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -151,4 +153,73 @@ func TestRememberOfferedLeavesOtherAppsAlone(t *testing.T) {
 
 	assert.Equal(t, *ImageUpdateAvailable("a"), true)
 	assert.Equal(t, *ImageUpdateAvailable("b"), true)
+}
+
+// The two maps mean different things, and a restart must not blur them: a badge
+// restored from what the registries said, rather than from what the button would do,
+// is a badge on an app the button then refuses to act on.
+func TestARestartRestoresBothAnswersWithoutMixingThem(t *testing.T) {
+	imageUpdateStatePath = filepath.Join(t.TempDir(), "image_updates.json")
+
+	imageUpdates.registry = map[string]bool{"moved": true}
+	imageUpdates.offered = map[string]bool{"moved": false}
+	defer func() {
+		imageUpdates.registry = map[string]bool{}
+		imageUpdates.offered = map[string]bool{}
+	}()
+
+	saveImageUpdates()
+
+	// the restart
+	imageUpdates.registry = map[string]bool{}
+	imageUpdates.offered = map[string]bool{}
+	LoadImageUpdates()
+
+	assert.Equal(t, imageUpdatable("moved"), true)
+	assert.Equal(t, *ImageUpdateAvailable("moved"), false)
+}
+
+func TestNothingRememberedYetLeavesTheCacheEmpty(t *testing.T) {
+	imageUpdateStatePath = filepath.Join(t.TempDir(), "image_updates.json")
+
+	imageUpdates.offered = map[string]bool{}
+	LoadImageUpdates()
+
+	assert.Assert(t, ImageUpdateAvailable("anything") == nil)
+}
+
+// A file that cannot be read is not a reason to answer with a wrong one.
+func TestAnUnreadableFileIsIgnoredRatherThanBelieved(t *testing.T) {
+	imageUpdateStatePath = filepath.Join(t.TempDir(), "image_updates.json")
+	assert.NilError(t, os.WriteFile(imageUpdateStatePath, []byte(`{"offered": tru`), 0o644))
+
+	imageUpdates.offered = map[string]bool{"app": true}
+	defer func() { imageUpdates.offered = map[string]bool{} }()
+
+	LoadImageUpdates()
+
+	assert.Equal(t, *ImageUpdateAvailable("app"), true)
+}
+
+// The answers arrive by rename, so the file on disk is never half of anything and no
+// temporary file is left lying beside it.
+func TestSavingReplacesTheFileWholeAndLeavesNoTempBehind(t *testing.T) {
+	dir := t.TempDir()
+	imageUpdateStatePath = filepath.Join(dir, "image_updates.json")
+
+	imageUpdates.offered = map[string]bool{"app": true}
+	defer func() { imageUpdates.offered = map[string]bool{} }()
+
+	saveImageUpdates()
+	imageUpdates.offered = map[string]bool{"app": false}
+	saveImageUpdates()
+
+	entries, err := os.ReadDir(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 1)
+	assert.Equal(t, entries[0].Name(), "image_updates.json")
+
+	imageUpdates.offered = map[string]bool{}
+	LoadImageUpdates()
+	assert.Equal(t, *ImageUpdateAvailable("app"), false)
 }

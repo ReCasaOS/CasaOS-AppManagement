@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 
@@ -136,6 +138,7 @@ func CheckImageUpdates(ctx context.Context) (*codegen.ImageUpdateCheckResult, er
 	sort.Strings(result.Updatable)
 
 	rememberOffered(offered)
+	saveImageUpdates()
 
 	return result, nil
 }
@@ -171,6 +174,7 @@ func CheckImageUpdatesForApp(ctx context.Context, composeApp *ComposeApp) error 
 	rememberOffered(map[string]bool{
 		composeApp.Name: MyService.AppStoreManagement().IsUpdateAvailable(composeApp),
 	})
+	saveImageUpdates()
 
 	return nil
 }
@@ -312,4 +316,87 @@ func checkImage(ctx context.Context, cli client.APIClient, image string) (bool, 
 	}
 
 	return !match, ""
+}
+
+// Where the answers live between runs. The dashboard badges an app from this cache,
+// so without it every restart blanks the badges until a sweep has run again -- and
+// with a check interval measured in hours, that is most of the time.
+//
+// A var, not a const, only so a test can point it somewhere writable.
+var imageUpdateStatePath = "/var/lib/casaos/image_updates.json"
+
+// persistedImageUpdates keeps the two maps apart on disk for the same reason they
+// are apart in memory: what the registries said is not what the update button will
+// do, and seeding one from the other is how an app gets badged that the button then
+// refuses to act on.
+type persistedImageUpdates struct {
+	Registry map[string]bool `json:"registry"`
+	Offered  map[string]bool `json:"offered"`
+}
+
+// LoadImageUpdates restores what the last run found, so the dashboard's first paint
+// after a restart shows the badges it showed before it.
+func LoadImageUpdates() {
+	buf, err := os.ReadFile(imageUpdateStatePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Error("cannot read remembered image update answers", zap.String("path", imageUpdateStatePath), zap.Error(err))
+		}
+		return
+	}
+
+	var state persistedImageUpdates
+	if err := json.Unmarshal(buf, &state); err != nil {
+		logger.Error("remembered image update answers are unreadable, starting with none", zap.String("path", imageUpdateStatePath), zap.Error(err))
+		return
+	}
+
+	imageUpdates.Lock()
+	defer imageUpdates.Unlock()
+
+	if state.Registry != nil {
+		imageUpdates.registry = state.Registry
+	}
+	if state.Offered != nil {
+		imageUpdates.offered = state.Offered
+	}
+}
+
+// saveImageUpdates writes the answers where the next run will find them.
+//
+// Through a temporary file and a rename, because the file being replaced is one the
+// next start reads: a write cut short by a power loss on a home server would leave a
+// truncated file where a readable one was, and the badges would come back wrong
+// rather than merely absent.
+func saveImageUpdates() {
+	imageUpdates.RLock()
+	buf, err := json.Marshal(persistedImageUpdates{
+		Registry: imageUpdates.registry,
+		Offered:  imageUpdates.offered,
+	})
+	imageUpdates.RUnlock()
+
+	if err != nil {
+		logger.Error("cannot encode image update answers", zap.Error(err))
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(imageUpdateStatePath), 0o755); err != nil {
+		logger.Error("cannot create the directory for image update answers", zap.String("path", imageUpdateStatePath), zap.Error(err))
+		return
+	}
+
+	tmpPath := imageUpdateStatePath + ".tmp"
+	if err := os.WriteFile(tmpPath, buf, 0o644); err != nil {
+		logger.Error("cannot write image update answers", zap.String("path", tmpPath), zap.Error(err))
+		return
+	}
+
+	if err := os.Rename(tmpPath, imageUpdateStatePath); err != nil {
+		logger.Error("cannot store image update answers", zap.String("path", imageUpdateStatePath), zap.Error(err))
+
+		if err := os.Remove(tmpPath); err != nil {
+			logger.Error("cannot remove the leftover image update answers", zap.String("path", tmpPath), zap.Error(err))
+		}
+	}
 }

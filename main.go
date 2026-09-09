@@ -75,6 +75,10 @@ func main() {
 
 		service.MyService = service.NewService(config.CommonInfo.RuntimePath)
 
+		// before the cron below, so the app grid's first paint carries the badges the
+		// last run left rather than none until a sweep has finished
+		service.LoadImageUpdates()
+
 		config.RemoveRuntimeIfNoNvidiaGPUFlag = *removeRuntimeIfNoNvidiaGPUFlag
 	}
 
@@ -102,6 +106,33 @@ func main() {
 		// ready when docker first tried to start them at boot
 		if _, err := crontab.AddFunc("@every 15s", func() {
 			service.MyService.Compose().RecoverAppsWaitingForStorage(ctx)
+		}); err != nil {
+			panic(err)
+		}
+
+		// Ask the registries what the installed images point at now. Hours, not
+		// minutes: this is one round trip per distinct image, registries rate-limit
+		// anonymous callers by IP, and an image that moved an hour ago is news that
+		// keeps. Checking only ever fills in a badge -- nothing here updates anything.
+		go func() {
+			// not at startup proper: docker, the network and the catalogue this
+			// compares against are all still coming up, and an answer nobody is
+			// looking at yet can wait for them
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Minute):
+			}
+
+			if _, err := service.CheckImageUpdates(ctx); err != nil {
+				logger.Error("error when checking for image updates at startup", zap.Error(err))
+			}
+		}()
+
+		if _, err := crontab.AddFunc("@every 6h", func() {
+			if _, err := service.CheckImageUpdates(ctx); err != nil {
+				logger.Error("error when checking for image updates", zap.Error(err))
+			}
 		}); err != nil {
 			panic(err)
 		}
