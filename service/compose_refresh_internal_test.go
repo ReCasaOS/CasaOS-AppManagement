@@ -141,8 +141,8 @@ func TestIsUpdateAvailableAgreesWithTheImageCheck(t *testing.T) {
 
 	appStore := NewAppStoreManagement()
 
-	imageUpdates.byApp = map[string]bool{}
-	defer func() { imageUpdates.byApp = map[string]bool{} }()
+	imageUpdates.registry = map[string]bool{}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
 
 	// The answer is cached for an hour, so each case forgets the previous one --
 	// which is exactly what the update route does after checking, and why it has to.
@@ -154,10 +154,10 @@ func TestIsUpdateAvailableAgreesWithTheImageCheck(t *testing.T) {
 	// nobody has checked: nothing to offer
 	assert.Assert(t, !answer())
 
-	imageUpdates.byApp = map[string]bool{"imported": false}
+	imageUpdates.registry = map[string]bool{"imported": false}
 	assert.Assert(t, !answer())
 
-	imageUpdates.byApp = map[string]bool{"imported": true}
+	imageUpdates.registry = map[string]bool{"imported": true}
 	assert.Assert(t, answer())
 }
 
@@ -178,8 +178,8 @@ func TestImageCheckDoesNotReopenTheDowngrade(t *testing.T) {
 
 	appStore := NewAppStoreManagement()
 
-	imageUpdates.byApp = map[string]bool{"app": true}
-	defer func() { imageUpdates.byApp = map[string]bool{} }()
+	imageUpdates.registry = map[string]bool{"app": true}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
 
 	behind, err := NewComposeAppFromYAML(
 		[]byte("name: app\nservices:\n  a:\n    image: acme/a:1.8\nx-casaos:\n  main: a\n"), true, true)
@@ -197,7 +197,7 @@ func TestImageCheckDoesNotReopenTheDowngrade(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, updatable)
 
-	imageUpdates.byApp = map[string]bool{"app": false}
+	imageUpdates.registry = map[string]bool{"app": false}
 	updatable, err = appStore.IsUpdateAvailableWith(local, same)
 	assert.NilError(t, err)
 	assert.Assert(t, !updatable)
@@ -223,8 +223,8 @@ func TestSameMainTagDoesNotDowngradeASidecar(t *testing.T) {
 	appStore := NewAppStoreManagement()
 
 	// the registry republished one of the images, so the app reads as updatable
-	imageUpdates.byApp = map[string]bool{"app": true}
-	defer func() { imageUpdates.byApp = map[string]bool{} }()
+	imageUpdates.registry = map[string]bool{"app": true}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
 
 	// same main tag, but the catalogue still pins the sidecar lower
 	lagging, err := NewComposeAppFromYAML([]byte(
@@ -269,8 +269,8 @@ func TestDigestPinnedAppComparesByReference(t *testing.T) {
 
 	// stated rather than inherited from whatever ran before: the identical-digest
 	// case below returns through the sameImages branch, which reads this map
-	imageUpdates.byApp = map[string]bool{}
-	defer func() { imageUpdates.byApp = map[string]bool{} }()
+	imageUpdates.registry = map[string]bool{}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
 
 	moved, err := NewComposeAppFromYAML([]byte(
 		"name: app\nservices:\n  a:\n    image: acme/app@"+b+"\nx-casaos:\n  main: a\n"), true, true)

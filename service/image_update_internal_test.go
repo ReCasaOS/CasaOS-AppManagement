@@ -88,29 +88,67 @@ func TestRememberKeepsTheOldAnswerForAnAppItCouldNotCheck(t *testing.T) {
 		"unchecked": appWith(map[string]string{"main": "acme/b:1.0"}),
 	}
 
-	imageUpdates.byApp = map[string]bool{"checked": false, "unchecked": true}
-	defer func() { imageUpdates.byApp = map[string]bool{} }()
+	imageUpdates.registry = map[string]bool{"checked": false, "unchecked": true}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
 
 	remember(map[string]bool{"checked": true}, installed)
 
-	assert.Equal(t, *ImageUpdateAvailable("checked"), true)
+	assert.Equal(t, imageUpdatable("checked"), true)
 	// no answer this pass, so it keeps the one it had rather than flipping to false
-	assert.Equal(t, *ImageUpdateAvailable("unchecked"), true)
+	assert.Equal(t, imageUpdatable("unchecked"), true)
 }
 
 func TestRememberForgetsAnAppThatIsGone(t *testing.T) {
-	imageUpdates.byApp = map[string]bool{"removed": true}
-	defer func() { imageUpdates.byApp = map[string]bool{} }()
+	imageUpdates.registry = map[string]bool{"removed": true}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
 
 	remember(map[string]bool{}, map[string]*ComposeApp{})
 
-	assert.Assert(t, ImageUpdateAvailable("removed") == nil)
+	assert.Equal(t, imageUpdatable("removed"), false)
 }
 
 func TestImageUpdateAvailableIsNilBeforeAnythingHasChecked(t *testing.T) {
-	imageUpdates.byApp = map[string]bool{}
+	imageUpdates.offered = map[string]bool{}
 
 	// nil is not "up to date": the dashboard shows no badge for either, but only
 	// one of them is a claim about the app
 	assert.Assert(t, ImageUpdateAvailable("never-checked") == nil)
+}
+
+// The dashboard badges an app from what the update button will DO, not from what the
+// registry said. A moved image the catalogue will not follow is not an update anyone
+// can take, and badging it put a badge saying an update was available next to a
+// button answering `is up to date`, which is what a user reported seeing.
+func TestTheBadgeFollowsTheButtonAndNotTheRegistry(t *testing.T) {
+	imageUpdates.registry = map[string]bool{"app": true}
+	imageUpdates.offered = map[string]bool{}
+	defer func() {
+		imageUpdates.registry = map[string]bool{}
+		imageUpdates.offered = map[string]bool{}
+	}()
+
+	// the registry has moved, but nothing has decided what to do about it yet
+	assert.Equal(t, imageUpdatable("app"), true)
+	assert.Assert(t, ImageUpdateAvailable("app") == nil)
+
+	// the decision was: nothing to offer
+	rememberOffered(map[string]bool{"app": false})
+	assert.Equal(t, *ImageUpdateAvailable("app"), false)
+	assert.Equal(t, imageUpdatable("app"), true)
+
+	// and when there is
+	rememberOffered(map[string]bool{"app": true})
+	assert.Equal(t, *ImageUpdateAvailable("app"), true)
+}
+
+// rememberOffered answers for the apps it was asked about and leaves the rest alone,
+// so a single-app check cannot wipe what a sweep found for everything else.
+func TestRememberOfferedLeavesOtherAppsAlone(t *testing.T) {
+	imageUpdates.offered = map[string]bool{"a": true, "b": false}
+	defer func() { imageUpdates.offered = map[string]bool{} }()
+
+	rememberOffered(map[string]bool{"b": true})
+
+	assert.Equal(t, *ImageUpdateAvailable("a"), true)
+	assert.Equal(t, *ImageUpdateAvailable("b"), true)
 }

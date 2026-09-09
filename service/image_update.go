@@ -19,23 +19,34 @@ import (
 // registry rather than about local CPU.
 const imageUpdateConcurrency = 8
 
-// imageUpdates is what the app grid reads. The grid renders on the dashboard's
-// first paint, so it must never be the thing that waits on a registry: a check
-// pass fills this, and the grid only ever reads it.
+// imageUpdates holds two different answers, and telling them apart matters.
+//
+// `registry` is what the registries said: this image is not the one on disk. That is
+// an input to a decision, not the decision.
+//
+// `offered` is what the update button will actually do. For an app with a catalogue
+// entry an update writes the CATALOGUE's compose, so a moved image the catalogue
+// would not act on is not an update anyone can take -- and badging it produced
+// exactly what a user reported: a badge saying an update was available beside a
+// button answering `is up to date`. The dashboard reads this one.
+//
+// Both are filled by a check pass. The app grid renders on the dashboard's first
+// paint and must never be the thing that waits on a registry, so it only ever reads.
 var imageUpdates = struct {
 	sync.RWMutex
-	byApp map[string]bool
-}{byApp: map[string]bool{}}
+	registry map[string]bool
+	offered  map[string]bool
+}{registry: map[string]bool{}, offered: map[string]bool{}}
 
-// ImageUpdateAvailable reports what the last check pass found for an app, or nil if
-// that app has not been checked since this service started. Nil is not "up to
-// date": the dashboard shows a badge for true and nothing for either other case,
-// and conflating them would claim an app is current when nobody has looked.
+// ImageUpdateAvailable reports whether an update is on offer for an app, or nil if
+// nothing has looked since this service started. Nil is not "up to date": the
+// dashboard shows a badge for true and nothing for either other case, and conflating
+// them would claim an app is current when nobody has looked.
 func ImageUpdateAvailable(appName string) *bool {
 	imageUpdates.RLock()
 	defer imageUpdates.RUnlock()
 
-	updatable, ok := imageUpdates.byApp[appName]
+	updatable, ok := imageUpdates.offered[appName]
 	if !ok {
 		return nil
 	}
@@ -43,11 +54,25 @@ func ImageUpdateAvailable(appName string) *bool {
 	return &updatable
 }
 
-// imageUpdatable folds ImageUpdateAvailable to a plain yes or no. Unknown counts as
-// no: nobody has looked, which is not a reason to offer an update.
+// imageUpdatable is the registry's half of the answer, folded to a plain yes or no
+// for the decision that combines it with the catalogue. Unknown counts as no: nobody
+// has looked, which is not a reason to offer an update.
 func imageUpdatable(appName string) bool {
-	updatable := ImageUpdateAvailable(appName)
-	return updatable != nil && *updatable
+	imageUpdates.RLock()
+	defer imageUpdates.RUnlock()
+
+	return imageUpdates.registry[appName]
+}
+
+// rememberOffered records what the update button would do for the apps it was asked
+// about, leaving every other app's answer alone.
+func rememberOffered(offered map[string]bool) {
+	imageUpdates.Lock()
+	defer imageUpdates.Unlock()
+
+	for name, updatable := range offered {
+		imageUpdates.offered[name] = updatable
+	}
 }
 
 // CheckImageUpdates asks every installed app's registry what its tags point at now
@@ -87,13 +112,30 @@ func CheckImageUpdates(ctx context.Context) (*codegen.ImageUpdateCheckResult, er
 		}
 
 		fresh[name] = updatable
-		if updatable {
+	}
+
+	remember(fresh, composeApps)
+
+	// What the registries said is only half of it. An update writes the catalogue's
+	// compose for an app that has an entry, so an image that moved somewhere the
+	// catalogue will not follow is not an update anyone can take. Ask what the button
+	// would do, and report and badge that.
+	offered := make(map[string]bool, len(fresh))
+	for name := range fresh {
+		MyService.AppStoreManagement().ForgetUpgradable(name)
+
+		if MyService.AppStoreManagement().IsUpdateAvailable(composeApps[name]) {
+			offered[name] = true
 			result.Updatable = append(result.Updatable, name)
+
+			continue
 		}
+
+		offered[name] = false
 	}
 	sort.Strings(result.Updatable)
 
-	remember(fresh, composeApps)
+	rememberOffered(offered)
 
 	return result, nil
 }
@@ -118,9 +160,17 @@ func CheckImageUpdatesForApp(ctx context.Context, composeApp *ComposeApp) error 
 		return fmt.Errorf("%s: %s", composeApp.Name, reason)
 	}
 
-	imageUpdates.Lock()
-	defer imageUpdates.Unlock()
-	imageUpdates.byApp[composeApp.Name] = updatable
+	// scoped, because asking what the button would do reads this same lock
+	func() {
+		imageUpdates.Lock()
+		defer imageUpdates.Unlock()
+		imageUpdates.registry[composeApp.Name] = updatable
+	}()
+
+	MyService.AppStoreManagement().ForgetUpgradable(composeApp.Name)
+	rememberOffered(map[string]bool{
+		composeApp.Name: MyService.AppStoreManagement().IsUpdateAvailable(composeApp),
+	})
 
 	return nil
 }
@@ -135,7 +185,7 @@ func remember(fresh map[string]bool, installed map[string]*ComposeApp) {
 	for name, updatable := range fresh {
 		next[name] = updatable
 	}
-	for name, updatable := range imageUpdates.byApp {
+	for name, updatable := range imageUpdates.registry {
 		if _, stillInstalled := installed[name]; !stillInstalled {
 			continue
 		}
@@ -144,7 +194,7 @@ func remember(fresh map[string]bool, installed map[string]*ComposeApp) {
 		}
 	}
 
-	imageUpdates.byApp = next
+	imageUpdates.registry = next
 }
 
 // verdict folds an app's images into one answer. An app is updatable as soon as one
