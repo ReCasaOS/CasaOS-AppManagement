@@ -39,3 +39,35 @@ func TestComposeAppContainersCarriesEveryContainer(t *testing.T) {
 	// a declared service that is down is reported as an empty list, not omitted
 	assert.Equal(t, len(decoded.Containers["down"]), 0)
 }
+
+// The one state the dashboard shows for a multi-container app. An app is only as
+// healthy as its unhealthiest part, so the fold has to pick the worst container of
+// any service -- the bug being that a stack whose VPN sidecar is dead read as
+// `running` because the service listed first was up.
+func TestComposeAppStatusReportsTheWorstContainer(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		states map[string][]string
+		want   string
+	}{
+		{"everything up", map[string][]string{"a": {"running"}, "b": {"running", "running"}}, "running"},
+		{"one replica exited", map[string][]string{"a": {"running"}, "b": {"running", "exited"}}, "exited"},
+		{"dead outranks exited", map[string][]string{"a": {"exited"}, "b": {"dead"}}, "dead"},
+		{"restarting outranks paused", map[string][]string{"a": {"paused"}, "b": {"restarting"}}, "restarting"},
+		// an answer we do not recognise is not a reason to report `running`
+		{"unfamiliar state wins", map[string][]string{"a": {"running"}, "b": {"hibernating"}}, "hibernating"},
+		// a declared service with no container is the empty list the handler now sends
+		{"nothing is up", map[string][]string{"a": {}}, "unknown"},
+		{"no services at all", map[string][]string{}, "unknown"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			containers := map[string][]codegen.ContainerSummary{}
+			for service, states := range c.states {
+				containers[service] = lo.Map(states, func(state string, _ int) codegen.ContainerSummary {
+					return codegen.ContainerSummary{Service: service, State: state}
+				})
+			}
+			assert.Equal(t, composeAppStatus(containers), c.want)
+		})
+	}
+}
