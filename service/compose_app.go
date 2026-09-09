@@ -218,12 +218,13 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 	}
 
 	// prepare for message bus events
-	eventProperties := common.PropertiesFromContext(ctx)
-	eventProperties[common.PropertyTypeAppName.Name] = a.Name
+	eventProperties := map[string]string{common.PropertyTypeAppName.Name: a.Name}
 
 	if err := a.UpdateEventPropertiesFromStoreInfo(eventProperties); err != nil {
 		logger.Info("failed to update event properties from store info", zap.Error(err), zap.String("name", a.Name))
 	}
+
+	common.SetProperties(ctx, eventProperties)
 
 	go func(ctx context.Context) {
 		go PublishEventWrapper(ctx, common.EventTypeAppUpdateBegin, nil)
@@ -245,7 +246,7 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 		// The update applied. app:update-end is published whether this succeeded or
 		// failed, so without this it says nothing at all and the dashboard has no
 		// success to report -- which is why a finished update used to pass in silence.
-		eventProperties[common.PropertyTypeAppUpdated.Name] = "true"
+		common.SetProperties(ctx, map[string]string{common.PropertyTypeAppUpdated.Name: "true"})
 
 		// the app is no longer the one the cached answers were about, and an
 		// `offered` left at true keeps badging an app that has just been updated
@@ -994,13 +995,14 @@ func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[
 	}
 
 	// prepare for message bus events
-	eventProperties := common.PropertiesFromContext(ctx)
-	eventProperties[common.PropertyTypeAppName.Name] = a.Name
+	eventProperties := map[string]string{common.PropertyTypeAppName.Name: a.Name}
 
 	// prepare for message bus events
 	if err := newComposeApp.UpdateEventPropertiesFromStoreInfo(eventProperties); err != nil {
 		logger.Info("failed to update event properties from store info", zap.Error(err), zap.String("name", a.Name))
 	}
+
+	common.SetProperties(ctx, eventProperties)
 
 	go func(ctx context.Context) {
 		go PublishEventWrapper(ctx, common.EventTypeAppApplyChangesBegin, nil)
@@ -1026,11 +1028,7 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 	}
 	defer dockerClient.Close()
 
-	eventProperties := common.PropertiesFromContext(ctx)
-	if eventProperties == nil {
-		eventProperties = map[string]string{}
-	}
-	eventProperties[common.PropertyTypeAppName.Name] = a.Name
+	common.SetProperties(ctx, map[string]string{common.PropertyTypeAppName.Name: a.Name})
 
 	switch status {
 	case codegen.RequestComposeAppStatusStart:

@@ -198,10 +198,11 @@ func InstallApp(ctx echo.Context) error {
 
 	httpCtx := common.WithProperties(context.Background(), v2.PropertiesFromQueryParams(ctx))
 
-	eventProperties := common.PropertiesFromContext(httpCtx)
-	eventProperties[common.PropertyTypeAppName.Name] = m.Label
-	eventProperties[common.PropertyTypeAppIcon.Name] = m.Icon
-	eventProperties[common.PropertyTypeImageName.Name] = imageName
+	common.SetProperties(httpCtx, map[string]string{
+		common.PropertyTypeAppName.Name:   m.Label,
+		common.PropertyTypeAppIcon.Name:   m.Icon,
+		common.PropertyTypeImageName.Name: imageName,
+	})
 
 	go func() {
 		go service.PublishEventWrapper(httpCtx, common.EventTypeAppInstallBegin, nil)
@@ -253,9 +254,10 @@ func UninstallApp(ctx echo.Context) error {
 		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
 	}
 
-	eventProperties := common.PropertiesFromContext(httpCtx)
-	eventProperties[common.PropertyTypeAppName.Name] = v1.AppName(container)
-	eventProperties[common.PropertyTypeAppIcon.Name] = v1.AppIcon(container)
+	common.SetProperties(httpCtx, map[string]string{
+		common.PropertyTypeAppName.Name: v1.AppName(container),
+		common.PropertyTypeAppIcon.Name: v1.AppIcon(container),
+	})
 
 	go func() {
 		go service.PublishEventWrapper(httpCtx, common.EventTypeAppUninstallBegin, nil)
@@ -678,8 +680,7 @@ func pullAndInstall(ctx context.Context, imageName string, m *model.Customizatio
 
 		containerID = _containerID
 
-		eventProperties := common.PropertiesFromContext(ctx)
-		eventProperties[common.PropertyTypeContainerID.Name] = containerID
+		common.SetProperties(ctx, map[string]string{common.PropertyTypeContainerID.Name: containerID})
 
 		return nil
 	}(); err != nil {

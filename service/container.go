@@ -781,7 +781,7 @@ func (ds *dockerService) RecreateContainer(ctx context.Context, id string, pull 
 	// The container was really replaced. Everything above can leave it untouched --
 	// nothing newer to pull, a pull that failed, an error that rolled back -- so this
 	// is the only point that may claim it, and the event that follows carries the claim.
-	common.PropertiesFromContext(ctx)[common.PropertyTypeAppUpdated.Name] = "true"
+	common.SetProperties(ctx, map[string]string{common.PropertyTypeAppUpdated.Name: "true"})
 
 	return nil
 }

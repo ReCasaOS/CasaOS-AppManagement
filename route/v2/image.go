@@ -38,9 +38,10 @@ func (a *AppManagement) PullImages(ctx echo.Context, params codegen.PullImagesPa
 			go func(containerID, imageName string) {
 				backgroundCtx := common.WithProperties(backgroundCtx, PropertiesFromQueryParams(ctx))
 
-				eventProperties := common.PropertiesFromContext(backgroundCtx)
-				eventProperties[common.PropertyTypeAppName.Name] = v1.AppName(container)
-				eventProperties[common.PropertyTypeAppIcon.Name] = v1.AppIcon(container)
+				common.SetProperties(backgroundCtx, map[string]string{
+					common.PropertyTypeAppName.Name: v1.AppName(container),
+					common.PropertyTypeAppIcon.Name: v1.AppIcon(container),
+				})
 
 				_, err := service.MyService.Docker().PullLatestImage(backgroundCtx, imageName)
 				if err != nil {

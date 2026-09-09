@@ -86,12 +86,13 @@ func (s *ComposeService) Install(ctx context.Context, composeApp *ComposeApp) er
 	}
 
 	// prepare for message bus events
-	eventProperties := common.PropertiesFromContext(ctx)
-	eventProperties[common.PropertyTypeAppName.Name] = composeApp.Name
+	eventProperties := map[string]string{common.PropertyTypeAppName.Name: composeApp.Name}
 
 	if err := composeApp.UpdateEventPropertiesFromStoreInfo(eventProperties); err != nil {
 		logger.Info("failed to update event properties from store info", zap.Error(err), zap.String("name", composeApp.Name))
 	}
+
+	common.SetProperties(ctx, eventProperties)
 
 	go func(ctx context.Context) {
 		s.installationInProgress.Store(composeApp.Name, true)
@@ -117,12 +118,13 @@ func (s *ComposeService) Install(ctx context.Context, composeApp *ComposeApp) er
 
 func (s *ComposeService) Uninstall(ctx context.Context, composeApp *ComposeApp, deleteConfigFolder bool) error {
 	// prepare for message bus events
-	eventProperties := common.PropertiesFromContext(ctx)
-	eventProperties[common.PropertyTypeAppName.Name] = composeApp.Name
+	eventProperties := map[string]string{common.PropertyTypeAppName.Name: composeApp.Name}
 
 	if err := composeApp.UpdateEventPropertiesFromStoreInfo(eventProperties); err != nil {
 		logger.Info("failed to update event properties from store info", zap.Error(err), zap.String("name", composeApp.Name))
 	}
+
+	common.SetProperties(ctx, eventProperties)
 
 	clearAppStopped(composeApp.Name)
 
