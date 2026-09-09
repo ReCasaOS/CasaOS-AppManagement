@@ -509,7 +509,11 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
 
-	if params.Force != nil && !*params.Force {
+	// `force` defaults to false in the API contract, but the generated binding
+	// leaves it nil when the query string omits it, and an absent force used to skip
+	// the check entirely. That is what made the dashboard's `Check then update`
+	// button never check: it applied the store's compose whatever version it held.
+	if params.Force == nil || !*params.Force {
 		// check if updateAvailable
 		if !service.MyService.AppStoreManagement().IsUpdateAvailable(composeApp) {
 			message := fmt.Sprintf("compose app `%s` is up to date", id)

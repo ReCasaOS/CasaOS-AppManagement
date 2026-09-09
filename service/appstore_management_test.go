@@ -138,4 +138,22 @@ func TestIsUpgradable(t *testing.T) {
 	upgradable, err = appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
 	assert.NilError(t, err)
 	assert.Assert(t, upgradable)
+
+	// A store entry BEHIND what is installed is not an update. Answering true
+	// here is what downgrades an app: the update writes the store's image over
+	// the local one, whichever direction that moves the version.
+	storeMainService.Image = storeMainAppImage + ":1.23.0"
+	storeComposeApp.Services[storeMainApp.Name] = storeMainService
+
+	upgradable, err = appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
+	assert.NilError(t, err)
+	assert.Assert(t, !upgradable)
+
+	// one ahead of it still is
+	storeMainService.Image = storeMainAppImage + ":1.23.2"
+	storeComposeApp.Services[storeMainApp.Name] = storeMainService
+
+	upgradable, err = appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
+	assert.NilError(t, err)
+	assert.Assert(t, upgradable)
 }

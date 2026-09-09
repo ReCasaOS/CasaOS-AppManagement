@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/bluele/gcache"
 	"github.com/docker/docker/client"
 	"github.com/inkly/CasaOS-AppManagement/codegen"
@@ -590,7 +591,36 @@ func (a *AppStoreManagement) IsUpdateAvailableWith(composeApp *ComposeApp, store
 		return !match, nil
 	}
 	storeTag, err := storeComposeApp.MainTag()
-	return currentTag != storeTag, err
+	if err != nil {
+		return false, err
+	}
+
+	return isNewerTag(storeTag, currentTag), nil
+}
+
+// isNewerTag answers whether moving from current to candidate is an upgrade.
+//
+// An update overwrites the installed image with the store's, in whichever
+// direction that moves the version, so a store entry that has fallen behind what
+// is installed must not be offered as an update -- answering yes there is what
+// downgraded apps.
+//
+// Tags that are not versions cannot be ordered: latest, stable, a codename, a
+// build id. For those any difference still counts as an update, which is the
+// behaviour this had for every tag, and is the store's own statement about what
+// the app should run.
+func isNewerTag(candidate, current string) bool {
+	if candidate == current {
+		return false
+	}
+
+	candidateVersion, candidateErr := semver.NewVersion(candidate)
+	currentVersion, currentErr := semver.NewVersion(current)
+	if candidateErr != nil || currentErr != nil {
+		return true
+	}
+
+	return candidateVersion.GreaterThan(currentVersion)
 }
 
 func (a *AppStoreManagement) IsUpdating(appID string) bool {
