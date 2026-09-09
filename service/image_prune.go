@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
@@ -17,6 +18,14 @@ func danglingOnly() filters.Args {
 	return filters.NewArgs(filters.Arg("dangling", "true"))
 }
 
+// imageDaemon is what these two need of the daemon. An interface, so the filter they
+// actually hand it can be read back on a machine where no daemon can start -- the
+// filter is the safety story, and it is worth nothing if only the helper is tested.
+type imageDaemon interface {
+	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
+	ImagesPrune(ctx context.Context, pruneFilter filters.Args) (types.ImagesPruneReport, error)
+}
+
 // DanglingImages reports what PruneDanglingImages would free, without freeing it.
 func DanglingImages(ctx context.Context) (*codegen.DanglingImages, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -25,6 +34,10 @@ func DanglingImages(ctx context.Context) (*codegen.DanglingImages, error) {
 	}
 	defer cli.Close()
 
+	return danglingImages(ctx, cli)
+}
+
+func danglingImages(ctx context.Context, cli imageDaemon) (*codegen.DanglingImages, error) {
 	list, err := cli.ImageList(ctx, image.ListOptions{Filters: danglingOnly(), SharedSize: true})
 	if err != nil {
 		return nil, err
@@ -42,6 +55,10 @@ func PruneDanglingImages(ctx context.Context) (*codegen.DanglingImages, error) {
 	}
 	defer cli.Close()
 
+	return pruneDanglingImages(ctx, cli)
+}
+
+func pruneDanglingImages(ctx context.Context, cli imageDaemon) (*codegen.DanglingImages, error) {
 	report, err := cli.ImagesPrune(ctx, danglingOnly())
 	if err != nil {
 		return nil, err

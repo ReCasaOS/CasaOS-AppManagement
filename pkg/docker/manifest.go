@@ -42,6 +42,11 @@ func BuildManifestURL(imageName string) (string, error) {
 		img = "library/" + img
 	}
 
+	// https only, so a plain-HTTP private registry is never checked -- the update
+	// check reports those apps as unchecked rather than as up to date. Reaching them
+	// needs the same opt-in docker itself demands (an insecure-registries list), and
+	// falling back to http on a connection error would let anything on the LAN answer
+	// for what this host should be running. That opt-in does not exist here yet.
 	url := url2.URL{
 		Scheme: "https",
 		Host:   host,

@@ -315,8 +315,12 @@ func runningDigests(ctx context.Context, cli dockerDaemon, containers []types.Co
 // publishes now against the image that service's containers were created from. An
 // app is updatable as soon as one container is not on the published image -- every
 // service of a compose app is recreated together, so one stale container is enough.
-// It is unchecked only when nothing could be answered for, because a partial answer
-// of "yes" is still an answer.
+//
+// A partial "yes" is still an answer: one image is known to have moved, and nothing
+// unasked can take that back. A partial "no" is not. If any service could not be
+// answered for, the app is unchecked and says which image and why -- an unreachable
+// registry is not evidence that nothing changed, and a two-service stack where only
+// the reachable half was compared must not report itself up to date.
 func verdict(ctx context.Context, cli dockerDaemon, composeApp *ComposeApp, containers map[string][]types.Container, published map[string]registryDigest) (bool, string) {
 	var firstReason string
 	answered := false
@@ -374,11 +378,11 @@ func verdict(ctx context.Context, cli dockerDaemon, composeApp *ComposeApp, cont
 		}
 	}
 
-	if !answered {
-		if firstReason == "" {
-			firstReason = "this app runs no image with a tag to compare"
-		}
+	if firstReason != "" {
 		return false, firstReason
+	}
+	if !answered {
+		return false, "this app runs no image with a tag to compare"
 	}
 
 	return false, ""

@@ -156,6 +156,26 @@ func TestVerdictAnswersFromTheImagesItCouldCheck(t *testing.T) {
 	assert.Assert(t, updatable)
 }
 
+// The other half of it: a partial "no" is not an answer. The reachable service
+// matched, the private one could not be asked, and calling that up to date is how a
+// host silently stops being told about the half nobody can see.
+func TestVerdictWillNotCallAnAppUpToDateOnHalfOfIt(t *testing.T) {
+	app := appWith(map[string]string{
+		"main": "acme/main:1.0",
+		"db":   "private.example/db:1.0",
+	})
+	cli := fakeDaemon{repoDigests: map[string][]string{"sha256:main": {"acme/main@sha256:current"}}}
+	containers := map[string][]dockertypes.Container{"main": {containerOf("main", "sha256:main")}}
+
+	updatable, reason := verdict(context.Background(), cli, app, containers, map[string]registryDigest{
+		"acme/main:1.0":          {digest: "sha256:current"},
+		"private.example/db:1.0": {reason: "its registry could not be reached"},
+	})
+
+	assert.Assert(t, !updatable)
+	assert.Equal(t, reason, "private.example/db:1.0: its registry could not be reached")
+}
+
 func TestVerdictReportsUncheckedRatherThanGuessingUpToDate(t *testing.T) {
 	// an unreachable registry is not evidence that nothing changed. Reporting it as
 	// up to date is how a host silently stops being told about updates.
@@ -363,13 +383,31 @@ func TestARestartRestoresBothAnswersWithoutMixingThem(t *testing.T) {
 	assert.Equal(t, *ImageUpdateAvailable("moved"), false)
 }
 
+// A first start has no file, and no file must not become an answer: every app stays
+// unknown rather than being claimed up to date. A file holding only half the state --
+// written by a version that kept one map, or a pass that only ever asked registries --
+// restores that half and leaves the other one unknown for the same reason.
 func TestNothingRememberedYetLeavesTheCacheEmpty(t *testing.T) {
 	imageUpdateStatePath = filepath.Join(t.TempDir(), "image_updates.json")
 
+	imageUpdates.registry = map[string]bool{}
 	imageUpdates.offered = map[string]bool{}
+	defer func() {
+		imageUpdates.registry = map[string]bool{}
+		imageUpdates.offered = map[string]bool{}
+	}()
+
 	LoadImageUpdates()
 
 	assert.Assert(t, ImageUpdateAvailable("anything") == nil)
+	assert.Equal(t, imageUpdatable("anything"), false)
+
+	assert.NilError(t, os.WriteFile(imageUpdateStatePath, []byte(`{"registry":{"moved":true}}`), 0o644))
+	LoadImageUpdates()
+
+	assert.Equal(t, imageUpdatable("moved"), true)
+	// nothing has decided what the button would do, so there is still no badge
+	assert.Assert(t, ImageUpdateAvailable("moved") == nil)
 }
 
 // A file that cannot be read is not a reason to answer with a wrong one.

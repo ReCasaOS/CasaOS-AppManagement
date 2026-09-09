@@ -999,22 +999,37 @@ func (a *ComposeApp) Logs(ctx context.Context, lines int) ([]byte, error) {
 
 	var buf bytes.Buffer
 
-	// Timestamps come from the daemon (per line, when it was actually written) rather
-	// than from the consumer's own timestamp flag, which stamps time.Now() at read time
-	// and would give every line of a tail the same value.
-	consumer := formatter.NewLogConsumer(ctx, &buf, &buf, false, true, false)
+	if err := service.Logs(ctx, a.Name, newLogConsumer(ctx, &buf), a.logOptions(lines)); err != nil {
+		return nil, err
+	}
 
-	if err := service.Logs(ctx, a.Name, consumer, api.LogOptions{
+	return buf.Bytes(), nil
+}
+
+// logOptions is what Logs asks the daemon for. Timestamps is the point of it: the log
+// viewer shows when a line was written, and only the daemon knows that.
+//
+// Split out from the call so it can be read back without a daemon -- everything below
+// is a promise to the viewer that nothing else in this package can check.
+func (a *ComposeApp) logOptions(lines int) api.LogOptions {
+	return api.LogOptions{
 		Project:    (*codegen.ComposeApp)(a),
 		Services:   sortedServiceNames(a.Services),
 		Follow:     false,
 		Timestamps: true,
 		Tail:       lo.If(lines < 0, "all").Else(strconv.Itoa(lines)),
-	}); err != nil {
-		return nil, err
 	}
+}
 
-	return buf.Bytes(), nil
+// newLogConsumer formats what comes back: the service name as a prefix, and the line
+// otherwise untouched.
+//
+// The last flag is the consumer's own timestamp, and it stays off. It stamps
+// time.Now() at READ time, so a tail of an hour of logs would come back with every
+// line claiming this instant -- on top of the daemon's real one, which the options
+// above already asked for.
+func newLogConsumer(ctx context.Context, w io.Writer) api.LogConsumer {
+	return formatter.NewLogConsumer(ctx, w, w, false, true, false)
 }
 
 func (a *ComposeApp) GetPortsInUse() (*codegen.ComposeAppValidationErrorsPortsInUse, error) {

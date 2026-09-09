@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"testing"
 
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 )
 
@@ -28,10 +31,48 @@ func TestReclaimableSizeCountsOnlyUniqueBytes(t *testing.T) {
 	}
 }
 
-// Deleting the image of every stopped app is the one thing this endpoint must never do,
-// and "prune everything unused" is spelled dangling=false, one character away.
+// fakeImageDaemon records the filter it was handed, which is the only thing standing
+// between a prune and the image of every stopped app on the host.
+type fakeImageDaemon struct {
+	listed filters.Args
+	pruned filters.Args
+}
+
+func (d *fakeImageDaemon) ImageList(_ context.Context, options image.ListOptions) ([]image.Summary, error) {
+	d.listed = options.Filters
+
+	return nil, nil
+}
+
+func (d *fakeImageDaemon) ImagesPrune(_ context.Context, pruneFilter filters.Args) (types.ImagesPruneReport, error) {
+	d.pruned = pruneFilter
+
+	return types.ImagesPruneReport{}, nil
+}
+
+// Deleting the image of every stopped app is the one thing these two must never do, and
+// "prune everything unused" is spelled dangling=false -- or an empty filter, which is
+// the same thing with nothing to notice. What reaches the daemon is what matters, so
+// this reads the filter back off the call rather than off the helper that builds it.
 func TestPruneFilterIsDanglingTrue(t *testing.T) {
-	if got := danglingOnly().Get("dangling"); len(got) != 1 || got[0] != "true" {
-		t.Fatalf("prune filter is %v, want [true]", got)
+	for _, c := range []struct {
+		name string
+		call func(*fakeImageDaemon) filters.Args
+	}{
+		{"estimating", func(d *fakeImageDaemon) filters.Args {
+			_, _ = danglingImages(context.Background(), d)
+
+			return d.listed
+		}},
+		{"pruning", func(d *fakeImageDaemon) filters.Args {
+			_, _ = pruneDanglingImages(context.Background(), d)
+
+			return d.pruned
+		}},
+	} {
+		got := c.call(&fakeImageDaemon{}).Get("dangling")
+		if len(got) != 1 || got[0] != "true" {
+			t.Errorf("%s: filter given to the daemon is %v, want [true]", c.name, got)
+		}
 	}
 }
