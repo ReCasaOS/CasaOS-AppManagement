@@ -12,6 +12,7 @@ import (
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/common"
 	"github.com/inkly/CasaOS-AppManagement/pkg/config"
+	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
 	pkg_utils "github.com/inkly/CasaOS-AppManagement/pkg/utils"
 	"github.com/inkly/CasaOS-Common/utils"
 	"github.com/inkly/CasaOS-Common/utils/file"
@@ -546,79 +547,77 @@ var NoUpdateBlacklist = []string{
 	"johnguan/stable-diffusion-webui:latest",
 }
 
+// IsUpdateAvailableWith decides an update SERVICE BY SERVICE, because that is what an
+// update writes: every service the catalogue names takes the catalogue's image.
+//
+// It is on offer when no service would go backwards and something would actually
+// change -- the catalogue names an image this app does not run, or the registries say
+// an image it does run has moved. Reading the MAIN service's tag alone made a
+// catalogue that bumps only a sidecar invisible, which is what froze the multi-service
+// stacks; and demanding every image be identical before believing the registries threw
+// their answer away over any difference at all, including a service the owner added
+// by hand.
 func (a *AppStoreManagement) IsUpdateAvailableWith(composeApp *ComposeApp, storeComposeApp *ComposeApp) (bool, error) {
-	currentTag, err := composeApp.MainTag()
-	if err != nil {
-		logger.Error("failed to get current tag", zap.Error(err))
-		return false, err
-	}
-	mainService, err := composeApp.MainService()
-	if err != nil {
-		logger.Error("failed to get main service", zap.Error(err))
-		return false, err
-	}
-	// A tag like `latest` is republished under the same name, so comparing it against
-	// the catalogue's tag can never see the move -- only a registry can, and the image
-	// check has already asked. It asks it of the containers this app is RUNNING, which
-	// is what the second, disk-based comparison that used to live here got wrong: it
-	// answered `up to date` whenever the tag on disk was current, even while the
-	// containers went on running the older image it replaced. One answer, one place,
-	// so the badge and the button cannot disagree.
-	if lo.Contains(common.NeedCheckDigestTags, currentTag) {
-		if lo.Contains(NoUpdateBlacklist, mainService.Image) {
+	changed := false
+
+	for name, service := range composeApp.Services {
+		// The digest comparison is wrong for these images and it is the only thing
+		// that could offer an update for one, so a blacklisted image anywhere in the
+		// app is a flat no.
+		if lo.Contains(NoUpdateBlacklist, service.Image) {
 			return false, nil
 		}
 
-		return imageUpdatable(composeApp.Name), nil
+		storeService, ok := storeComposeApp.Services[name]
+		if !ok {
+			// The owner's own service -- a VPN sidecar wired in by hand, a companion
+			// container. The catalogue says nothing about it and an update leaves it
+			// alone, so it can neither offer an update nor block one.
+			continue
+		}
+
+		if storeService.Image == service.Image {
+			continue
+		}
+
+		if goesBackwards(service.Image, storeService.Image) {
+			// Applying this catalogue would write an older image over a newer one for
+			// this service. An update is all services at once, so there is no partial
+			// one to offer -- and an older sidecar that starts and migrates in place
+			// takes the data with it.
+			return false, nil
+		}
+
+		changed = true
 	}
-	storeTag, err := storeComposeApp.MainTag()
-	if err != nil {
-		return false, err
+
+	if changed {
+		return true, nil
 	}
 
 	// The catalogue names every image this app already runs, so an update would
-	// re-pull them rather than move the app anywhere. Whether that fetches anything
-	// is a question only the registry can answer, and the image check asked it.
-	//
-	// The tag above is the MAIN service's, and an update rewrites EVERY service to
-	// the catalogue's image, so the main tag matching is not enough: a sidecar the
-	// catalogue still pins lower would be written back over a newer one.
-	if storeTag == currentTag && sameImages(composeApp, storeComposeApp) {
-		return imageUpdatable(composeApp.Name), nil
-	}
-
-	// A reference pinned by digest has no tag, so there is nothing to order. The
-	// reference IS the version there, and any difference is the catalogue's
-	// statement about which one the app should run.
-	if storeTag == "" || currentTag == "" {
-		storeMainService, err := storeComposeApp.MainService()
-		if err != nil {
-			return false, err
-		}
-
-		return mainService.Image != storeMainService.Image, nil
-	}
-
-	return isNewerTag(storeTag, currentTag), nil
+	// re-pull them rather than move the app anywhere. Whether that fetches anything is
+	// a question only a registry can answer, and the image check asked it -- of the
+	// containers this app is RUNNING, which no comparison against the file on disk can
+	// see. It is also the whole answer for a tag like `latest`, republished under the
+	// same name where comparing tags sees nothing move.
+	return imageUpdatable(composeApp.Name), nil
 }
 
-// sameImages reports whether an update would leave every image exactly as it is.
-// An update writes the catalogue's image for each service, so this is what makes
-// "the catalogue agrees with me" true of the whole app rather than of its main
-// service alone.
-func sameImages(composeApp, storeComposeApp *ComposeApp) bool {
-	if len(composeApp.Services) != len(storeComposeApp.Services) {
+// goesBackwards reports whether writing storeImage over localImage would move that
+// service to an older version -- the one thing an update must never be offered for.
+func goesBackwards(localImage, storeImage string) bool {
+	_, localTag := docker.ExtractImageAndTag(localImage)
+	_, storeTag := docker.ExtractImageAndTag(storeImage)
+
+	// A reference pinned by digest has no tag to order, and the same tag on another
+	// reference is a move between repositories. Neither is a version going backwards;
+	// both are the catalogue's statement about what this app should run.
+	if localTag == "" || storeTag == "" || localTag == storeTag {
 		return false
 	}
 
-	for name, service := range composeApp.Services {
-		storeService, ok := storeComposeApp.Services[name]
-		if !ok || storeService.Image != service.Image {
-			return false
-		}
-	}
-
-	return true
+	return !isNewerTag(storeTag, localTag)
 }
 
 // isNewerTag answers whether moving from current to candidate is an upgrade.

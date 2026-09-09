@@ -304,32 +304,32 @@ func (a *ComposeApp) updatedComposeYAML(storeComposeApp *ComposeApp) ([]byte, er
 		return nil, err
 	}
 
-	localComposeAppServices := sortedServiceNames(local.Services)
-	storeComposeAppServices := sortedServiceNames(storeComposeApp.Services)
+	// Services the local app has and the catalogue does not are the owner's own: a VPN
+	// sidecar wired in by hand, a companion container. An update has nothing to say
+	// about them, so it leaves them exactly as written rather than refusing -- refusing
+	// meant that adding one container to a store app froze it forever, with nothing in
+	// the interface saying why.
+	_, storeAbsentOfLocal := lo.Difference(sortedServiceNames(local.Services), sortedServiceNames(storeComposeApp.Services))
 
-	localAbsentOfStore, storeAbsentOfLocal := lo.Difference(localComposeAppServices, storeComposeAppServices)
-	if len(localAbsentOfStore) > 0 {
-		logger.Error("local compose app has container apps that are not present in store compose app, thus update is not possible", zap.Strings("absent", localAbsentOfStore))
-		return nil, ErrComposeAppNotMatch
-	}
-
+	// The other direction is still a refusal: the catalogue has grown a service this
+	// app does not run, and creating one is not something an update does yet. The error
+	// names them and says why, because an interface that can only say `compose app not
+	// match` leaves the owner with a button that fails and no reason.
 	if len(storeAbsentOfLocal) > 0 {
-		logger.Error("store compose app has container apps that are not present in local compose app, thus update is not possible", zap.Strings("absent", storeAbsentOfLocal))
-		return nil, ErrComposeAppNotMatch
+		return nil, fmt.Errorf("%w: the app store version of %s adds services this app does not have (%s), and an update cannot create them",
+			ErrComposeAppNotMatch, a.Name, strings.Join(storeAbsentOfLocal, ", "))
 	}
 
 	for name, service := range storeComposeApp.Services {
-		localComposeAppService, ok := local.Services[name]
-		if !ok {
-			return nil, ErrComposeAppNotMatch
-		}
+		localComposeAppService := local.Services[name] // present: storeAbsentOfLocal is empty
 
-		for _, tag := range common.NeedCheckDigestTags {
-			if strings.HasSuffix(service.Image, tag) {
-				// keep latest
-			} else {
-				localComposeAppService.Image = service.Image
-			}
+		// A tag republished under the same name says nothing about which image to run,
+		// so the local reference stays and the pull is what moves it. This used to be a
+		// loop over NeedCheckDigestTags whose LAST iteration won: with a second entry
+		// in that list, any tag but the last one would have had its image replaced
+		// anyway.
+		if _, tag := docker.ExtractImageAndTag(service.Image); !lo.Contains(common.NeedCheckDigestTags, tag) {
+			localComposeAppService.Image = service.Image
 		}
 
 		local.Services[name] = localComposeAppService

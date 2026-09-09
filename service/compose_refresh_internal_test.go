@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,4 +286,150 @@ func TestDigestPinnedAppComparesByReference(t *testing.T) {
 	updatable, err = appStore.IsUpdateAvailableWith(local, same)
 	assert.NilError(t, err)
 	assert.Assert(t, !updatable)
+}
+
+// The stack that was reported: gluetun plus the services routed through it. A
+// catalogue that moves only the sidecar forward is still an update -- reading the main
+// service's tag alone saw nothing to do and left that stack with no way to update.
+func TestASidecarBumpIsAnUpdate(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\n  gluetun:\n    image: qmcgaw/gluetun:v3.38\n"+
+			"x-casaos:\n  main: app\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	// no registry has been asked, so the catalogue alone has to carry this
+	imageUpdates.registry = map[string]bool{}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
+
+	bumped, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\n  gluetun:\n    image: qmcgaw/gluetun:v3.40\n"+
+			"x-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	updatable, err := appStore.IsUpdateAvailableWith(local, bumped)
+	assert.NilError(t, err)
+	assert.Assert(t, updatable, "the catalogue moved the sidecar forward")
+}
+
+// A service the owner added by hand is not a disagreement with the catalogue about
+// anything: it must not throw away what the registries said about the services the
+// catalogue does name.
+func TestAHandAddedServiceDoesNotHideAnUpdate(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\n  vpn:\n    image: qmcgaw/gluetun:v3.38\n"+
+			"x-casaos:\n  main: app\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	// the registry republished the image the catalogue does name
+	imageUpdates.registry = map[string]bool{"app": true}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
+
+	store, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\nx-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	updatable, err := appStore.IsUpdateAvailableWith(local, store)
+	assert.NilError(t, err)
+	assert.Assert(t, updatable, "the extra service is the owner's, not a reason to discard the registry answer")
+
+	// and the catalogue is still not allowed to walk the app back
+	behind, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:1.8\nx-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	updatable, err = appStore.IsUpdateAvailableWith(local, behind)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable)
+}
+
+// The other half of the same stack: the update must actually be applicable, leaving
+// the hand-added service exactly as written instead of refusing the whole file.
+func TestUpdateKeepsAServiceTheCatalogueDoesNotHave(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:1\n  vpn:\n    image: qmcgaw/gluetun:v3.38\n"+
+			"x-casaos:\n  main: app\n"), 0o600))
+
+	a, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	store, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2\nx-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	out, err := a.updatedComposeYAML(store)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(out), "image: acme/app:2"), string(out))
+	assert.Assert(t, strings.Contains(string(out), "image: qmcgaw/gluetun:v3.38"), string(out))
+}
+
+// The direction that stays a refusal has to say which services and why: `compose app
+// not match` alone is what left an owner with a button that fails and no reason.
+func TestUpdateRefusesServicesItCannotCreateAndSaysWhich(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:1\nx-casaos:\n  main: app\n"), 0o600))
+
+	a, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	store, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2\n  db:\n    image: postgres:16\n"+
+			"x-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	_, err = a.updatedComposeYAML(store)
+	assert.Assert(t, errors.Is(err, ErrComposeAppNotMatch), err)
+	assert.ErrorContains(t, err, "db")
+}
+
+// Every tag in NeedCheckDigestTags has to keep its own image, not the last entry's
+// verdict for all of them. With one entry the difference is invisible; a second one
+// would have silently started replacing images the list says to leave alone.
+func TestEveryDigestCheckedTagKeepsItsImage(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	defer func(saved []string) { common.NeedCheckDigestTags = saved }(common.NeedCheckDigestTags)
+	common.NeedCheckDigestTags = []string{"latest", "edge"}
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:1\n  side:\n    image: acme/side:1\n"+
+			"x-casaos:\n  main: app\n"), 0o600))
+
+	a, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	store, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:latest\n  side:\n    image: acme/side:2\n"+
+			"x-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	out, err := a.updatedComposeYAML(store)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(out), "image: acme/app:1"), "a `latest` in the store keeps the local reference\n%s", out)
+	assert.Assert(t, strings.Contains(string(out), "image: acme/side:2"), string(out))
 }
