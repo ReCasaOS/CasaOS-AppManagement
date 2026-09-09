@@ -767,6 +767,46 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /images/dangling:
+    get:
+      summary: Report the disk dangling images are holding
+      description: |
+        Dangling images are the layers no tag points at any more -- what a rebuild or a
+        pulled update leaves behind. This answers "how much would a prune free", so the
+        dashboard can name the figure before asking, and is read-only.
+
+        `size` counts each image's *unique* bytes: a dangling image is usually the
+        previous build of one still in use and shares most of its layers with it, and
+        deleting it does not give those back.
+      operationId: danglingImages
+      tags:
+        - Image methods
+      responses:
+        "200":
+          $ref: "#/components/responses/DanglingImagesOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    delete:
+      summary: Delete dangling images
+      description: |
+        Deletes the images no tag points at, and returns what the daemon actually freed
+        -- which can be less than the `get` estimated, if something started using a
+        layer in between.
+
+        Only ever dangling images. A stopped app on this box is a normal state, not
+        garbage, and a wider prune would delete its image and leave it unable to start
+        again without a re-pull; the restriction is in the path so no parameter can
+        widen it.
+      operationId: pruneDanglingImages
+      tags:
+        - Image methods
+      responses:
+        "200":
+          $ref: "#/components/responses/DanglingImagesOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /web/appgrid:
     get:
       summary: (internal use ONLY)
@@ -1284,6 +1324,17 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/BaseResponse"
+
+    DanglingImagesOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/DanglingImages"
 
     PullImagesOK:
       description: OK
@@ -1822,6 +1873,26 @@ components:
         - AuthorTypeByCasaOS
         - AuthorTypeCommunity
         - AuthorTypeUnknown
+
+    DanglingImages:
+      description: |
+        Images no tag points at any more -- either what a prune would free, or what one
+        just freed.
+      required:
+        - count
+        - size
+      properties:
+        count:
+          description: How many dangling images.
+          type: integer
+          example: 7
+        size:
+          description: |
+            Bytes. Unique bytes only, so this is what the disk would actually give back
+            rather than the sum of the images' full sizes.
+          type: integer
+          format: int64
+          example: 4509715660
 
     ImageUpdateCheckResult:
       description: What one check pass found.
