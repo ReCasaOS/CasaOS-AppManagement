@@ -470,14 +470,56 @@ func (a *ComposeApp) injectEnvVariableToComposeApp() {
 	}
 }
 
+// upWaitTimeout bounds how long we wait for an app's containers to become
+// running-or-healthy. A var, not a const, so the test can shorten it.
+//
+// The pull already happened by the time we get here, so this budget covers create,
+// start and healthcheck convergence only. The other container waits in this service
+// are 20s (waiting for an app to be fully exited) and the HTTP checks are 20-30s;
+// the one long wait, 30 minutes, is the boot window for /DATA to mount, which is a
+// different kind of waiting. Five minutes sits between them on purpose: enough for a
+// dependency chain of healthchecks with 60s start_periods on a slow ARM box, short
+// enough that a stack which will never converge is diagnosed and rolled back while
+// the owner is still looking at the page.
+var upWaitTimeout = 5 * time.Minute
+
+// waitForApp runs a compose operation that was asked to wait for containers, under a
+// deadline, and reports a blown deadline as the failure it is.
+//
+// Both halves are needed. api.StartOptions.Wait polls every 500ms for every service
+// to be running-or-healthy and only wraps the context in a deadline of its own when
+// WaitTimeout > 0 (pkg/compose/start.go), so without one it never gives up: a gluetun
+// stack, whose services cannot start until the VPN container is healthy, parks here
+// for ever and the caller's rollback never runs. And compose v2.27 swallows the
+// cancellation -- waitDependencies returns nil for every service once the context is
+// done (pkg/compose/convergence.go), and progress.Run passes that nil straight
+// through -- so a wait that timed out comes back as success unless we look.
+func waitForApp(ctx context.Context, name string, up func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, upWaitTimeout)
+	defer cancel()
+
+	if err := up(ctx); err != nil {
+		return err
+	}
+
+	if ctx.Err() != nil {
+		return fmt.Errorf("compose app `%s` was not running or healthy after %s", name, upWaitTimeout)
+	}
+
+	return nil
+}
+
 func (a *ComposeApp) Up(ctx context.Context, service api.Service) error {
 	a.injectEnvVariableToComposeApp()
 
-	if err := service.Up(ctx, (*codegen.ComposeApp)(a), api.UpOptions{
-		Start: api.StartOptions{
-			OnExit: api.CascadeStop,
-			Wait:   true,
-		},
+	// no OnExit: compose only reads it when Start.Attach is set, and we never attach
+	// (pkg/compose/up.go) -- CascadeStop here was decoration.
+	if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
+		return service.Up(ctx, (*codegen.ComposeApp)(a), api.UpOptions{
+			Start: api.StartOptions{
+				Wait: true,
+			},
+		})
 	}); err != nil {
 		logger.Error("failed to start original compose app", zap.Error(err), zap.String("name", a.Name))
 		return err
@@ -682,9 +724,8 @@ func (a *ComposeApp) PullAndInstall(ctx context.Context) error {
 
 	defer PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, nil)
 
-	if err := service.Start(ctx, a.Name, api.StartOptions{
-		OnExit: api.CascadeStop,
-		Wait:   true,
+	if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
+		return service.Start(ctx, a.Name, api.StartOptions{Wait: true})
 	}); err != nil {
 		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
@@ -874,9 +915,8 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 				time.Sleep(2 * time.Second)
 			}
 
-			if err := service.Start(ctx, a.Name, api.StartOptions{
-				OnExit: api.CascadeStop,
-				Wait:   true,
+			if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
+				return service.Start(ctx, a.Name, api.StartOptions{Wait: true})
 			}); err != nil {
 				go PublishEventWrapper(ctx, common.EventTypeAppStartError, map[string]string{
 					common.PropertyTypeMessage.Name: err.Error(),
