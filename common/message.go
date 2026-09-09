@@ -77,7 +77,18 @@ var (
 
 	PropertyTypeImageUpdated = message_bus.PropertyType{
 		Name:        "docker:image:updated",
-		Description: utils.Ptr("true if image is updated"),
+		Description: utils.Ptr("true if a newer image was pulled, false if the check found none. Absent when no check completed: a failed pull says nothing either way."),
+	}
+)
+
+// app update properties
+var (
+	// PropertyTypeAppUpdated is set only when an update actually replaced what the app
+	// runs. Absent means it did not: nothing newer, nothing checked, or it failed --
+	// app:update-error carries the reason when there is one.
+	PropertyTypeAppUpdated = message_bus.PropertyType{
+		Name:        "app:updated",
+		Description: utils.Ptr("true if the app now runs what the update installed"),
 	}
 )
 

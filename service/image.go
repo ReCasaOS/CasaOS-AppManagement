@@ -61,9 +61,7 @@ func (ds *dockerService) PullImage(ctx context.Context, imageName string) error 
 // Try to pull latest image.
 //
 // It returns `true` if the image is updated.
-func (ds *dockerService) PullLatestImage(ctx context.Context, imageName string) (bool, error) {
-	isImageUpdated := false
-
+func (ds *dockerService) PullLatestImage(ctx context.Context, imageName string) (isImageUpdated bool, err error) {
 	go PublishEventWrapper(ctx, common.EventTypeImagePullBegin, map[string]string{
 		common.PropertyTypeImageName.Name: imageName,
 	})
@@ -79,6 +77,15 @@ func (ds *dockerService) PullLatestImage(ctx context.Context, imageName string) 
 
 	defer func() {
 		// write image updated information as a property back to context, so both current func and external caller can see it
+		//
+		// Only when the check ran to an answer. A pull that failed -- unreachable
+		// registry, pinned image, daemon error -- knows nothing about whether a newer
+		// image exists, and "false" is read downstream as proof that none does.
+		// Absent is the honest answer, and callers treat it as "unknown".
+		if err != nil {
+			return
+		}
+
 		properties := common.PropertiesFromContext(ctx)
 		properties[common.PropertyTypeImageUpdated.Name] = fmt.Sprint(isImageUpdated) // <- instead, do it here.
 	}()

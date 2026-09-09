@@ -238,7 +238,13 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 			})
 
 			logger.Error("failed to update compose app", zap.Error(err), zap.String("name", a.Name))
+			return
 		}
+
+		// The update applied. app:update-end is published whether this succeeded or
+		// failed, so without this it says nothing at all and the dashboard has no
+		// success to report -- which is why a finished update used to pass in silence.
+		eventProperties[common.PropertyTypeAppUpdated.Name] = "true"
 	}(ctx)
 
 	return nil
