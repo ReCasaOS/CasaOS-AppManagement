@@ -657,27 +657,14 @@ func (a *AppManagement) ComposeAppContainers(ctx echo.Context, id codegen.Compos
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
 
-	// Because of a stupid design by @tigerinus, the `composeApp.Containers(...)` func above was returning a map
-	// of docker compose `service` to a single container:
-	//
-	//     `map[string]codegen.ContainerSummary`
-	//
-	// However, it is possible a `service` contains multiple containers. Thus as a fix, the func has now been updated
-	// to return
-	//
-	//     `map[string][]codegen.ContainerSummary`
-	//
-	// Just so that @zhanghengxin does not need to change the frontend last minute before releasing v0.4.4, here is
-	// an ugly workaround :(
-	containersWorkaround := map[string]codegen.ContainerSummary{}
-	for service, containerList := range containerLists {
-		containersWorkaround[service] = containerList[0]
-	}
-
+	// Every container of every service is reported. Until now the response kept only
+	// containerList[0] per service -- a workaround from v0.4.4 to spare the frontend a
+	// change -- which hid the replicas of a scaled service, and panicked outright on a
+	// service whose list was empty.
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppContainersOK{
 		Data: &codegen.ComposeAppContainers{
 			Main:       storeInfo.Main,
-			Containers: &containersWorkaround, // TODO: Remove `containersWorkaround` and use `containerLists` instead in future - requires frontend changes
+			Containers: &containerLists,
 		},
 	})
 }

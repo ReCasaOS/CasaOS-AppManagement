@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -521,6 +522,12 @@ func ArchiveContainer(ctx echo.Context) error {
 	container, err := service.MyService.Docker().GetContainer(appID)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
+	}
+
+	// GetContainer reports "not found" as a zero value with a nil error, so an unknown
+	// appID arrives here with no names at all and used to panic on Names[0].
+	if len(container.Names) == 0 {
+		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: fmt.Sprintf("container `%s` not found", appID)})
 	}
 
 	if err := service.MyService.Docker().RenameContainer(container.Names[0]+"_old", appID); err != nil {

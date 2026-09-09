@@ -1732,11 +1732,21 @@ components:
           example: "syncthing"
         containers:
           type: object
+          description: |-
+            The key is the name of a docker compose `service`, and the value is the list of
+            every container currently belonging to that service.
+
+            A service can hold more than one container (see
+            https://docs.docker.com/compose/compose-file/deploy/#replicas), and a service
+            declared in the compose file can hold none at all when the app is down, so the
+            list can be empty.
           additionalProperties:
-            $ref: "#/components/schemas/ContainerSummary"
+            type: array
+            items:
+              $ref: "#/components/schemas/ContainerSummary"
           example:
-            "09e70f4a7dd3fc43de6a1bc40d45c79f857544e13679e5b1a47409034a7ce621":
-              {}
+            syncthing:
+              - {}
 
     ContainerSummary:
       type: object
