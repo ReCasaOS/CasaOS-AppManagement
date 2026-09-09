@@ -51,13 +51,27 @@ func DockerTerminal(ctx echo.Context) error {
 	row := v2.DefaultQuery(ctx, "rows", "30")
 	conn, err := upgrader.Upgrade(ctx.Response().Writer, ctx.Request(), nil)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
+		// Upgrade has already written an HTTP error response for a failed handshake,
+		// so there is nothing left here to reply with.
+		logger.Error("failed to upgrade the terminal connection", zap.Error(err))
+		return nil
 	}
 	defer conn.Close()
 	container := ctx.Param("id")
 	hr, err := service.MyService.Docker().CreateContainerShellSession(container, row, col)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
+		// The connection was hijacked by the upgrade above, so a JSON response here
+		// is written into something nobody reads: the browser saw a socket open and
+		// close with nothing in it. That is the terminal that comes up blank and says
+		// nothing -- for an image with no shell, a container that is not running, or
+		// any other exec failure. The socket is the only channel left, so use it.
+		logger.Error("failed to open a shell in the container", zap.Error(err), zap.String("container", container))
+
+		if writeErr := conn.WriteMessage(websocket.TextMessage, []byte("\r\n"+err.Error()+"\r\n")); writeErr != nil {
+			logger.Error("failed to report the shell error over the terminal connection", zap.Error(writeErr))
+		}
+
+		return nil
 	}
 	// 关闭I/O流
 	defer hr.Close()

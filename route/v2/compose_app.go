@@ -754,6 +754,40 @@ type composeAppsWithStoreInfoOpts struct {
 	// We must ensure that this endpoint responds as quickly as possible.
 }
 
+// containerStateSeverity ranks the states a container can be in, worst last. An app
+// is only as healthy as its unhealthiest part, so this is what picks the one state
+// the dashboard shows for the whole app.
+var containerStateSeverity = map[string]int{
+	"running":    0,
+	"created":    1,
+	"removing":   2,
+	"paused":     3,
+	"restarting": 4,
+	"exited":     5,
+	"dead":       6,
+}
+
+// composeAppStatus folds every container of every service into the one state the
+// dashboard renders for the app. A state this does not recognise outranks every
+// state it does: an unfamiliar answer is not a reason to report `running`.
+func composeAppStatus(containerLists map[string][]codegen.ContainerSummary) string {
+	worst, worstRank := "", -1
+
+	for _, containers := range containerLists {
+		for _, container := range containers {
+			rank, known := containerStateSeverity[container.State]
+			if !known {
+				rank = len(containerStateSeverity)
+			}
+
+			if rank > worstRank {
+				worst, worstRank = container.State, rank
+			}
+		}
+	}
+
+	return worst
+}
 func composeAppsWithStoreInfo(ctx context.Context, opts composeAppsWithStoreInfoOpts) (map[string]codegen.ComposeAppWithStoreInfo, error) {
 	composeApps, err := service.MyService.Compose().List(ctx)
 	if err != nil {
@@ -800,7 +834,9 @@ func composeAppsWithStoreInfo(ctx context.Context, opts composeAppsWithStoreInfo
 		}
 
 		mainContainers, ok := containerLists[*storeInfo.Main]
-		if !ok {
+		if !ok || len(mainContainers) == 0 {
+			// the length matters: a present key with an empty slice used to reach an
+			// unguarded index below
 			logger.Error("failed to get main app container", zap.String("composeAppID", id))
 			return composeAppWithStoreInfo
 		}
@@ -810,22 +846,11 @@ func composeAppsWithStoreInfo(ctx context.Context, opts composeAppsWithStoreInfo
 			composeAppWithStoreInfo.IsUncontrolled = &isUncontrolled
 		}
 
-		// Because of a stupid design by @tigerinus, the `composeApp.Containers(...)` func above was returning a map
-		// of docker compose `service` to a single container:
-		//
-		//     `map[string]codegen.ContainerSummary`
-		//
-		// However, it is possible a `service` contains multiple containers. Thus as a fix, the func has now been updated
-		// to return
-		//
-		//     `map[string][]codegen.ContainerSummary`
-		//
-		// Apparently, this impacts the downstream logic, like the embarrassing need to use `mainContainers[0]` below.
-		//
-		// In order words, the status of the compose app is determined by the status of the first main container. Silly...
-		//
-		// TODO: This needs a re-design in future.
-		composeAppWithStoreInfo.Status = &mainContainers[0].State
+		// The status used to be the state of the main service's FIRST container and
+		// nothing else, so an app whose database had died reported `running` and the
+		// dashboard drew a green dot -- the one thing that view exists to tell you,
+		// wrong. Every container of every service counts now.
+		composeAppWithStoreInfo.Status = lo.ToPtr(composeAppStatus(containerLists))
 
 		return composeAppWithStoreInfo
 	}), nil

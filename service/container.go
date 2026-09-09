@@ -655,10 +655,17 @@ func (ds *dockerService) RecreateContainer(ctx context.Context, id string, pull 
 		}
 		return nil
 	}(); err != nil {
-		// if failed to start new container and old container was running...
+		// The clone did not start. Put things back and STOP.
+		//
+		// Falling through from here reached the "remove the old container" block
+		// below, which removed the container that had just been restored: both copies
+		// gone, and the definition of an imported container lives nowhere but the
+		// daemon. When the original had been stopped rather than running, no rollback
+		// ran at all and the old container was removed in favour of a clone that does
+		// not start.
 		if containerInfo.State.Running {
 			// start the old container
-			if err := func() error {
+			if startErr := func() error {
 				go PublishEventWrapper(ctx, common.EventTypeContainerStartBegin, map[string]string{
 					common.PropertyTypeContainerID.Name: id,
 				})
@@ -675,32 +682,40 @@ func (ds *dockerService) RecreateContainer(ctx context.Context, id string, pull 
 					return err
 				}
 				return nil
-			}(); err != nil {
-				return err
-			}
-
-			// remove the new container
-			if err := func() error {
-				go PublishEventWrapper(ctx, common.EventTypeContainerRemoveBegin, map[string]string{
-					common.PropertyTypeContainerID.Name: newID,
-				})
-
-				defer PublishEventWrapper(ctx, common.EventTypeContainerRemoveEnd, map[string]string{
-					common.PropertyTypeContainerID.Name: newID,
-				})
-
-				if err := docker.RemoveContainer(ctx, newID); err != nil {
-					go PublishEventWrapper(ctx, common.EventTypeContainerRemoveError, map[string]string{
-						common.PropertyTypeContainerID.Name: newID,
-						common.PropertyTypeMessage.Name:     err.Error(),
-					})
-					return err
-				}
-				return nil
-			}(); err != nil {
-				return err
+			}(); startErr != nil {
+				// Reported, not returned: the clone below still has to go, and the
+				// failure the caller needs to hear about is the one that started this.
+				logger.Error("failed to restart the original container after a failed recreate",
+					zap.Error(startErr), zap.String("id", id))
 			}
 		}
+
+		// remove the clone, whether or not the original had been running -- it is
+		// unwanted either way, and leaving it behind is what let the rename below
+		// hand its name to a container that does not start
+		if removeErr := func() error {
+			go PublishEventWrapper(ctx, common.EventTypeContainerRemoveBegin, map[string]string{
+				common.PropertyTypeContainerID.Name: newID,
+			})
+
+			defer PublishEventWrapper(ctx, common.EventTypeContainerRemoveEnd, map[string]string{
+				common.PropertyTypeContainerID.Name: newID,
+			})
+
+			if err := docker.RemoveContainer(ctx, newID); err != nil {
+				go PublishEventWrapper(ctx, common.EventTypeContainerRemoveError, map[string]string{
+					common.PropertyTypeContainerID.Name: newID,
+					common.PropertyTypeMessage.Name:     err.Error(),
+				})
+				return err
+			}
+			return nil
+		}(); removeErr != nil {
+			logger.Error("failed to remove the clone that would not start",
+				zap.Error(removeErr), zap.String("id", newID))
+		}
+
+		return err
 	}
 
 	// remove the old container if new container started successfully
