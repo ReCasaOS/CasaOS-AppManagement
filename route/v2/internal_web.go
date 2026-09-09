@@ -132,6 +132,11 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 			common.DefaultLanguage: composeApp.Name,
 		}),
 		IsUncontrolled: utils.Ptr(false),
+
+		// Read from the cache a check pass filled, so this stays a map lookup. Nil
+		// until something has checked, which the dashboard renders as no badge
+		// rather than as an app known to be current.
+		UpdateAvailable: service.ImageUpdateAvailable(composeApp.Name),
 	}
 
 	composeAppStoreInfo := composeAppWithStoreInfo.StoreInfo

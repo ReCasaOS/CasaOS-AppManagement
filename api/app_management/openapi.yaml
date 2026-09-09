@@ -307,6 +307,30 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
   
+  /image-updates:
+    post:
+      summary: Check every installed app for a newer image
+      description: |
+        Asks each image's registry for the digest its tag points at now and compares it
+        with the digest of the copy on disk. This sees apps that came from no app store,
+        which the store's own upgradable list cannot.
+
+        One network round trip per distinct image, so this is a deliberate action rather
+        than something the app grid does on every load. The result is cached and served
+        as `update_available` on each grid item until the next call.
+
+        An image no answer can be obtained for -- an unreachable registry, credentials
+        this host does not have, an image never pulled -- is listed in `unchecked`
+        instead of being guessed at, and its app keeps the answer it had.
+      operationId: checkImageUpdates
+      tags:
+        - App methods
+      responses:
+        "200":
+          $ref: "#/components/responses/ImageUpdateCheckOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /apps/upgradable:
     get:
       summary: Get the list of upgradable apps from installed app.
@@ -1054,6 +1078,16 @@ components:
                     type: array
                     items:
                       $ref: "#/components/schemas/UpgradableAppInfo"
+    ImageUpdateCheckOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ImageUpdateCheckResult"
     AppStoreListOK:
       description: OK
       content:
@@ -1789,11 +1823,43 @@ components:
         - AuthorTypeCommunity
         - AuthorTypeUnknown
 
+    ImageUpdateCheckResult:
+      description: What one check pass found.
+      required:
+        - updatable
+        - unchecked
+      properties:
+        updatable:
+          description: Apps whose registry holds a different image than the copy on disk.
+          type: array
+          items:
+            type: string
+          example:
+            - syncthing
+        unchecked:
+          description: |
+            Apps no answer could be obtained for, and why. A registry that cannot be
+            reached is not evidence that nothing changed, so these keep the answer they
+            had rather than being reported as up to date.
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            plex: image never pulled on this host
     WebAppGridItem:
       description: (internal use ONLY)
       required:
         - app_type
       properties:
+        update_available:
+          description: |
+            Whether something newer than what this app runs is available.
+
+            Read from the cache a check pass fills, never computed here: the grid is on
+            the dashboard's first paint and must not wait on a registry. Absent means
+            this app has not been checked since the service started.
+          type: boolean
+          example: true
         store_app_id:
           $ref: "#/components/schemas/StoreAppID"
         scheme:
