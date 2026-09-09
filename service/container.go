@@ -620,6 +620,29 @@ func (ds *dockerService) RecreateContainer(ctx context.Context, id string, pull 
 		return err
 	}
 
+	// The clone exists from here on, under a name derived from the original's. Every
+	// path that gives up before it has taken that name for real has to take the clone
+	// away again, or the next recreate finds the name held by a container nobody asked
+	// for -- and the recreate after that renames THAT one over the original.
+	removeClone := func() {
+		go PublishEventWrapper(ctx, common.EventTypeContainerRemoveBegin, map[string]string{
+			common.PropertyTypeContainerID.Name: newID,
+		})
+
+		defer PublishEventWrapper(ctx, common.EventTypeContainerRemoveEnd, map[string]string{
+			common.PropertyTypeContainerID.Name: newID,
+		})
+
+		if err := docker.RemoveContainer(ctx, newID); err != nil {
+			go PublishEventWrapper(ctx, common.EventTypeContainerRemoveError, map[string]string{
+				common.PropertyTypeContainerID.Name: newID,
+				common.PropertyTypeMessage.Name:     err.Error(),
+			})
+			logger.Error("failed to remove the clone left behind by a failed recreate",
+				zap.Error(err), zap.String("id", newID))
+		}
+	}
+
 	// stop old container if it is running
 	if containerInfo.State.Running {
 		if err := func() error {
@@ -640,6 +663,7 @@ func (ds *dockerService) RecreateContainer(ctx context.Context, id string, pull 
 			}
 			return nil
 		}(); err != nil {
+			removeClone()
 			return err
 		}
 	}
@@ -698,30 +722,10 @@ func (ds *dockerService) RecreateContainer(ctx context.Context, id string, pull 
 			}
 		}
 
-		// remove the clone, whether or not the original had been running -- it is
-		// unwanted either way, and leaving it behind is what let the rename below
-		// hand its name to a container that does not start
-		if removeErr := func() error {
-			go PublishEventWrapper(ctx, common.EventTypeContainerRemoveBegin, map[string]string{
-				common.PropertyTypeContainerID.Name: newID,
-			})
-
-			defer PublishEventWrapper(ctx, common.EventTypeContainerRemoveEnd, map[string]string{
-				common.PropertyTypeContainerID.Name: newID,
-			})
-
-			if err := docker.RemoveContainer(ctx, newID); err != nil {
-				go PublishEventWrapper(ctx, common.EventTypeContainerRemoveError, map[string]string{
-					common.PropertyTypeContainerID.Name: newID,
-					common.PropertyTypeMessage.Name:     err.Error(),
-				})
-				return err
-			}
-			return nil
-		}(); removeErr != nil {
-			logger.Error("failed to remove the clone that would not start",
-				zap.Error(removeErr), zap.String("id", newID))
-		}
+		// the clone is unwanted whether or not the original had been running, and
+		// leaving it behind is what let the rename below hand its name to a container
+		// that does not start
+		removeClone()
 
 		return err
 	}

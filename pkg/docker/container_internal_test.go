@@ -65,15 +65,24 @@ func TestHostConfigCarriesAnonymousVolumes(t *testing.T) {
 	})
 }
 
-// A bind mount recorded only as a Binds entry must not come back as a second
-// mount for the same destination.
+// Anything already in Binds must not come back as a second mount for the same
+// destination -- and Binds is not only bind mounts: `-v pgdata:/data` puts a NAMED
+// volume there, which arrives in containerInfo.Mounts as a TypeVolume with a name,
+// exactly like the anonymous ones this carries. The destination is what tells them
+// apart, and mounting one twice is a daemon-side conflict.
 func TestHostConfigKeepsBindsUntouched(t *testing.T) {
 	containerInfo := &types.ContainerJSON{
 		ContainerJSONBase: &types.ContainerJSONBase{
-			HostConfig: &container.HostConfig{Binds: []string{"/srv/data:/data"}},
+			HostConfig: &container.HostConfig{Binds: []string{
+				"/srv/data:/data",
+				"pgdata:/var/lib/postgresql/data",
+				"/srv/conf:/etc/app:ro",
+			}},
 		},
 		Mounts: []types.MountPoint{
 			{Type: mount.TypeBind, Source: "/srv/data", Destination: "/data", RW: true},
+			{Type: mount.TypeVolume, Name: "pgdata", Destination: "/var/lib/postgresql/data", RW: true},
+			{Type: mount.TypeBind, Source: "/srv/conf", Destination: "/etc/app"},
 		},
 	}
 
