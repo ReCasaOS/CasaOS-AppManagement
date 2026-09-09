@@ -13,6 +13,12 @@ import (
 // an unset key or a typo, so a test that wants to watch one expire has to wait it out.
 const shortestUpWaitTimeout = time.Second
 
+// settled / notSettled stand in for asking the daemon what the containers are doing.
+var (
+	settled    = func(context.Context) bool { return true }
+	notSettled = func(context.Context) bool { return false }
+)
+
 func setUpWaitTimeout(t *testing.T, d time.Duration) {
 	t.Helper()
 	previous := config.AppInfo.UpWaitTimeout
@@ -30,37 +36,57 @@ func TestWaitForAppReportsBlownDeadline(t *testing.T) {
 	err := waitForApp(context.Background(), "gluetun-stack", func(ctx context.Context) error {
 		<-ctx.Done() // what compose does: poll until the context is done, then say nothing
 		return nil
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("a wait that hit its deadline must be an error, got nil")
 	}
 
-	if err := waitForApp(context.Background(), "quick", func(context.Context) error { return nil }); err != nil {
+	if err := waitForApp(context.Background(), "quick", func(context.Context) error { return nil }, nil); err != nil {
 		t.Fatalf("an app that came up must not be an error: %v", err)
 	}
 
 	failed := errors.New("no such image")
-	if err := waitForApp(context.Background(), "broken", func(context.Context) error { return failed }); !errors.Is(err, failed) {
+	if err := waitForApp(context.Background(), "broken", func(context.Context) error { return failed }, notSettled); !errors.Is(err, failed) {
 		t.Fatalf("compose's own error must reach the caller unchanged, got %v", err)
 	}
 }
 
-// The deadline must not eat work that succeeded. A stack with a one-shot init container
-// nobody depends on can never satisfy compose's running-or-healthy wait, however long it
-// is given: its containers are up on the new definition when the deadline fires, so the
-// apply must keep the file the user edited instead of restoring the backup over it.
-func TestApplyKeepsTheNewFileWhenOnlyTheWaitTimedOut(t *testing.T) {
+// The deadline must not eat work that succeeded, and neither must a service that did
+// its job and exited. compose waits for EVERY service to be running-or-healthy, so a
+// stack with a one-shot init container -- a db-migrate, a chown sidecar -- fails that
+// wait within a poll or two with `container X exited (0)`, long before any deadline.
+// Both cases leave the app up on the new definition, so the apply must keep the file
+// the user edited instead of restoring the backup over it.
+func TestApplyKeepsTheNewFileWhenTheAppIsUp(t *testing.T) {
 	setUpWaitTimeout(t, shortestUpWaitTimeout)
 
-	timedOut := waitForApp(context.Background(), "db-with-migrate", func(ctx context.Context) error {
+	// what compose actually returns for that stack: an error, fast, not a blown deadline
+	exited := errors.New("container db-migrate-1 exited (0)")
+	oneShot := waitForApp(context.Background(), "db-with-migrate", func(context.Context) error { return exited }, settled)
+	if !errors.Is(oneShot, errUpNotConfirmed) || !keepNewDefinition(oneShot) {
+		t.Fatalf("a stack whose containers all settled must keep the new compose file, got %v", oneShot)
+	}
+	if !errors.Is(oneShot, exited) {
+		t.Fatalf("compose's own words must stay in the error for the logs, got %v", oneShot)
+	}
+
+	// a wait that ran out while compose swallowed the cancellation and returned nil
+	timedOut := waitForApp(context.Background(), "slow", func(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
-	})
-	if !errors.Is(timedOut, errUpNotConfirmed) {
+	}, nil)
+	if !errors.Is(timedOut, errUpNotConfirmed) || !keepNewDefinition(timedOut) {
 		t.Fatalf("a blown deadline must be errUpNotConfirmed so the apply can tell it from a failure, got %v", timedOut)
 	}
-	if !keepNewDefinition(timedOut) {
-		t.Fatal("an app that is up but unconfirmed must keep the new compose file, not be rolled back")
+
+	// the same deadline, surfaced as the error of whatever call was in flight -- an
+	// inspect, a create. Same event, so the same answer, whatever the containers say.
+	surfaced := waitForApp(context.Background(), "slow-inspect", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, notSettled)
+	if !errors.Is(surfaced, errUpNotConfirmed) || !keepNewDefinition(surfaced) {
+		t.Fatalf("a deadline that came back as an error is the same event, got %v", surfaced)
 	}
 
 	// and everything else is still a failed apply
@@ -71,10 +97,10 @@ func TestApplyKeepsTheNewFileWhenOnlyTheWaitTimedOut(t *testing.T) {
 		t.Fatal("an app that came up must keep the new compose file")
 	}
 
-	// a caller that cancels is not an app that came up
+	// a caller that cancels is not an app that came up, whatever the containers look like
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	cancelled := waitForApp(ctx, "aborted", func(context.Context) error { return nil })
+	cancelled := waitForApp(ctx, "aborted", func(context.Context) error { return nil }, settled)
 	if !errors.Is(cancelled, context.Canceled) || keepNewDefinition(cancelled) {
 		t.Fatalf("a cancelled wait must roll back, got %v", cancelled)
 	}

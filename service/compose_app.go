@@ -547,15 +547,13 @@ func upWaitTimeout() time.Duration {
 // through -- so a wait that timed out comes back as success unless we look. That is
 // also why passing our budget as StartOptions.WaitTimeout instead would not do: the
 // deadline compose sets for itself is swallowed by the same nil.
-func waitForApp(ctx context.Context, name string, up func(context.Context) error) error {
+func waitForApp(ctx context.Context, name string, up func(context.Context) error, settled func(context.Context) bool) error {
 	timeout := upWaitTimeout()
 
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if err := up(waitCtx); err != nil {
-		return err
-	}
+	upErr := up(waitCtx)
 
 	if ctx.Err() != nil {
 		// the caller gave up on us, not the other way around
@@ -563,10 +561,73 @@ func waitForApp(ctx context.Context, name string, up func(context.Context) error
 	}
 
 	if waitCtx.Err() != nil {
+		// A blown deadline arrives two ways: compose swallows the cancellation and
+		// returns nil, or it surfaces it as the error of whatever call was in flight
+		// -- an inspect, a create. Same event, so the same answer. Classifying only
+		// the first took the owner's edit away whenever the timeout happened to land
+		// inside a call rather than between two polls.
 		return fmt.Errorf("compose app `%s` was started but %w after %s", name, errUpNotConfirmed, timeout)
 	}
 
-	return nil
+	if upErr == nil {
+		return nil
+	}
+
+	// compose waits for EVERY service to be running-or-healthy, which a one-shot init
+	// container -- a db-migrate, a chown sidecar -- can never be: it exits 0 and
+	// compose answers `container X exited (0)` within a poll or two, nowhere near the
+	// deadline. That is not a failed apply, the stack is up and doing what its author
+	// wrote. So ask the daemon what is actually there rather than reading compose's
+	// message, which is prose and not an API.
+	if settled != nil && settled(ctx) {
+		return fmt.Errorf("compose app `%s` was started but %w: %w", name, errUpNotConfirmed, upErr)
+	}
+
+	return upErr
+}
+
+// everyContainerSettled reports whether the app's containers are all in a state
+// somebody meant: running and not reporting itself unhealthy, or exited cleanly
+// because finishing is what they were for. A non-zero exit, a restart loop or an
+// unhealthy report is a failed apply, and the caller must put the previous definition
+// back.
+//
+// Not being able to ask is not a yes. An apply nobody can judge keeps the older
+// behaviour, which is to roll back.
+func (a *ComposeApp) everyContainerSettled(ctx context.Context) bool {
+	containerLists, err := a.Containers(ctx)
+	if err != nil {
+		logger.Info("cannot tell whether the app settled, so treating the apply as failed",
+			zap.Error(err), zap.String("name", a.Name))
+
+		return false
+	}
+
+	seen := false
+
+	for _, containers := range containerLists {
+		for _, container := range containers {
+			seen = true
+
+			switch container.State {
+			case "running":
+				if strings.EqualFold(container.Health, "unhealthy") {
+					return false
+				}
+			case "exited":
+				if container.ExitCode != 0 {
+					return false
+				}
+			default:
+				// created, restarting, paused, removing, dead: none of them is a
+				// state an app settles into
+				return false
+			}
+		}
+	}
+
+	// no containers at all is not a stack that came up
+	return seen
 }
 
 func (a *ComposeApp) Up(ctx context.Context, service api.Service) error {
@@ -591,7 +652,7 @@ func (a *ComposeApp) up(ctx context.Context, service api.Service, removeOrphans 
 				Wait: true,
 			},
 		})
-	}); err != nil {
+	}, a.everyContainerSettled); err != nil {
 		logger.Error("failed to start original compose app", zap.Error(err), zap.String("name", a.Name))
 		return err
 	}
@@ -813,7 +874,7 @@ func (a *ComposeApp) PullAndInstall(ctx context.Context) error {
 
 	if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
 		return service.Start(ctx, a.Name, api.StartOptions{Wait: true})
-	}); err != nil {
+	}, a.everyContainerSettled); err != nil {
 		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
 		})
@@ -1004,7 +1065,7 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 
 			if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
 				return service.Start(ctx, a.Name, api.StartOptions{Wait: true})
-			}); err != nil {
+			}, a.everyContainerSettled); err != nil {
 				go PublishEventWrapper(ctx, common.EventTypeAppStartError, map[string]string{
 					common.PropertyTypeMessage.Name: err.Error(),
 				})
