@@ -521,6 +521,8 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 		if err := service.CheckImageUpdatesForApp(ctx.Request().Context(), composeApp); err != nil {
 			logger.Info("could not check images before updating", zap.Error(err), zap.String("appID", id))
 		}
+		// the answer below is cached for an hour, which would outlive the check just made
+		service.MyService.AppStoreManagement().ForgetUpgradable(id)
 
 		if !service.MyService.AppStoreManagement().IsUpdateAvailable(composeApp) {
 			message := fmt.Sprintf("compose app `%s` is up to date", id)

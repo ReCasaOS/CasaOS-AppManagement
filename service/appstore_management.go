@@ -491,14 +491,6 @@ func (a *AppStoreManagement) WorkDir() (string, error) {
 }
 
 func (a *AppStoreManagement) IsUpdateAvailable(composeApp *ComposeApp) bool {
-	// The dashboard badges an app from what the last image check found, so the button
-	// has to agree with the badge. This is also the only answer there is for an app
-	// that came from no store, and it catches a store app whose tag has not moved but
-	// whose image has been republished under it.
-	if updatable := ImageUpdateAvailable(composeApp.Name); updatable != nil && *updatable {
-		return true
-	}
-
 	storeID := composeApp.Name
 	if value, err := a.isAppUpgradable.Get(storeID); err == nil {
 		switch value := value.(type) {
@@ -527,9 +519,11 @@ func (a *AppStoreManagement) isUpdateAvailable(composeApp *ComposeApp) (bool, er
 		return false, nil
 	}
 
-	// if app is uncontrolled, no update available
+	// An app that came from no store has no catalogue entry to compare against, and
+	// its update is a re-pull of the tags it already names, so the image check is the
+	// whole answer. It used to be a flat no, which is why these could never update.
 	if storeInfo.IsUncontrolled != nil && *storeInfo.IsUncontrolled {
-		return false, nil
+		return imageUpdatable(composeApp.Name), nil
 	}
 
 	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
@@ -603,6 +597,13 @@ func (a *AppStoreManagement) IsUpdateAvailableWith(composeApp *ComposeApp, store
 		return false, err
 	}
 
+	// The catalogue is on the same version, so an update would re-pull that tag
+	// rather than move the app. Whether that fetches anything is a question only the
+	// registry can answer, and the image check already asked it.
+	if storeTag == currentTag {
+		return imageUpdatable(composeApp.Name), nil
+	}
+
 	return isNewerTag(storeTag, currentTag), nil
 }
 
@@ -638,6 +639,13 @@ func (a *AppStoreManagement) IsUpdating(appID string) bool {
 
 func (a *AppStoreManagement) StartUpgrade(appID string) {
 	a.isAppUpgrading.Store(appID, struct{}{})
+}
+
+// ForgetUpgradable drops one app's cached answer so the next question is asked
+// afresh. An hour of cache is right for a list rendered in the background and wrong
+// immediately after someone pressed a button with the word "check" on it.
+func (a *AppStoreManagement) ForgetUpgradable(appID string) {
+	a.isAppUpgradable.Remove(appID)
 }
 
 func (a *AppStoreManagement) FinishUpgrade(appID string) {

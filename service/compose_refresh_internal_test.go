@@ -130,12 +130,61 @@ func TestIsUpdateAvailableAgreesWithTheImageCheck(t *testing.T) {
 	imageUpdates.byApp = map[string]bool{}
 	defer func() { imageUpdates.byApp = map[string]bool{} }()
 
+	// The answer is cached for an hour, so each case forgets the previous one --
+	// which is exactly what the update route does after checking, and why it has to.
+	answer := func() bool {
+		appStore.ForgetUpgradable("imported")
+		return appStore.IsUpdateAvailable(a)
+	}
+
 	// nobody has checked: nothing to offer
-	assert.Assert(t, !appStore.IsUpdateAvailable(a))
+	assert.Assert(t, !answer())
 
 	imageUpdates.byApp = map[string]bool{"imported": false}
-	assert.Assert(t, !appStore.IsUpdateAvailable(a))
+	assert.Assert(t, !answer())
 
 	imageUpdates.byApp = map[string]bool{"imported": true}
-	assert.Assert(t, appStore.IsUpdateAvailable(a))
+	assert.Assert(t, answer())
+}
+
+// A moved image must not be allowed to smuggle a downgrade back in. For a store app
+// the update writes the STORE's compose, so answering "yes, your image moved" when
+// the catalogue sits on an older tag would install that older tag -- exactly the
+// rollback the tag comparison exists to prevent.
+func TestImageCheckDoesNotReopenTheDowngrade(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile,
+		[]byte("name: app\nservices:\n  a:\n    image: acme/a:2.0\nx-casaos:\n  main: a\n  is_uncontrolled: false\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	imageUpdates.byApp = map[string]bool{"app": true}
+	defer func() { imageUpdates.byApp = map[string]bool{} }()
+
+	behind, err := NewComposeAppFromYAML(
+		[]byte("name: app\nservices:\n  a:\n    image: acme/a:1.8\nx-casaos:\n  main: a\n"), true, true)
+	assert.NilError(t, err)
+	updatable, err := appStore.IsUpdateAvailableWith(local, behind)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable, "a catalogue behind the installed app is not an update, moved image or not")
+
+	// the same tag, though, means the update is a re-pull of it, and there the image
+	// check is the only thing that can say whether that would fetch anything
+	same, err := NewComposeAppFromYAML(
+		[]byte("name: app\nservices:\n  a:\n    image: acme/a:2.0\nx-casaos:\n  main: a\n"), true, true)
+	assert.NilError(t, err)
+	updatable, err = appStore.IsUpdateAvailableWith(local, same)
+	assert.NilError(t, err)
+	assert.Assert(t, updatable)
+
+	imageUpdates.byApp = map[string]bool{"app": false}
+	updatable, err = appStore.IsUpdateAvailableWith(local, same)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable)
 }

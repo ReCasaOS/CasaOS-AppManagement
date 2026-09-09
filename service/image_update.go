@@ -43,6 +43,13 @@ func ImageUpdateAvailable(appName string) *bool {
 	return &updatable
 }
 
+// imageUpdatable folds ImageUpdateAvailable to a plain yes or no. Unknown counts as
+// no: nobody has looked, which is not a reason to offer an update.
+func imageUpdatable(appName string) bool {
+	updatable := ImageUpdateAvailable(appName)
+	return updatable != nil && *updatable
+}
+
 // CheckImageUpdates asks every installed app's registry what its tags point at now
 // and compares that with the copy on disk.
 //
