@@ -315,13 +315,12 @@ func (a *ComposeApp) updatedComposeYAML(storeComposeApp *ComposeApp) ([]byte, er
 	// about them, so it leaves them exactly as written rather than refusing -- refusing
 	// meant that adding one container to a store app froze it forever, with nothing in
 	// the interface saying why.
-	_, storeAbsentOfLocal := lo.Difference(sortedServiceNames(local.Services), sortedServiceNames(storeComposeApp.Services))
-
+	//
 	// The other direction is still a refusal: the catalogue has grown a service this
 	// app does not run, and creating one is not something an update does yet. The error
 	// names them and says why, because an interface that can only say `compose app not
 	// match` leaves the owner with a button that fails and no reason.
-	if len(storeAbsentOfLocal) > 0 {
+	if storeAbsentOfLocal := servicesUpdateCannotCreate(local.Services, storeComposeApp.Services); len(storeAbsentOfLocal) > 0 {
 		return nil, fmt.Errorf("%w: the app store version of %s adds services this app does not have (%s), and an update cannot create them",
 			ErrComposeAppNotMatch, a.Name, strings.Join(storeAbsentOfLocal, ", "))
 	}
@@ -329,12 +328,7 @@ func (a *ComposeApp) updatedComposeYAML(storeComposeApp *ComposeApp) ([]byte, er
 	for name, service := range storeComposeApp.Services {
 		localComposeAppService := local.Services[name] // present: storeAbsentOfLocal is empty
 
-		// A tag republished under the same name says nothing about which image to run,
-		// so the local reference stays and the pull is what moves it. This used to be a
-		// loop over NeedCheckDigestTags whose LAST iteration won: with a second entry
-		// in that list, any tag but the last one would have had its image replaced
-		// anyway.
-		if _, tag := docker.ExtractImageAndTag(service.Image); !lo.Contains(common.NeedCheckDigestTags, tag) {
+		if updateWritesStoreImage(service.Image) {
 			localComposeAppService.Image = service.Image
 		}
 
@@ -345,6 +339,31 @@ func (a *ComposeApp) updatedComposeYAML(storeComposeApp *ComposeApp) ([]byte, er
 	removeRuntime(local)
 
 	return yaml.Marshal(local)
+}
+
+// servicesUpdateCannotCreate names the services the catalogue has and this app does
+// not. Both halves of an update read it: the write above refuses them, and the
+// decision to offer an update at all has to refuse the same apps, or the dashboard
+// badges a button whose only possible answer is a 500.
+func servicesUpdateCannotCreate(local, store types.Services) []string {
+	_, storeAbsentOfLocal := lo.Difference(sortedServiceNames(local), sortedServiceNames(store))
+
+	return storeAbsentOfLocal
+}
+
+// updateWritesStoreImage reports whether an update would actually put the catalogue's
+// image in the file for a service. A tag republished under the same name says nothing
+// about which image to run, so the local reference stays and the pull is what moves
+// it -- and a decision that counted such a service as a change badged an app whose
+// file the update then left exactly as it was, for ever.
+//
+// This used to be a loop over NeedCheckDigestTags whose LAST iteration won: with a
+// second entry in that list, any tag but the last one would have had its image
+// replaced anyway.
+func updateWritesStoreImage(storeImage string) bool {
+	_, tag := docker.ExtractImageAndTag(storeImage)
+
+	return !lo.Contains(common.NeedCheckDigestTags, tag)
 }
 
 // TODO rename the function to service and add error return value

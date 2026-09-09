@@ -525,12 +525,20 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 		// the answer below is cached for an hour, which would outlive the check just made
 		service.MyService.AppStoreManagement().ForgetUpgradable(id)
 
-		if !service.MyService.AppStoreManagement().IsUpdateAvailable(composeApp) {
+		if available, reason := service.MyService.AppStoreManagement().UpdateAvailability(composeApp); !available {
 			// For an app with no catalogue entry the image check IS the answer, so
 			// reporting `up to date` after it failed would be a claim about a registry
 			// nobody managed to reach.
 			if checkErr != nil {
 				message := fmt.Sprintf("could not check compose app `%s`: %s", id, checkErr.Error())
+				return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateOK{Message: &message})
+			}
+
+			// An app held back rather than current: say which service and why, because
+			// `is up to date` on an app that is not is how someone ends up with a
+			// button that will not act and a screen that will not say why.
+			if reason != "" {
+				message := fmt.Sprintf("compose app `%s` is not updated: %s", id, reason)
 				return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateOK{Message: &message})
 			}
 

@@ -185,7 +185,7 @@ func TestImageCheckDoesNotReopenTheDowngrade(t *testing.T) {
 	behind, err := NewComposeAppFromYAML(
 		[]byte("name: app\nservices:\n  a:\n    image: acme/a:1.8\nx-casaos:\n  main: a\n"), true, true)
 	assert.NilError(t, err)
-	updatable, err := appStore.IsUpdateAvailableWith(local, behind)
+	updatable, _, err := appStore.IsUpdateAvailableWith(local, behind)
 	assert.NilError(t, err)
 	assert.Assert(t, !updatable, "a catalogue behind the installed app is not an update, moved image or not")
 
@@ -194,12 +194,12 @@ func TestImageCheckDoesNotReopenTheDowngrade(t *testing.T) {
 	same, err := NewComposeAppFromYAML(
 		[]byte("name: app\nservices:\n  a:\n    image: acme/a:2.0\nx-casaos:\n  main: a\n"), true, true)
 	assert.NilError(t, err)
-	updatable, err = appStore.IsUpdateAvailableWith(local, same)
+	updatable, _, err = appStore.IsUpdateAvailableWith(local, same)
 	assert.NilError(t, err)
 	assert.Assert(t, updatable)
 
 	imageUpdates.registry = map[string]bool{"app": false}
-	updatable, err = appStore.IsUpdateAvailableWith(local, same)
+	updatable, _, err = appStore.IsUpdateAvailableWith(local, same)
 	assert.NilError(t, err)
 	assert.Assert(t, !updatable)
 }
@@ -233,7 +233,7 @@ func TestSameMainTagDoesNotDowngradeASidecar(t *testing.T) {
 			"x-casaos:\n  main: app\n"), true, true)
 	assert.NilError(t, err)
 
-	updatable, err := appStore.IsUpdateAvailableWith(local, lagging)
+	updatable, _, err := appStore.IsUpdateAvailableWith(local, lagging)
 	assert.NilError(t, err)
 	assert.Assert(t, !updatable, "applying this would write postgres:15 over postgres:16")
 
@@ -244,7 +244,7 @@ func TestSameMainTagDoesNotDowngradeASidecar(t *testing.T) {
 			"x-casaos:\n  main: app\n"), true, true)
 	assert.NilError(t, err)
 
-	updatable, err = appStore.IsUpdateAvailableWith(local, matching)
+	updatable, _, err = appStore.IsUpdateAvailableWith(local, matching)
 	assert.NilError(t, err)
 	assert.Assert(t, updatable)
 }
@@ -276,14 +276,14 @@ func TestDigestPinnedAppComparesByReference(t *testing.T) {
 	moved, err := NewComposeAppFromYAML([]byte(
 		"name: app\nservices:\n  a:\n    image: acme/app@"+b+"\nx-casaos:\n  main: a\n"), true, true)
 	assert.NilError(t, err)
-	updatable, err := appStore.IsUpdateAvailableWith(local, moved)
+	updatable, _, err := appStore.IsUpdateAvailableWith(local, moved)
 	assert.NilError(t, err)
 	assert.Assert(t, updatable)
 
 	same, err := NewComposeAppFromYAML([]byte(
 		"name: app\nservices:\n  a:\n    image: acme/app@"+a+"\nx-casaos:\n  main: a\n"), true, true)
 	assert.NilError(t, err)
-	updatable, err = appStore.IsUpdateAvailableWith(local, same)
+	updatable, _, err = appStore.IsUpdateAvailableWith(local, same)
 	assert.NilError(t, err)
 	assert.Assert(t, !updatable)
 }
@@ -314,7 +314,7 @@ func TestASidecarBumpIsAnUpdate(t *testing.T) {
 			"x-casaos:\n  main: app\n"), true, true)
 	assert.NilError(t, err)
 
-	updatable, err := appStore.IsUpdateAvailableWith(local, bumped)
+	updatable, _, err := appStore.IsUpdateAvailableWith(local, bumped)
 	assert.NilError(t, err)
 	assert.Assert(t, updatable, "the catalogue moved the sidecar forward")
 }
@@ -344,7 +344,7 @@ func TestAHandAddedServiceDoesNotHideAnUpdate(t *testing.T) {
 		"name: app\nservices:\n  app:\n    image: acme/app:2.0\nx-casaos:\n  main: app\n"), true, true)
 	assert.NilError(t, err)
 
-	updatable, err := appStore.IsUpdateAvailableWith(local, store)
+	updatable, _, err := appStore.IsUpdateAvailableWith(local, store)
 	assert.NilError(t, err)
 	assert.Assert(t, updatable, "the extra service is the owner's, not a reason to discard the registry answer")
 
@@ -353,7 +353,7 @@ func TestAHandAddedServiceDoesNotHideAnUpdate(t *testing.T) {
 		"name: app\nservices:\n  app:\n    image: acme/app:1.8\nx-casaos:\n  main: app\n"), true, true)
 	assert.NilError(t, err)
 
-	updatable, err = appStore.IsUpdateAvailableWith(local, behind)
+	updatable, _, err = appStore.IsUpdateAvailableWith(local, behind)
 	assert.NilError(t, err)
 	assert.Assert(t, !updatable)
 }
@@ -432,4 +432,152 @@ func TestEveryDigestCheckedTagKeepsItsImage(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(out), "image: acme/app:1"), "a `latest` in the store keeps the local reference\n%s", out)
 	assert.Assert(t, strings.Contains(string(out), "image: acme/side:2"), string(out))
+}
+
+// The badge and the write have to agree. The catalogue growing a service this app
+// does not run is a refusal in updatedComposeYAML -- synchronously, as a 500 -- so a
+// decision that never looked at it offered a permanent badge on a button that could
+// only fail.
+func TestNoUpdateIsOfferedForServicesTheUpdateCannotCreate(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:1\nx-casaos:\n  main: app\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	// the catalogue bumps the image AND adds a database, so the tag comparison alone
+	// would happily call this an update
+	store, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2\n  db:\n    image: postgres:16\n"+
+			"x-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	imageUpdates.registry = map[string]bool{"app": true}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
+
+	updatable, reason, err := appStore.IsUpdateAvailableWith(local, store)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable, "the write refuses this, so the badge must too")
+	assert.Assert(t, strings.Contains(reason, "db"), reason)
+
+	// the same pair, through the write: the two halves answer the same question
+	_, err = local.updatedComposeYAML(store)
+	assert.Assert(t, errors.Is(err, ErrComposeAppNotMatch), err)
+}
+
+// A store tag in NeedCheckDigestTags is deliberately NOT written: the local reference
+// stays. Counting it as a change offered an update that left the file exactly as it
+// was, so the badge came back on the next check, for ever.
+func TestAStoreTagTheUpdateWillNotWriteIsNotAChange(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:1.2.3\nx-casaos:\n  main: app\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	store, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:latest\nx-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	// nobody has said this app's image moved, so nothing is on offer
+	imageUpdates.registry = map[string]bool{}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
+
+	updatable, _, err := appStore.IsUpdateAvailableWith(local, store)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable, "the update would not write acme/app:latest, so there is nothing to offer")
+
+	out, err := local.updatedComposeYAML(store)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(out), "image: acme/app:1.2.3"), string(out))
+
+	// and when a registry DOES say the running image moved, the re-pull is the update
+	imageUpdates.registry = map[string]bool{"app": true}
+	updatable, _, err = appStore.IsUpdateAvailableWith(local, store)
+	assert.NilError(t, err)
+	assert.Assert(t, updatable)
+}
+
+// The same, from the other end: an app pinned by digest against a catalogue on
+// `latest`. The write keeps the pin, so the decision must not offer an update the
+// file would not record.
+func TestADigestPinnedAppIsNotOfferedAStoreLatest(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	const pin = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app@"+pin+"\nx-casaos:\n  main: app\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	store, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:latest\nx-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	imageUpdates.registry = map[string]bool{}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
+
+	updatable, _, err := appStore.IsUpdateAvailableWith(local, store)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable)
+
+	out, err := local.updatedComposeYAML(store)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(out), "image: acme/app@"+pin), string(out))
+}
+
+// The reported symptom: "I cannot update it and there is no reason on screen". The
+// refusal is right, the silence is not -- and it is not an `unchecked` either, since
+// the app was checked and answered.
+func TestARefusalCarriesAReasonThroughTheCache(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\n  db:\n    image: postgres:16\n"+
+			"x-casaos:\n  main: app\n  store_app_id: app\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	lagging, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\n  db:\n    image: postgres:15\n"+
+			"x-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	imageUpdates.registry = map[string]bool{"app": true}
+	defer func() { imageUpdates.registry = map[string]bool{} }()
+
+	updatable, reason, err := appStore.IsUpdateAvailableWith(local, lagging)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable)
+	assert.Assert(t, strings.Contains(reason, "db"), reason)
+	assert.Assert(t, strings.Contains(reason, "postgres:15") && strings.Contains(reason, "postgres:16"), reason)
+
+	// and it survives the hour-long cache the dashboard and the update button read
+	_ = appStore.isAppUpgradable.Set("app", updateAnswer{available: updatable, reason: reason})
+	cachedUpdatable, cachedReason := appStore.UpdateAvailability(local)
+	assert.Assert(t, !cachedUpdatable)
+	assert.Equal(t, cachedReason, reason)
 }

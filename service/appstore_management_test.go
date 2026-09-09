@@ -127,17 +127,22 @@ func TestIsUpgradable(t *testing.T) {
 	localComposeApp, err := service.LoadComposeAppFromConfigFile(*storeComposeAppStoreInfo.StoreAppID, composeFilePath)
 	assert.NilError(t, err)
 
-	upgradable, err := appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
+	upgradable, _, err := appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
 	assert.NilError(t, err)
 	assert.Assert(t, !upgradable)
 
+	// A tag nothing can order against the installed one -- `test` here, a channel or
+	// a codename in the wild -- is refused rather than guessed at: guessing forward
+	// is what wrote older images over working apps. And the refusal says so, because
+	// a button that will not act above a screen that will not say why is the bug.
 	storeMainService := storeComposeApp.Services[storeMainApp.Name]
 	storeMainService.Image = storeMainAppImage + ":test"
 	storeComposeApp.Services[storeMainApp.Name] = storeMainService
 
-	upgradable, err = appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
+	upgradable, reason, err := appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
 	assert.NilError(t, err)
-	assert.Assert(t, upgradable)
+	assert.Assert(t, !upgradable)
+	assert.Assert(t, strings.Contains(reason, storeMainAppImage+":test"), reason)
 
 	// A store entry BEHIND what is installed is not an update. Answering true
 	// here is what downgrades an app: the update writes the store's image over
@@ -145,15 +150,16 @@ func TestIsUpgradable(t *testing.T) {
 	storeMainService.Image = storeMainAppImage + ":1.23.0"
 	storeComposeApp.Services[storeMainApp.Name] = storeMainService
 
-	upgradable, err = appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
+	upgradable, reason, err = appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
 	assert.NilError(t, err)
 	assert.Assert(t, !upgradable)
+	assert.Assert(t, strings.Contains(reason, "behind"), reason)
 
 	// one ahead of it still is
 	storeMainService.Image = storeMainAppImage + ":1.23.2"
 	storeComposeApp.Services[storeMainApp.Name] = storeMainService
 
-	upgradable, err = appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
+	upgradable, _, err = appStoreManagement.IsUpdateAvailableWith(localComposeApp, storeComposeApp)
 	assert.NilError(t, err)
 	assert.Assert(t, upgradable)
 }
