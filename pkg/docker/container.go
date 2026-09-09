@@ -10,6 +10,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/inkly/CasaOS-Common/utils"
@@ -228,7 +229,49 @@ func hostConfig(containerInfo *types.ContainerJSON) *container.HostConfig {
 		hostConfig.Links[i] = fmt.Sprintf("%s:%s", name, alias)
 	}
 
+	hostConfig.Mounts = append(hostConfig.Mounts, unreferencedVolumeMounts(containerInfo)...)
+
 	return hostConfig
+}
+
+// unreferencedVolumeMounts returns the volumes attached to the container that
+// its HostConfig does not already reference - in practice the anonymous ones,
+// which exist only in containerInfo.Mounts. Without them the clone gets a fresh
+// empty volume derived from the image VOLUME directive and the old volume is
+// orphaned when the original container is removed.
+//
+// Only mount.TypeVolume entries are carried: a bind mount is already in
+// HostConfig.Binds and mounting it twice is a conflict, and a tmpfs holds no
+// data worth preserving.
+func unreferencedVolumeMounts(containerInfo *types.ContainerJSON) []mount.Mount {
+	referenced := map[string]bool{}
+
+	for _, bind := range containerInfo.HostConfig.Binds {
+		// source:destination[:options]
+		if parts := strings.Split(bind, ":"); len(parts) >= 2 {
+			referenced[parts[1]] = true
+		}
+	}
+
+	for _, m := range containerInfo.HostConfig.Mounts {
+		referenced[m.Target] = true
+	}
+
+	var mounts []mount.Mount
+	for _, mountPoint := range containerInfo.Mounts {
+		if mountPoint.Type != mount.TypeVolume || mountPoint.Name == "" || referenced[mountPoint.Destination] {
+			continue
+		}
+
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeVolume,
+			Source:   mountPoint.Name,
+			Target:   mountPoint.Destination,
+			ReadOnly: !mountPoint.RW,
+		})
+	}
+
+	return mounts
 }
 
 // simpleNetworkConfig is a networkConfig with only 1 network.
