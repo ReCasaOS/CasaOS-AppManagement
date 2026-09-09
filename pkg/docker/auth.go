@@ -36,7 +36,7 @@ func GetChallenge(imageName string) (string, error) {
 		return "", err
 	}
 
-	client := http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	client := http.Client{Timeout: registryTimeout, Transport: &http.Transport{DisableKeepAlives: true}}
 	var res *http.Response
 	if res, err = client.Do(req); err != nil {
 		return "", err
@@ -77,7 +77,7 @@ func GetChallengeRequest(URL url.URL) (*http.Request, error) {
 
 // GetBearerHeader tries to fetch a bearer token from the registry based on the challenge instructions
 func GetBearerHeader(challenge string, img string, registryAuth string) (string, error) {
-	client := http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	client := http.Client{Timeout: registryTimeout, Transport: &http.Transport{DisableKeepAlives: true}}
 	if strings.Contains(img, ":") {
 		img = strings.Split(img, ":")[0]
 	}
@@ -127,17 +127,30 @@ func GetAuthURL(challenge string, img string) (*url.URL, error) {
 
 	for _, pair := range pairs {
 		trimmed := strings.Trim(pair, " ")
-		kv := strings.Split(trimmed, "=")
-		key := kv[0]
-		val := strings.Trim(kv[1], "\"")
-		values[key] = val
+
+		// A registry writes this header, so it decides what arrives here. A directive
+		// with no value -- `Bearer` on its own, or an `error` in the list, which a
+		// proxy in front of a registry will produce -- used to index past the end of
+		// the split and panic. This runs inside an errgroup now, which does not
+		// recover, so that would take the whole service down.
+		key, val, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+
+		// Cut at the FIRST `=` and keep the rest: a realm carrying a query string has
+		// more of them, and splitting on every one truncates the URL.
+		values[key] = strings.Trim(val, "\"")
 	}
 
 	if values["realm"] == "" || values["service"] == "" {
 		return nil, fmt.Errorf("challenge header did not include all values needed to construct an auth url")
 	}
 
-	authURL, _ := url.Parse(values["realm"])
+	authURL, err := url.Parse(values["realm"])
+	if err != nil {
+		return nil, fmt.Errorf("challenge header names a realm that is not a URL: %w", err)
+	}
 	q := authURL.Query()
 	q.Add("service", values["service"])
 

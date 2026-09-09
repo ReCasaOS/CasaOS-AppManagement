@@ -518,13 +518,22 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 		// registries now rather than answering from whatever the last sweep left in
 		// the cache, or from nothing at all when no sweep has run. A check that fails
 		// is not fatal -- the store comparison below still has something to say.
-		if err := service.CheckImageUpdatesForApp(ctx.Request().Context(), composeApp); err != nil {
-			logger.Info("could not check images before updating", zap.Error(err), zap.String("appID", id))
+		checkErr := service.CheckImageUpdatesForApp(ctx.Request().Context(), composeApp)
+		if checkErr != nil {
+			logger.Info("could not check images before updating", zap.Error(checkErr), zap.String("appID", id))
 		}
 		// the answer below is cached for an hour, which would outlive the check just made
 		service.MyService.AppStoreManagement().ForgetUpgradable(id)
 
 		if !service.MyService.AppStoreManagement().IsUpdateAvailable(composeApp) {
+			// For an app with no catalogue entry the image check IS the answer, so
+			// reporting `up to date` after it failed would be a claim about a registry
+			// nobody managed to reach.
+			if checkErr != nil {
+				message := fmt.Sprintf("could not check compose app `%s`: %s", id, checkErr.Error())
+				return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateOK{Message: &message})
+			}
+
 			message := fmt.Sprintf("compose app `%s` is up to date", id)
 			return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateOK{Message: &message})
 		}

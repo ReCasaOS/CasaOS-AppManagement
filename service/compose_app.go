@@ -201,7 +201,17 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 		return err
 	}
 
-	newComposeYAML, err := a.composeYAMLForUpdate(storeInfo)
+	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
+		return ErrStoreInfoNotFound
+	}
+
+	// nil means no catalogue entry, which is an answer rather than a failure
+	storeComposeApp, err := MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID)
+	if err != nil {
+		return err
+	}
+
+	newComposeYAML, err := a.composeYAMLForUpdate(storeComposeApp)
 	if err != nil {
 		return err
 	}
@@ -237,27 +247,23 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 // composeYAMLForUpdate is the docker-compose.yml an update writes, which depends on
 // where the app came from.
 //
-// An app installed from a store takes that store's images: the catalogue is what
-// says which version the app should be on. An app that came from nowhere -- an
-// imported compose file, one written by hand -- has no catalogue to consult, so it
-// keeps the images it already names and the update is the pull that follows: the
-// tags stay the same, the digests they resolve to need not.
-func (a *ComposeApp) composeYAMLForUpdate(storeInfo *codegen.ComposeAppStoreInfo) ([]byte, error) {
-	if storeInfo != nil && storeInfo.IsUncontrolled != nil && *storeInfo.IsUncontrolled {
-		return a.refreshedComposeYAML()
-	}
-
-	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
-		return nil, ErrStoreInfoNotFound
-	}
-
-	storeComposeApp, err := MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID)
-	if err != nil {
-		return nil, err
-	}
-
+// An app with a catalogue entry takes that catalogue's images: it is what says which
+// version the app should be on. An app with none -- an imported compose file, one
+// written by hand -- has nothing to consult, so it keeps the images it already names
+// and the update is the pull that follows: the tags stay the same, the digests they
+// resolve to need not.
+//
+// A nil storeComposeApp means the catalogue holds nothing for this app.
+//
+// That, not the `is_uncontrolled` flag, is the test. The flag means something else: it
+// is set when an app's main tag has been moved off the catalogue's, and an imported
+// app is written with it FALSE (see IsNewComposeUncontrolled, which returns false when
+// it finds no store entry). Keying on the flag left imported apps exactly as frozen as
+// before and took the catalogue away from pinned apps, which are the only ones that
+// have one.
+func (a *ComposeApp) composeYAMLForUpdate(storeComposeApp *ComposeApp) ([]byte, error) {
 	if storeComposeApp == nil {
-		return nil, ErrNotFoundInAppStore
+		return a.refreshedComposeYAML()
 	}
 
 	return a.updatedComposeYAML(storeComposeApp)

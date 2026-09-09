@@ -170,8 +170,16 @@ func tokenAndURL(imageName string) (string, string, error) {
 	return token, url, nil
 }
 
+// registryTimeout bounds one call to a registry, end to end.
+//
+// The transport's dial and TLS timeouts do not cover waiting for response headers, so
+// without this a registry that completes the handshake and then goes quiet holds its
+// goroutine for the life of the process. That used to be one request; the image check
+// makes one such call per installed image, on goroutines nothing cancels.
+const registryTimeout = 20 * time.Second
+
 func httpClient() *http.Client {
-	return &http.Client{Transport: &http.Transport{
+	return &http.Client{Timeout: registryTimeout, Transport: &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,

@@ -72,42 +72,53 @@ func TestRefreshedComposeYAMLRefusesAnUnreadableEnv(t *testing.T) {
 	assert.ErrorContains(t, err, "line 1")
 }
 
-// The choice of what an update writes, without touching the daemon: a store app takes
-// the store's images, an imported one keeps its own.
-func TestComposeYAMLForUpdateRefusesAStoreAppWithNoEntry(t *testing.T) {
-	logger.LogInitConsoleOnly()
-
-	dir := t.TempDir()
-	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
-	assert.NilError(t, os.WriteFile(composeFile,
-		[]byte("name: a\nservices:\n  a:\n    image: acme/a:1\nx-casaos:\n  is_uncontrolled: false\n"), 0o600))
-
-	a, err := LoadComposeAppFromConfigFile("a", composeFile)
-	assert.NilError(t, err)
-	storeInfo, err := a.StoreInfo(false)
-	assert.NilError(t, err)
-
-	_, err = a.composeYAMLForUpdate(storeInfo)
-	assert.Equal(t, err, ErrStoreInfoNotFound)
-}
-
+// The choice of what an update writes, as a pure function of what the catalogue
+// holds: nil means it holds nothing for this app.
 func TestComposeYAMLForUpdateKeepsAnImportedAppsOwnImages(t *testing.T) {
 	logger.LogInitConsoleOnly()
 
 	dir := t.TempDir()
 	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
-	assert.NilError(t, os.WriteFile(composeFile,
-		[]byte("name: a\nservices:\n  a:\n    image: acme/a:1\nx-casaos:\n  is_uncontrolled: true\n"), 0o600))
+
+	// What an imported app actually looks like on disk. Install stamps store_app_id
+	// with the app's own name onto anything carrying an x-casaos map, and
+	// IsNewComposeUncontrolled writes is_uncontrolled FALSE when it finds no store
+	// entry. What makes it imported is that no catalogue holds that id, which is why
+	// keying this on the flag reached none of these apps.
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: a\nservices:\n  a:\n    image: acme/a:1\n"+
+			"x-casaos:\n  main: a\n  store_app_id: a\n  is_uncontrolled: false\n"), 0o600))
 
 	a, err := LoadComposeAppFromConfigFile("a", composeFile)
 	assert.NilError(t, err)
 	storeInfo, err := a.StoreInfo(false)
 	assert.NilError(t, err)
+	assert.Equal(t, *storeInfo.StoreAppID, "a")
+	assert.Equal(t, *storeInfo.IsUncontrolled, false)
 
-	// no store is consulted, and no store app id is needed
-	out, err := a.composeYAMLForUpdate(storeInfo)
+	out, err := a.composeYAMLForUpdate(nil)
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(out), "image: acme/a:1"), string(out))
+}
+
+func TestComposeYAMLForUpdateTakesTheCatalogueImagesWhenThereIsAnEntry(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: a\nservices:\n  a:\n    image: acme/a:1\nx-casaos:\n  main: a\n  store_app_id: a\n"), 0o600))
+
+	a, err := LoadComposeAppFromConfigFile("a", composeFile)
+	assert.NilError(t, err)
+
+	store, err := NewComposeAppFromYAML([]byte(
+		"name: a\nservices:\n  a:\n    image: acme/a:2\nx-casaos:\n  main: a\n"), true, true)
+	assert.NilError(t, err)
+
+	out, err := a.composeYAMLForUpdate(store)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(out), "image: acme/a:2"), string(out))
 }
 
 // The dashboard badges an app from what the image check found, so the update button
@@ -119,8 +130,11 @@ func TestIsUpdateAvailableAgreesWithTheImageCheck(t *testing.T) {
 
 	dir := t.TempDir()
 	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
-	assert.NilError(t, os.WriteFile(composeFile,
-		[]byte("name: imported\nservices:\n  a:\n    image: acme/a:1\nx-casaos:\n  is_uncontrolled: true\n"), 0o600))
+
+	// an imported app, as it is actually written: a store_app_id no catalogue holds
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: imported\nservices:\n  a:\n    image: acme/a:1\n"+
+			"x-casaos:\n  main: a\n  store_app_id: imported\n  is_uncontrolled: false\n"), 0o600))
 
 	a, err := LoadComposeAppFromConfigFile("imported", composeFile)
 	assert.NilError(t, err)
@@ -184,6 +198,85 @@ func TestImageCheckDoesNotReopenTheDowngrade(t *testing.T) {
 	assert.Assert(t, updatable)
 
 	imageUpdates.byApp = map[string]bool{"app": false}
+	updatable, err = appStore.IsUpdateAvailableWith(local, same)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable)
+}
+
+// The tag comparison looks at the MAIN service only, but an update rewrites every
+// service's image to the catalogue's. So "the catalogue is on my tag, and one of my
+// images has moved" is not enough: the sidecar the catalogue still pins lower would be
+// written back over a newer one, and an older sidecar that starts and migrates in
+// place takes the data with it.
+func TestSameMainTagDoesNotDowngradeASidecar(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\n  db:\n    image: postgres:16\n"+
+			"x-casaos:\n  main: app\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	// the registry republished one of the images, so the app reads as updatable
+	imageUpdates.byApp = map[string]bool{"app": true}
+	defer func() { imageUpdates.byApp = map[string]bool{} }()
+
+	// same main tag, but the catalogue still pins the sidecar lower
+	lagging, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\n  db:\n    image: postgres:15\n"+
+			"x-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	updatable, err := appStore.IsUpdateAvailableWith(local, lagging)
+	assert.NilError(t, err)
+	assert.Assert(t, !updatable, "applying this would write postgres:15 over postgres:16")
+
+	// the catalogue naming the same images throughout is a pure re-pull, and there the
+	// image check is the only thing that can say whether it would fetch anything
+	matching, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  app:\n    image: acme/app:2.0\n  db:\n    image: postgres:16\n"+
+			"x-casaos:\n  main: app\n"), true, true)
+	assert.NilError(t, err)
+
+	updatable, err = appStore.IsUpdateAvailableWith(local, matching)
+	assert.NilError(t, err)
+	assert.Assert(t, updatable)
+}
+
+// An image pinned by digest has no tag to order, and the extractor now says so with
+// an empty tag rather than handing back the digest's hex. Without a branch of its own
+// every digest-pinned app would compare equal to every other and never update again.
+func TestDigestPinnedAppComparesByReference(t *testing.T) {
+	logger.LogInitConsoleOnly()
+
+	const a = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	const b = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
+	assert.NilError(t, os.WriteFile(composeFile, []byte(
+		"name: app\nservices:\n  a:\n    image: acme/app@"+a+"\nx-casaos:\n  main: a\n"), 0o600))
+
+	local, err := LoadComposeAppFromConfigFile("app", composeFile)
+	assert.NilError(t, err)
+
+	appStore := NewAppStoreManagement()
+
+	moved, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  a:\n    image: acme/app@"+b+"\nx-casaos:\n  main: a\n"), true, true)
+	assert.NilError(t, err)
+	updatable, err := appStore.IsUpdateAvailableWith(local, moved)
+	assert.NilError(t, err)
+	assert.Assert(t, updatable)
+
+	same, err := NewComposeAppFromYAML([]byte(
+		"name: app\nservices:\n  a:\n    image: acme/app@"+a+"\nx-casaos:\n  main: a\n"), true, true)
+	assert.NilError(t, err)
 	updatable, err = appStore.IsUpdateAvailableWith(local, same)
 	assert.NilError(t, err)
 	assert.Assert(t, !updatable)

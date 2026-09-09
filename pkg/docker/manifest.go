@@ -38,23 +38,25 @@ func BuildManifestURL(imageName string) (string, error) {
 	return url.String(), nil
 }
 
-// ExtractImageAndTag from a concatenated string
+// ExtractImageAndTag splits a reference into the image and its tag.
+//
+// The colon that separates a tag is the last one AFTER the last slash. A registry
+// carries a port before the first slash -- `registry:5000/img:2.0` -- and splitting
+// on the first colon returned `registry` and `5000/img:2.0`. That string is not a
+// version, so the update check treated every such app as unorderable and offered it
+// whatever the catalogue held, in either direction.
+//
+// A reference pinned by digest has no tag at all, and comes back whole with an empty
+// tag rather than split at the digest's own colon.
 func ExtractImageAndTag(imageName string) (string, string) {
-	var img string
-	var tag string
-
-	if strings.Contains(imageName, ":") {
-		parts := strings.Split(imageName, ":")
-		if len(parts) > 2 {
-			img = parts[0]
-			tag = strings.Join(parts[1:], ":")
-		} else {
-			img = parts[0]
-			tag = parts[1]
-		}
-	} else {
-		img = imageName
-		tag = "latest"
+	if at := strings.LastIndex(imageName, "@"); at >= 0 {
+		return imageName, ""
 	}
-	return img, tag
+
+	colon := strings.LastIndex(imageName, ":")
+	if colon < 0 || colon < strings.LastIndex(imageName, "/") {
+		return imageName, "latest"
+	}
+
+	return imageName[:colon], imageName[colon+1:]
 }

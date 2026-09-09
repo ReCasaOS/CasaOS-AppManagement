@@ -519,13 +519,6 @@ func (a *AppStoreManagement) isUpdateAvailable(composeApp *ComposeApp) (bool, er
 		return false, nil
 	}
 
-	// An app that came from no store has no catalogue entry to compare against, and
-	// its update is a re-pull of the tags it already names, so the image check is the
-	// whole answer. It used to be a flat no, which is why these could never update.
-	if storeInfo.IsUncontrolled != nil && *storeInfo.IsUncontrolled {
-		return imageUpdatable(composeApp.Name), nil
-	}
-
 	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
 		return false, err
 	}
@@ -536,9 +529,12 @@ func (a *AppStoreManagement) isUpdateAvailable(composeApp *ComposeApp) (bool, er
 		return false, err
 	}
 
+	// No catalogue entry, so there is nothing to compare a tag against and the update
+	// would be a re-pull of the tags this app already names. The image check is the
+	// whole answer. This used to be a flat no, which is why an imported app could
+	// never update.
 	if storeComposeApp == nil {
-		logger.Error("store compose app not found, thus no update available", zap.String("storeAppID", *storeInfo.StoreAppID))
-		return false, nil
+		return imageUpdatable(composeApp.Name), nil
 	}
 
 	return a.IsUpdateAvailableWith(composeApp, storeComposeApp)
@@ -597,14 +593,49 @@ func (a *AppStoreManagement) IsUpdateAvailableWith(composeApp *ComposeApp, store
 		return false, err
 	}
 
-	// The catalogue is on the same version, so an update would re-pull that tag
-	// rather than move the app. Whether that fetches anything is a question only the
-	// registry can answer, and the image check already asked it.
-	if storeTag == currentTag {
+	// The catalogue names every image this app already runs, so an update would
+	// re-pull them rather than move the app anywhere. Whether that fetches anything
+	// is a question only the registry can answer, and the image check asked it.
+	//
+	// The tag above is the MAIN service's, and an update rewrites EVERY service to
+	// the catalogue's image, so the main tag matching is not enough: a sidecar the
+	// catalogue still pins lower would be written back over a newer one.
+	if storeTag == currentTag && sameImages(composeApp, storeComposeApp) {
 		return imageUpdatable(composeApp.Name), nil
 	}
 
+	// A reference pinned by digest has no tag, so there is nothing to order. The
+	// reference IS the version there, and any difference is the catalogue's
+	// statement about which one the app should run.
+	if storeTag == "" || currentTag == "" {
+		storeMainService, err := storeComposeApp.MainService()
+		if err != nil {
+			return false, err
+		}
+
+		return mainService.Image != storeMainService.Image, nil
+	}
+
 	return isNewerTag(storeTag, currentTag), nil
+}
+
+// sameImages reports whether an update would leave every image exactly as it is.
+// An update writes the catalogue's image for each service, so this is what makes
+// "the catalogue agrees with me" true of the whole app rather than of its main
+// service alone.
+func sameImages(composeApp, storeComposeApp *ComposeApp) bool {
+	if len(composeApp.Services) != len(storeComposeApp.Services) {
+		return false
+	}
+
+	for name, service := range composeApp.Services {
+		storeService, ok := storeComposeApp.Services[name]
+		if !ok || storeService.Image != service.Image {
+			return false
+		}
+	}
+
+	return true
 }
 
 // isNewerTag answers whether moving from current to candidate is an upgrade.
