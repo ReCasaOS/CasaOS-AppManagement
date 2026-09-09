@@ -20,21 +20,34 @@ func BuildManifestURL(imageName string) (string, error) {
 	}
 
 	host, err := NormalizeRegistry(normalizedName.String())
-	img, tag := ExtractImageAndTag(strings.TrimPrefix(imageName, host+"/"))
-
 	if err != nil {
 		return "", err
 	}
+
+	withoutHost := strings.TrimPrefix(imageName, host+"/")
+
+	// A manifest reference is a tag OR a digest. ExtractImageAndTag leaves a digest
+	// attached to the repository and returns no tag, so a pinned image used to ask
+	// for an empty reference and could never be checked.
+	img, reference := ExtractImageAndTag(withoutHost)
+	if repository, digest, pinned := strings.Cut(withoutHost, "@"); pinned {
+		img, reference = repository, digest
+	}
+
 	img = GetScopeFromImageName(img, host)
 
-	if !strings.Contains(img, "/") {
+	// Only Docker Hub has an implied namespace. Inventing one for a private registry
+	// asks it for a repository nobody there has ever heard of.
+	if host == "index.docker.io" && !strings.Contains(img, "/") {
 		img = "library/" + img
 	}
+
 	url := url2.URL{
 		Scheme: "https",
 		Host:   host,
-		Path:   fmt.Sprintf("/v2/%s/manifests/%s", img, tag),
+		Path:   fmt.Sprintf("/v2/%s/manifests/%s", img, reference),
 	}
+
 	return url.String(), nil
 }
 

@@ -267,6 +267,11 @@ func TestDigestPinnedAppComparesByReference(t *testing.T) {
 
 	appStore := NewAppStoreManagement()
 
+	// stated rather than inherited from whatever ran before: the identical-digest
+	// case below returns through the sameImages branch, which reads this map
+	imageUpdates.byApp = map[string]bool{}
+	defer func() { imageUpdates.byApp = map[string]bool{} }()
+
 	moved, err := NewComposeAppFromYAML([]byte(
 		"name: app\nservices:\n  a:\n    image: acme/app@"+b+"\nx-casaos:\n  main: a\n"), true, true)
 	assert.NilError(t, err)

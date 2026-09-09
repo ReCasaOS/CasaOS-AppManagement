@@ -660,7 +660,79 @@ func isNewerTag(candidate, current string) bool {
 		return true
 	}
 
+	// Same upstream version, different build suffix. SemVer orders prerelease
+	// identifiers letter by letter, so `ls99` sorts above `ls124` -- and
+	// linuxserver.io, whose images are most of what a home server runs, crosses that
+	// boundary at every hundredth build. Compare the digit runs as numbers.
+	if candidateVersion.Prerelease() != "" && currentVersion.Prerelease() != "" &&
+		candidateVersion.Major() == currentVersion.Major() &&
+		candidateVersion.Minor() == currentVersion.Minor() &&
+		candidateVersion.Patch() == currentVersion.Patch() {
+		return naturalCompare(candidateVersion.Prerelease(), currentVersion.Prerelease()) > 0
+	}
+
 	return candidateVersion.GreaterThan(currentVersion)
+}
+
+// naturalCompare orders two strings with runs of digits compared as numbers rather
+// than character by character, so `ls2` sorts below `ls10`.
+func naturalCompare(a, b string) int {
+	for a != "" && b != "" {
+		if isDigit(a[0]) && isDigit(b[0]) {
+			adigits, brest := digitRun(a), digitRun(b)
+			if cmp := compareNumbers(adigits, brest); cmp != 0 {
+				return cmp
+			}
+			a, b = a[len(adigits):], b[len(brest):]
+
+			continue
+		}
+
+		if a[0] != b[0] {
+			if a[0] < b[0] {
+				return -1
+			}
+
+			return 1
+		}
+		a, b = a[1:], b[1:]
+	}
+
+	switch {
+	case len(a) == len(b):
+		return 0
+	case len(a) < len(b):
+		return -1
+	default:
+		return 1
+	}
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func digitRun(s string) string {
+	i := 0
+	for i < len(s) && isDigit(s[i]) {
+		i++
+	}
+
+	return s[:i]
+}
+
+// compareNumbers compares two runs of digits by value, without converting them: a
+// build number long enough to overflow is still a build number.
+func compareNumbers(a, b string) int {
+	a = strings.TrimLeft(a, "0")
+	b = strings.TrimLeft(b, "0")
+	if len(a) != len(b) {
+		if len(a) < len(b) {
+			return -1
+		}
+
+		return 1
+	}
+
+	return strings.Compare(a, b)
 }
 
 func (a *AppStoreManagement) IsUpdating(appID string) bool {
