@@ -765,8 +765,11 @@ var containerStateSeverity = map[string]int{
 // composeAppStatus folds every container of every service into the one state the
 // dashboard renders for the app. A state this does not recognise outranks every
 // state it does: an unfamiliar answer is not a reason to report `running`.
+//
+// No container at all is `unknown`: the app exists and nothing of it is up, which is
+// not a state any container reported.
 func composeAppStatus(containerLists map[string][]codegen.ContainerSummary) string {
-	worst, worstRank := "", -1
+	worst, worstRank := "unknown", -1
 
 	for _, containers := range containerLists {
 		for _, container := range containers {
@@ -817,22 +820,17 @@ func composeAppsWithStoreInfo(ctx context.Context, opts composeAppsWithStoreInfo
 		}
 
 		// status
-		if storeInfo.Main == nil {
-			logger.Error("failed to get main app", zap.String("composeAppID", id))
-			return composeAppWithStoreInfo
-		}
-
+		//
+		// Nothing here asks about the MAIN service. It used to: the status was the
+		// state of that service's first container, so both a missing main service and
+		// a main service with no container had to bail out before reaching the index.
+		// Neither is a reason to give up now -- the fold below reads every container
+		// of every service -- and bailing out left the app `unknown` and its
+		// IsUncontrolled unread, which is the reported stack exactly: main service
+		// down, another service running, no status and no answer.
 		containerLists, err := composeApp.Containers(ctx)
 		if err != nil {
 			logger.Error("failed to get containers", zap.Error(err), zap.String("composeAppID", id))
-			return composeAppWithStoreInfo
-		}
-
-		mainContainers, ok := containerLists[*storeInfo.Main]
-		if !ok || len(mainContainers) == 0 {
-			// the length matters: a present key with an empty slice used to reach an
-			// unguarded index below
-			logger.Error("failed to get main app container", zap.String("composeAppID", id))
 			return composeAppWithStoreInfo
 		}
 

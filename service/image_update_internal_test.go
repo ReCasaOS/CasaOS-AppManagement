@@ -304,13 +304,56 @@ func TestRememberKeepsTheOldAnswerForAnAppItCouldNotCheck(t *testing.T) {
 	assert.Equal(t, imageUpdatable("unchecked"), true)
 }
 
+// An app that is gone leaves nothing behind in EITHER map. An `offered` entry that
+// outlives its app badges the next install under the same name, and the button --
+// asking the catalogue afresh -- then refuses to act on it. A restart used to clear
+// that; persisting the cache made it permanent.
 func TestRememberForgetsAnAppThatIsGone(t *testing.T) {
-	imageUpdates.registry = map[string]bool{"removed": true}
-	defer func() { imageUpdates.registry = map[string]bool{} }()
+	imageUpdates.registry = map[string]bool{"removed": true, "kept": true}
+	imageUpdates.offered = map[string]bool{"removed": true, "kept": true}
+	defer func() {
+		imageUpdates.registry = map[string]bool{}
+		imageUpdates.offered = map[string]bool{}
+	}()
 
-	remember(map[string]bool{}, map[string]*ComposeApp{})
+	remember(map[string]bool{}, map[string]*ComposeApp{
+		"kept": appWith(map[string]string{"main": "acme/a:1.0"}),
+	})
 
 	assert.Equal(t, imageUpdatable("removed"), false)
+	assert.Assert(t, ImageUpdateAvailable("removed") == nil)
+
+	// and an app still installed keeps both of its answers
+	assert.Equal(t, imageUpdatable("kept"), true)
+	assert.Equal(t, *ImageUpdateAvailable("kept"), true)
+}
+
+// Uninstalling an app, and updating one, both make the cached answers answers about
+// something that is not there any more. Unknown, not false: nobody has looked since.
+func TestForgettingAnAppDropsBothAnswersOnDiskToo(t *testing.T) {
+	imageUpdateStatePath = filepath.Join(t.TempDir(), "image_updates.json")
+
+	imageUpdates.registry = map[string]bool{"gone": true, "other": true}
+	imageUpdates.offered = map[string]bool{"gone": true, "other": true}
+	defer func() {
+		imageUpdates.registry = map[string]bool{}
+		imageUpdates.offered = map[string]bool{}
+	}()
+
+	forgetImageUpdates("gone")
+
+	assert.Assert(t, ImageUpdateAvailable("gone") == nil)
+	assert.Equal(t, imageUpdatable("gone"), false)
+	assert.Equal(t, *ImageUpdateAvailable("other"), true)
+
+	// the restart, which is where forgetting only in memory brings the badge back
+	imageUpdates.registry = map[string]bool{}
+	imageUpdates.offered = map[string]bool{}
+	LoadImageUpdates()
+
+	assert.Assert(t, ImageUpdateAvailable("gone") == nil)
+	assert.Equal(t, imageUpdatable("gone"), false)
+	assert.Equal(t, *ImageUpdateAvailable("other"), true)
 }
 
 func TestImageUpdateAvailableIsNilBeforeAnythingHasChecked(t *testing.T) {
@@ -423,8 +466,16 @@ func TestAnUnreadableFileIsIgnoredRatherThanBelieved(t *testing.T) {
 	assert.Equal(t, *ImageUpdateAvailable("app"), true)
 }
 
-// The answers arrive by rename, so the file on disk is never half of anything and no
-// temporary file is left lying beside it.
+// The answers arrive by rename onto the live file -- never written in place, where a
+// start reading it catches half of it -- and every save uses a temporary name of its
+// own, because the six-hourly sweep and someone pressing `Check then update` can
+// finish at once. One fixed temp name has both writing the same file: one renames it
+// while the other is mid-write, the next start cannot parse what landed, and every
+// badge disappears.
+//
+// The occupied name below stands in for the other save in flight. A directory,
+// because nothing can write over one -- a save that insists on that single name is
+// stopped dead by it, and one that picks its own is not.
 func TestSavingReplacesTheFileWholeAndLeavesNoTempBehind(t *testing.T) {
 	dir := t.TempDir()
 	imageUpdateStatePath = filepath.Join(dir, "image_updates.json")
@@ -432,10 +483,33 @@ func TestSavingReplacesTheFileWholeAndLeavesNoTempBehind(t *testing.T) {
 	imageUpdates.offered = map[string]bool{"app": true}
 	defer func() { imageUpdates.offered = map[string]bool{} }()
 
+	// through the open file, because os.Stat alone identifies the file at the path
+	// when the two are compared -- which is after the save, and so always the same one
+	identify := func() os.FileInfo {
+		f, err := os.Open(imageUpdateStatePath)
+		assert.NilError(t, err)
+		defer f.Close()
+
+		info, err := f.Stat()
+		assert.NilError(t, err)
+
+		return info
+	}
+
 	saveImageUpdates()
+	before := identify()
+
+	occupied := imageUpdateStatePath + ".tmp"
+	assert.NilError(t, os.Mkdir(occupied, 0o755))
+
 	imageUpdates.offered = map[string]bool{"app": false}
 	saveImageUpdates()
 
+	// a different file took the name. The same one would mean it had been truncated
+	// and rewritten where the next start can read it half-written.
+	assert.Assert(t, !os.SameFile(before, identify()))
+
+	assert.NilError(t, os.Remove(occupied))
 	entries, err := os.ReadDir(dir)
 	assert.NilError(t, err)
 	assert.Equal(t, len(entries), 1)
@@ -444,4 +518,24 @@ func TestSavingReplacesTheFileWholeAndLeavesNoTempBehind(t *testing.T) {
 	imageUpdates.offered = map[string]bool{}
 	LoadImageUpdates()
 	assert.Equal(t, *ImageUpdateAvailable("app"), false)
+}
+
+// A save that cannot land takes its temporary file with it. The disk being full is
+// exactly when this runs, and leaking a file per attempt is the worst moment to.
+func TestASaveThatCannotLandLeavesNothingBehind(t *testing.T) {
+	dir := t.TempDir()
+	imageUpdateStatePath = filepath.Join(dir, "image_updates.json")
+
+	// a directory where the file goes: the rename has nowhere to land
+	assert.NilError(t, os.Mkdir(imageUpdateStatePath, 0o755))
+
+	imageUpdates.offered = map[string]bool{"app": true}
+	defer func() { imageUpdates.offered = map[string]bool{} }()
+
+	saveImageUpdates()
+
+	entries, err := os.ReadDir(dir)
+	assert.NilError(t, err)
+	assert.Equal(t, len(entries), 1)
+	assert.Equal(t, entries[0].Name(), "image_updates.json")
 }

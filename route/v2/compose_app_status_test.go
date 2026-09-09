@@ -34,12 +34,16 @@ func TestComposeAppStatusIsTheWorstOfEveryContainer(t *testing.T) {
 		"a single healthy container":    {map[string][]string{"app": {"running"}}, "running"},
 		// an answer we do not recognise is not a reason to report `running`
 		"an unfamiliar state wins": {map[string][]string{"app": {"running"}, "b": {"something-new"}}, "something-new"},
+		// the main service being down is not the app being unanswerable: the caller
+		// used to give up here and report `unknown` for a stack that was half up
+		"the main service has no container": {map[string][]string{"db": {"running"}}, "running"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			assert.Equal(t, composeAppStatus(states(c.containers)), c.want)
 		})
 	}
 
-	// no containers at all: nothing to claim
-	assert.Equal(t, composeAppStatus(map[string][]codegen.ContainerSummary{}), "")
+	// no containers at all: nothing any container claimed, and the app still needs
+	// the one word the dashboard renders
+	assert.Equal(t, composeAppStatus(map[string][]codegen.ContainerSummary{}), "unknown")
 }

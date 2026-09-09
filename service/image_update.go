@@ -195,7 +195,11 @@ func CheckImageUpdatesForApp(ctx context.Context, composeApp *ComposeApp) error 
 }
 
 // remember replaces the cache with this pass's answers, keeping the previous answer
-// for an app this pass could not check, and dropping apps that are gone.
+// for an app this pass could not check, and dropping apps that are gone -- from BOTH
+// maps. An `offered` entry that outlives its app badges the next install under the
+// same name, while the button, asking the catalogue afresh, refuses to act: exactly
+// the mismatch the registry/offered split exists to prevent. A restart used to clear
+// it, and persisting the cache closed that last escape hatch.
 func remember(fresh map[string]bool, installed map[string]*ComposeApp) {
 	imageUpdates.Lock()
 	defer imageUpdates.Unlock()
@@ -214,6 +218,27 @@ func remember(fresh map[string]bool, installed map[string]*ComposeApp) {
 	}
 
 	imageUpdates.registry = next
+
+	for name := range imageUpdates.offered {
+		if _, stillInstalled := installed[name]; !stillInstalled {
+			delete(imageUpdates.offered, name)
+		}
+	}
+}
+
+// forgetImageUpdates drops both of an app's answers, for the two moments when what is
+// cached stopped being about the app in front of us: it was uninstalled, or it was
+// just updated. Neither leaves an answer that is true, and a stale `offered` badges an
+// app the button will then refuse to act on.
+//
+// Unknown, not false: nobody has looked since, and the next check says what is true.
+func forgetImageUpdates(appName string) {
+	imageUpdates.Lock()
+	delete(imageUpdates.registry, appName)
+	delete(imageUpdates.offered, appName)
+	imageUpdates.Unlock()
+
+	saveImageUpdates()
 }
 
 // dockerDaemon is what the update check needs of the daemon: which containers an app
@@ -501,10 +526,17 @@ func LoadImageUpdates() {
 
 // saveImageUpdates writes the answers where the next run will find them.
 //
-// Through a temporary file and a rename, because the file being replaced is one the
-// next start reads: a write cut short by a power loss on a home server would leave a
-// truncated file where a readable one was, and the badges would come back wrong
-// rather than merely absent.
+// Through a temporary file, an fsync and a rename, because the file being replaced is
+// one the next start reads: a write cut short by a power loss on a home server would
+// leave a truncated file where a readable one was, and the badges would come back
+// wrong rather than merely absent. The sync is what makes that true -- a rename
+// ordered before the data reaches the disk publishes the same truncated file.
+//
+// The temporary file gets a name of its own. The six-hourly sweep and someone
+// pressing `Check then update` can finish at once, and a fixed temp name has both
+// writing the same file: one renames it while the other is still writing, the next
+// start cannot parse what lands, and every badge disappears -- which is what the
+// rename was there to prevent.
 func saveImageUpdates() {
 	imageUpdates.RLock()
 	buf, err := json.Marshal(persistedImageUpdates{
@@ -523,17 +555,42 @@ func saveImageUpdates() {
 		return
 	}
 
-	tmpPath := imageUpdateStatePath + ".tmp"
-	if err := os.WriteFile(tmpPath, buf, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(imageUpdateStatePath), filepath.Base(imageUpdateStatePath)+".*.tmp")
+	if err != nil {
+		logger.Error("cannot create a file for image update answers", zap.String("path", imageUpdateStatePath), zap.Error(err))
+		return
+	}
+	tmpPath := tmp.Name()
+
+	// every path out of the write below leaves nothing behind: a full disk that leaks
+	// a temp file per attempt fills what is left of it
+	if err := writeAndSync(tmp, buf); err != nil {
 		logger.Error("cannot write image update answers", zap.String("path", tmpPath), zap.Error(err))
+	} else if err := os.Rename(tmpPath, imageUpdateStatePath); err != nil {
+		logger.Error("cannot store image update answers", zap.String("path", imageUpdateStatePath), zap.Error(err))
+	} else {
 		return
 	}
 
-	if err := os.Rename(tmpPath, imageUpdateStatePath); err != nil {
-		logger.Error("cannot store image update answers", zap.String("path", imageUpdateStatePath), zap.Error(err))
-
-		if err := os.Remove(tmpPath); err != nil {
-			logger.Error("cannot remove the leftover image update answers", zap.String("path", tmpPath), zap.Error(err))
-		}
+	if err := os.Remove(tmpPath); err != nil {
+		logger.Error("cannot remove the leftover image update answers", zap.String("path", tmpPath), zap.Error(err))
 	}
+}
+
+// writeAndSync fills a file and puts it on the disk, closing it either way. 0o644
+// because os.CreateTemp makes it private and this replaces a file that was readable.
+func writeAndSync(f *os.File, buf []byte) error {
+	defer f.Close()
+
+	if err := f.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err := f.Write(buf); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+
+	return f.Close()
 }

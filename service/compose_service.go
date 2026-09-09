@@ -126,6 +126,10 @@ func (s *ComposeService) Uninstall(ctx context.Context, composeApp *ComposeApp, 
 
 	clearAppStopped(composeApp.Name)
 
+	// the cached update answers were about the app being removed. Kept, they badge
+	// the next install under the same name with an update its button will not act on.
+	forgetImageUpdates(composeApp.Name)
+
 	go func(ctx context.Context) {
 		go PublishEventWrapper(ctx, common.EventTypeAppUninstallBegin, nil)
 
