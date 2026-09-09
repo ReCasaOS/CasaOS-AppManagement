@@ -9,11 +9,9 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/bluele/gcache"
-	"github.com/docker/docker/client"
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/common"
 	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
 	pkg_utils "github.com/inkly/CasaOS-AppManagement/pkg/utils"
 	"github.com/inkly/CasaOS-Common/utils"
 	"github.com/inkly/CasaOS-Common/utils/file"
@@ -559,34 +557,19 @@ func (a *AppStoreManagement) IsUpdateAvailableWith(composeApp *ComposeApp, store
 		logger.Error("failed to get main service", zap.Error(err))
 		return false, err
 	}
+	// A tag like `latest` is republished under the same name, so comparing it against
+	// the catalogue's tag can never see the move -- only a registry can, and the image
+	// check has already asked. It asks it of the containers this app is RUNNING, which
+	// is what the second, disk-based comparison that used to live here got wrong: it
+	// answered `up to date` whenever the tag on disk was current, even while the
+	// containers went on running the older image it replaced. One answer, one place,
+	// so the badge and the button cannot disagree.
 	if lo.Contains(common.NeedCheckDigestTags, currentTag) {
-		ctx := context.Background()
-		cli, clientErr := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-		if clientErr != nil {
-			logger.Error("failed to create docker client", zap.Error(clientErr))
-			return false, clientErr
-		}
-		defer cli.Close()
-
 		if lo.Contains(NoUpdateBlacklist, mainService.Image) {
 			return false, nil
 		}
 
-		image, _ := docker.ExtractImageAndTag(mainService.Image)
-
-		imageInfo, _, clientErr := cli.ImageInspectWithRaw(ctx, image)
-		if clientErr != nil {
-			logger.Error("failed to inspect image", zap.Error(clientErr))
-			return false, clientErr
-		}
-
-		match, clientErr := docker.CompareDigest(mainService.Image, imageInfo.RepoDigests)
-		if clientErr != nil {
-			logger.Error("failed to compare digest", zap.Error(clientErr))
-			return false, clientErr
-		}
-		// match means no update available
-		return !match, nil
+		return imageUpdatable(composeApp.Name), nil
 	}
 	storeTag, err := storeComposeApp.MainTag()
 	if err != nil {

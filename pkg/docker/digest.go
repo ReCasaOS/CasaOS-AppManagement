@@ -32,28 +32,42 @@ type RegistryCredentials struct {
 // ContentDigestHeader is the key for the key-value pair containing the digest header
 const ContentDigestHeader = "Docker-Content-Digest"
 
+// RegistryDigest is the digest the registry publishes for an image reference right
+// now.
+//
+// Exposed on its own because a caller holding several local digests -- one per
+// running container of a service, say -- has to compare each of them against the
+// registry, and a yes/no about one set of digests cannot say which of them matched.
+func RegistryDigest(imageName string) (string, error) {
+	token, url, err := tokenAndURL(imageName)
+	if err != nil {
+		return "", err
+	}
+
+	return GetDigest(url, token)
+}
+
+// ContainsDigest reports whether a local image's RepoDigests include one digest.
+// RepoDigests read `repo@sha256:...`; an entry without the `@` is not one and is
+// skipped rather than indexed into.
+func ContainsDigest(repoDigests []string, digest string) bool {
+	for _, dig := range repoDigests {
+		if _, localDigest, found := strings.Cut(dig, "@"); found && localDigest == digest {
+			return true
+		}
+	}
+
+	return false
+}
+
 // CompareDigest ...
 func CompareDigest(imageName string, repoDigests []string) (bool, error) {
-	var digest string
-
-	token, url, err := tokenAndURL(imageName)
+	digest, err := RegistryDigest(imageName)
 	if err != nil {
 		return false, err
 	}
 
-	if digest, err = GetDigest(url, token); err != nil {
-		return false, err
-	}
-
-	for _, dig := range repoDigests {
-		localDigest := strings.Split(dig, "@")[1]
-
-		if localDigest == digest {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return ContainsDigest(repoDigests, digest), nil
 }
 
 // TransformAuth from a base64 encoded json object to base64 encoded string

@@ -8,6 +8,10 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/inkly/CasaOS-AppManagement/codegen"
 	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
@@ -96,9 +100,15 @@ func CheckImageUpdates(ctx context.Context) (*codegen.ImageUpdateCheckResult, er
 	}
 	defer cli.Close()
 
+	// What the apps are RUNNING, in one call for every app at once.
+	containers, err := containersByService(ctx, cli, "")
+	if err != nil {
+		return nil, err
+	}
+
 	// Several apps can run the same image, and a registry should be asked once for
 	// it rather than once per app.
-	digests := checkImages(ctx, cli, distinctImages(composeApps))
+	digests := checkRegistries(ctx, distinctImages(composeApps))
 
 	result := &codegen.ImageUpdateCheckResult{
 		Updatable: []string{},
@@ -107,7 +117,7 @@ func CheckImageUpdates(ctx context.Context) (*codegen.ImageUpdateCheckResult, er
 
 	fresh := make(map[string]bool, len(composeApps))
 	for name, composeApp := range composeApps {
-		updatable, reason := verdict(composeApp, digests)
+		updatable, reason := verdict(ctx, cli, composeApp, containers[name], digests)
 		if reason != "" {
 			result.Unchecked[name] = reason
 			continue
@@ -157,8 +167,13 @@ func CheckImageUpdatesForApp(ctx context.Context, composeApp *ComposeApp) error 
 	}
 	defer cli.Close()
 
+	containers, err := containersByService(ctx, cli, composeApp.Name)
+	if err != nil {
+		return err
+	}
+
 	only := map[string]*ComposeApp{composeApp.Name: composeApp}
-	updatable, reason := verdict(composeApp, checkImages(ctx, cli, distinctImages(only)))
+	updatable, reason := verdict(ctx, cli, composeApp, containers[composeApp.Name], checkRegistries(ctx, distinctImages(only)))
 	if reason != "" {
 		return fmt.Errorf("%s: %s", composeApp.Name, reason)
 	}
@@ -201,13 +216,116 @@ func remember(fresh map[string]bool, installed map[string]*ComposeApp) {
 	imageUpdates.registry = next
 }
 
-// verdict folds an app's images into one answer. An app is updatable as soon as one
-// of its images has moved -- every service of a compose app is recreated together,
-// so one stale image is enough. It is unchecked only when none of its images could
-// be answered for, because a partial answer of "yes" is still an answer.
-func verdict(composeApp *ComposeApp, digests map[string]imageVerdict) (bool, string) {
+// dockerDaemon is what the update check needs of the daemon: which containers an app
+// has, and what image a reference resolves to. An interface, so the branches below
+// are testable on a machine where no daemon can start.
+type dockerDaemon interface {
+	ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error)
+	ImageInspectWithRaw(ctx context.Context, imageID string) (types.ImageInspect, []byte, error)
+}
+
+// containersByService lists the containers of one compose project -- or of every
+// project, for an empty name -- grouped by app and then by the service owning them.
+//
+// Not composeApp.Containers: compose's summaries carry the image NAME a container
+// was created with, and the image ID is the one field this check exists to read. One
+// list call also answers for every app at once, where Ps is a call per app.
+func containersByService(ctx context.Context, cli dockerDaemon, project string) (map[string]map[string][]types.Container, error) {
+	label := api.ProjectLabel
+	if project != "" {
+		label += "=" + project
+	}
+
+	// All, because a stopped app still has containers and the image they were created
+	// from is the one that comes back when it starts. Asking only running ones would
+	// send every paused app down the fallback path below.
+	containers, err := cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", label)),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	byApp := map[string]map[string][]types.Container{}
+	for _, c := range containers {
+		// a `compose run` leftover is not what the app runs
+		if c.Labels[api.OneoffLabel] == "True" {
+			continue
+		}
+
+		app, service := c.Labels[api.ProjectLabel], c.Labels[api.ServiceLabel]
+		if app == "" || service == "" {
+			continue
+		}
+
+		if byApp[app] == nil {
+			byApp[app] = map[string][]types.Container{}
+		}
+		byApp[app][service] = append(byApp[app][service], c)
+	}
+
+	return byApp, nil
+}
+
+// runningDigests answers what the registry should be compared against for one
+// service: the digests of the image each of its containers was CREATED FROM, one
+// entry per distinct image. Replicas made from the same image collapse to one entry;
+// replicas that disagree keep one each, because a stale one among them is still
+// stale.
+//
+// The second return says the answer came from the tag on disk instead. That is a
+// weaker and different question -- see the caller for why it is logged.
+func runningDigests(ctx context.Context, cli dockerDaemon, containers []types.Container, image string) ([][]string, bool) {
+	digests := [][]string{}
+	seen := map[string]struct{}{}
+
+	for _, c := range containers {
+		if _, ok := seen[c.ImageID]; c.ImageID == "" || ok {
+			continue
+		}
+		seen[c.ImageID] = struct{}{}
+
+		local, _, err := cli.ImageInspectWithRaw(ctx, c.ImageID)
+		if err != nil {
+			// re-tagged or pruned since this container started, so it cannot say what
+			// it runs and does not get a vote
+			logger.Info("cannot inspect the image a container was created from",
+				zap.String("container", c.ID), zap.String("imageID", c.ImageID), zap.Error(err))
+			continue
+		}
+
+		digests = append(digests, local.RepoDigests)
+	}
+
+	if len(digests) > 0 {
+		return digests, false
+	}
+
+	local, _, err := cli.ImageInspectWithRaw(ctx, image)
+	if err != nil {
+		logger.Info("cannot inspect image, skipping", zap.String("image", image), zap.Error(err))
+		return nil, true
+	}
+
+	return [][]string{local.RepoDigests}, true
+}
+
+// verdict folds an app's services into one answer, comparing what each registry
+// publishes now against the image that service's containers were created from. An
+// app is updatable as soon as one container is not on the published image -- every
+// service of a compose app is recreated together, so one stale container is enough.
+// It is unchecked only when nothing could be answered for, because a partial answer
+// of "yes" is still an answer.
+func verdict(ctx context.Context, cli dockerDaemon, composeApp *ComposeApp, containers map[string][]types.Container, published map[string]registryDigest) (bool, string) {
 	var firstReason string
 	answered := false
+
+	reason := func(image, why string) {
+		if firstReason == "" {
+			firstReason = fmt.Sprintf("%s: %s", image, why)
+		}
+	}
 
 	for _, name := range sortedServiceNames(composeApp.Services) {
 		image := composeApp.Services[name].Image
@@ -215,17 +333,44 @@ func verdict(composeApp *ComposeApp, digests map[string]imageVerdict) (bool, str
 			continue
 		}
 
-		v, ok := digests[image]
-		if !ok || v.reason != "" {
-			if firstReason == "" {
-				firstReason = fmt.Sprintf("%s: %s", image, v.reason)
-			}
+		registry, ok := published[image]
+		if !ok {
+			reason(image, "nothing asked its registry")
+			continue
+		}
+		if registry.reason != "" {
+			reason(image, registry.reason)
 			continue
 		}
 
-		answered = true
-		if v.updatable {
-			return true, ""
+		digests, fromDisk := runningDigests(ctx, cli, containers[name], image)
+		if len(digests) == 0 {
+			reason(image, "not pulled on this host")
+			continue
+		}
+
+		if fromDisk {
+			// Loud on purpose. This answers "is the copy on my disk the published
+			// one", which is NOT the question: a pull that never got recreated -- a
+			// failed update, or another tool on the host -- matches on disk while the
+			// container keeps running the old image. It is the right answer only while
+			// there is no container to ask, so it must not quietly become the usual path.
+			logger.Warn("no container to read an image from, comparing the tag on disk instead",
+				zap.String("app", composeApp.Name), zap.String("service", name), zap.String("image", image))
+		}
+
+		for _, repoDigests := range digests {
+			if len(repoDigests) == 0 {
+				// built here, loaded from a tar, or pulled before the daemon recorded
+				// digests: nothing published to compare against
+				reason(image, "built locally, so there is no published digest to compare")
+				continue
+			}
+
+			answered = true
+			if !docker.ContainsDigest(repoDigests, registry.digest) {
+				return true, ""
+			}
 		}
 	}
 
@@ -239,9 +384,13 @@ func verdict(composeApp *ComposeApp, digests map[string]imageVerdict) (bool, str
 	return false, ""
 }
 
-type imageVerdict struct {
-	updatable bool
-	reason    string
+// registryDigest is what one registry answered for one image, or why it could not be
+// asked. A reason rather than a guess: an unreachable registry is not evidence that
+// nothing has changed, and reporting that as up to date is how a host silently stops
+// being told about updates.
+type registryDigest struct {
+	digest string
+	reason string
 }
 
 func distinctImages(composeApps map[string]*ComposeApp) []string {
@@ -266,8 +415,9 @@ func distinctImages(composeApps map[string]*ComposeApp) []string {
 	return images
 }
 
-func checkImages(ctx context.Context, cli client.APIClient, images []string) map[string]imageVerdict {
-	verdicts := make(map[string]imageVerdict, len(images))
+// checkRegistries asks each registry what its tag points at now.
+func checkRegistries(ctx context.Context, images []string) map[string]registryDigest {
+	answers := make(map[string]registryDigest, len(images))
 
 	var mu sync.Mutex
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -276,11 +426,20 @@ func checkImages(ctx context.Context, cli client.APIClient, images []string) map
 	for _, image := range images {
 		image := image
 		group.Go(func() error {
-			updatable, reason := checkImage(groupCtx, cli, image)
+			answer := registryDigest{}
+
+			if err := groupCtx.Err(); err != nil {
+				answer.reason = "the check was cancelled before its registry was asked"
+			} else if digest, err := docker.RegistryDigest(image); err != nil {
+				logger.Info("cannot reach registry for image, skipping", zap.String("image", image), zap.Error(err))
+				answer.reason = "its registry could not be reached"
+			} else {
+				answer.digest = digest
+			}
 
 			mu.Lock()
 			defer mu.Unlock()
-			verdicts[image] = imageVerdict{updatable: updatable, reason: reason}
+			answers[image] = answer
 
 			// One unreachable registry must not abandon the other images, so a
 			// failure is recorded rather than returned.
@@ -289,33 +448,7 @@ func checkImages(ctx context.Context, cli client.APIClient, images []string) map
 	}
 	_ = group.Wait()
 
-	return verdicts
-}
-
-// checkImage compares one image against its registry. It answers with a reason
-// rather than a guess whenever it cannot tell: an unreachable registry is not
-// evidence that nothing has changed, and reporting that as up to date is how a host
-// silently stops being told about updates.
-func checkImage(ctx context.Context, cli client.APIClient, image string) (bool, string) {
-	local, _, err := cli.ImageInspectWithRaw(ctx, image)
-	if err != nil {
-		logger.Info("cannot inspect image, skipping", zap.String("image", image), zap.Error(err))
-		return false, "not pulled on this host"
-	}
-
-	if len(local.RepoDigests) == 0 {
-		// Built here, loaded from a tar, or pulled before the daemon recorded
-		// digests. There is nothing to compare a registry answer against.
-		return false, "built locally, so there is no published digest to compare"
-	}
-
-	match, err := docker.CompareDigest(image, local.RepoDigests)
-	if err != nil {
-		logger.Info("cannot reach registry for image, skipping", zap.String("image", image), zap.Error(err))
-		return false, "its registry could not be reached"
-	}
-
-	return !match, ""
+	return answers
 }
 
 // Where the answers live between runs. The dashboard badges an app from this cache,
