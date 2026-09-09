@@ -201,20 +201,7 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 		return err
 	}
 
-	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
-		return ErrStoreInfoNotFound
-	}
-
-	storeComposeApp, err := MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID)
-	if err != nil {
-		return err
-	}
-
-	if storeComposeApp == nil {
-		return ErrNotFoundInAppStore
-	}
-
-	newComposeYAML, err := a.updatedComposeYAML(storeComposeApp)
+	newComposeYAML, err := a.composeYAMLForUpdate(storeInfo)
 	if err != nil {
 		return err
 	}
@@ -245,6 +232,54 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 	}(ctx)
 
 	return nil
+}
+
+// composeYAMLForUpdate is the docker-compose.yml an update writes, which depends on
+// where the app came from.
+//
+// An app installed from a store takes that store's images: the catalogue is what
+// says which version the app should be on. An app that came from nowhere -- an
+// imported compose file, one written by hand -- has no catalogue to consult, so it
+// keeps the images it already names and the update is the pull that follows: the
+// tags stay the same, the digests they resolve to need not.
+func (a *ComposeApp) composeYAMLForUpdate(storeInfo *codegen.ComposeAppStoreInfo) ([]byte, error) {
+	if storeInfo != nil && storeInfo.IsUncontrolled != nil && *storeInfo.IsUncontrolled {
+		return a.refreshedComposeYAML()
+	}
+
+	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
+		return nil, ErrStoreInfoNotFound
+	}
+
+	storeComposeApp, err := MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID)
+	if err != nil {
+		return nil, err
+	}
+
+	if storeComposeApp == nil {
+		return nil, ErrNotFoundInAppStore
+	}
+
+	return a.updatedComposeYAML(storeComposeApp)
+}
+
+// refreshedComposeYAML is the file on disk, unchanged. It is built from the editing
+// load rather than marshalled from a, for the reason spelled out on
+// updatedComposeYAML: a is the runtime project, with `.env` already resolved, and
+// marshalling it bakes every secret, published port and host path into the compose
+// file and leaves `.env` dead.
+func (a *ComposeApp) refreshedComposeYAML() ([]byte, error) {
+	keys, err := a.EnvKeys()
+	if err != nil {
+		return nil, err
+	}
+
+	local, err := LoadComposeAppForEditing(a.Name, a.ComposeFiles[0], keys)
+	if err != nil {
+		return nil, err
+	}
+
+	return yaml.Marshal(local)
 }
 
 // updatedComposeYAML is the docker-compose.yml an update writes: the file on disk with the image of

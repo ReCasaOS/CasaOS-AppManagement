@@ -91,6 +91,33 @@ func CheckImageUpdates(ctx context.Context) (*codegen.ImageUpdateCheckResult, er
 	return result, nil
 }
 
+// CheckImageUpdatesForApp answers for one app and records it, leaving every other
+// app's answer alone.
+//
+// This is what makes the per-app button honest. It is called `Check then update`,
+// and for an app that came from no store there is nothing else to check: without
+// this it would answer from whatever the last sweep happened to leave in the cache,
+// or from nothing at all if no sweep has run.
+func CheckImageUpdatesForApp(ctx context.Context, composeApp *ComposeApp) error {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
+	only := map[string]*ComposeApp{composeApp.Name: composeApp}
+	updatable, reason := verdict(composeApp, checkImages(ctx, cli, distinctImages(only)))
+	if reason != "" {
+		return fmt.Errorf("%s: %s", composeApp.Name, reason)
+	}
+
+	imageUpdates.Lock()
+	defer imageUpdates.Unlock()
+	imageUpdates.byApp[composeApp.Name] = updatable
+
+	return nil
+}
+
 // remember replaces the cache with this pass's answers, keeping the previous answer
 // for an app this pass could not check, and dropping apps that are gone.
 func remember(fresh map[string]bool, installed map[string]*ComposeApp) {

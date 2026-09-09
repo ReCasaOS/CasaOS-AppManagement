@@ -491,6 +491,14 @@ func (a *AppStoreManagement) WorkDir() (string, error) {
 }
 
 func (a *AppStoreManagement) IsUpdateAvailable(composeApp *ComposeApp) bool {
+	// The dashboard badges an app from what the last image check found, so the button
+	// has to agree with the badge. This is also the only answer there is for an app
+	// that came from no store, and it catches a store app whose tag has not moved but
+	// whose image has been republished under it.
+	if updatable := ImageUpdateAvailable(composeApp.Name); updatable != nil && *updatable {
+		return true
+	}
+
 	storeID := composeApp.Name
 	if value, err := a.isAppUpgradable.Get(storeID); err == nil {
 		switch value := value.(type) {

@@ -514,7 +514,14 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 	// the check entirely. That is what made the dashboard's `Check then update`
 	// button never check: it applied the store's compose whatever version it held.
 	if params.Force == nil || !*params.Force {
-		// check if updateAvailable
+		// The button is called `Check then update`, so it checks: ask this app's
+		// registries now rather than answering from whatever the last sweep left in
+		// the cache, or from nothing at all when no sweep has run. A check that fails
+		// is not fatal -- the store comparison below still has something to say.
+		if err := service.CheckImageUpdatesForApp(ctx.Request().Context(), composeApp); err != nil {
+			logger.Info("could not check images before updating", zap.Error(err), zap.String("appID", id))
+		}
+
 		if !service.MyService.AppStoreManagement().IsUpdateAvailable(composeApp) {
 			message := fmt.Sprintf("compose app `%s` is up to date", id)
 			return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateOK{Message: &message})
