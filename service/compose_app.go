@@ -934,13 +934,17 @@ func (a *ComposeApp) Logs(ctx context.Context, lines int) ([]byte, error) {
 
 	var buf bytes.Buffer
 
+	// Timestamps come from the daemon (per line, when it was actually written) rather
+	// than from the consumer's own timestamp flag, which stamps time.Now() at read time
+	// and would give every line of a tail the same value.
 	consumer := formatter.NewLogConsumer(ctx, &buf, &buf, false, true, false)
 
 	if err := service.Logs(ctx, a.Name, consumer, api.LogOptions{
-		Project:  (*codegen.ComposeApp)(a),
-		Services: sortedServiceNames(a.Services),
-		Follow:   false,
-		Tail:     lo.If(lines < 0, "all").Else(strconv.Itoa(lines)),
+		Project:    (*codegen.ComposeApp)(a),
+		Services:   sortedServiceNames(a.Services),
+		Follow:     false,
+		Timestamps: true,
+		Tail:       lo.If(lines < 0, "all").Else(strconv.Itoa(lines)),
 	}); err != nil {
 		return nil, err
 	}
