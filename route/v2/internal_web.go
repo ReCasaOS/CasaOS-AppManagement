@@ -133,6 +133,14 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 		}),
 		IsUncontrolled: utils.Ptr(false),
 
+		// What an app is DOING is not part of its store info, and a stack written by
+		// hand has no store info at all. Copying this inside the block below meant such
+		// an app reached the dashboard with no status, which it reads as an app that is
+		// not running and draws greyed out -- on a stack whose containers are all up.
+		// The caller has already worked the status out from every container of every
+		// service; it only has to survive the trip.
+		Status: composeAppWithStoreInfo.Status,
+
 		// Read from the cache a check pass filled, so this stays a map lookup. Nil
 		// until something has checked, which the dashboard renders as no badge
 		// rather than as an app known to be current.
@@ -148,12 +156,14 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 		item.Index = &composeAppStoreInfo.Index
 		item.Port = &composeAppStoreInfo.PortMap
 		item.Scheme = composeAppStoreInfo.Scheme
-		item.Status = composeAppWithStoreInfo.Status
 		item.StoreAppID = composeAppStoreInfo.StoreAppID
 		item.Title = &composeAppStoreInfo.Title
 		item.IsUncontrolled = composeAppStoreInfo.IsUncontrolled
 
-		mainApp := composeApp.App(*composeAppStoreInfo.Main)
+		// not `*composeAppStoreInfo.Main`: store info over an empty service list leaves
+		// Main nil, and that dereference has the same shape as the one that took the
+		// whole service down on a compose file with no `x-casaos`
+		mainApp := composeApp.App(composeApp.MainServiceName())
 		if mainApp != nil {
 			item.Image = &mainApp.Image // Hengxin needs this image property for some reason...
 		}

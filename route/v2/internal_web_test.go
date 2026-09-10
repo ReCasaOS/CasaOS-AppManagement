@@ -87,3 +87,52 @@ func TestWebAppGridItemAdapterContainerReportsItsComposeProject(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, adopted.ComposeProject == nil)
 }
+
+// The dashboard greys an app out from its status, and a stack written by hand has no
+// `x-casaos` -- so no store info. The status was copied into the grid item inside the
+// `store info is present` branch, which meant those apps arrived with none, and the
+// dashboard drew the whole card grey while every container in the stack was up. The
+// status is worked out from the containers, not from the catalogue; it does not belong
+// behind that guard.
+func TestWebAppGridItemCarriesStatusWithoutStoreInfo(t *testing.T) {
+	storeRoot := t.TempDir()
+
+	appsPath := filepath.Join(storeRoot, common.AppsDirectoryName)
+	assert.NilError(t, file.MkDir(appsPath))
+	assert.NilError(t, file.MkDir(filepath.Join(appsPath, "gluetun-stack")))
+
+	composeFilePath := filepath.Join(appsPath, "gluetun-stack", common.ComposeYAMLFileName)
+	assert.NilError(t, file.WriteToFullPath([]byte(common.SampleVanillaComposeAppYAML), composeFilePath, 0o644))
+
+	composeApp, err := service.LoadComposeAppFromConfigFile("gluetun-stack", composeFilePath)
+	assert.NilError(t, err)
+
+	// the whole point of the fixture: no `x-casaos`, so no store info
+	storeInfo, err := composeApp.StoreInfo(true)
+	assert.Assert(t, storeInfo == nil)
+	assert.ErrorIs(t, err, service.ErrComposeExtensionNameXCasaOSNotFound)
+
+	gridItem, err := v2.WebAppGridItemAdapterV2(&codegen.ComposeAppWithStoreInfo{
+		Compose:   (*codegen.ComposeApp)(composeApp),
+		StoreInfo: nil,
+		Status:    utils.Ptr("running"),
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, gridItem.Status != nil, "an app with no store info still has a status")
+	assert.Equal(t, *gridItem.Status, "running")
+
+	// and the rest of the item is the fallback, not a crash
+	assert.Equal(t, *gridItem.Name, "gluetun-stack")
+	assert.DeepEqual(t, *gridItem.Title, map[string]string{common.DefaultLanguage: "gluetun-stack"})
+	assert.Assert(t, gridItem.Icon == nil)
+
+	// a stopped stack still says so rather than falling back to a default
+	stopped, err := v2.WebAppGridItemAdapterV2(&codegen.ComposeAppWithStoreInfo{
+		Compose:   (*codegen.ComposeApp)(composeApp),
+		StoreInfo: nil,
+		Status:    utils.Ptr("exited"),
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, *stopped.Status, "exited")
+}
