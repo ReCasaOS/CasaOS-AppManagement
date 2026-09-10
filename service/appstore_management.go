@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -529,15 +530,22 @@ func (a *AppStoreManagement) UpdateAvailability(composeApp *ComposeApp) (bool, s
 }
 
 func (a *AppStoreManagement) isUpdateAvailable(composeApp *ComposeApp) (bool, string, error) {
-	// handle no tag logic and for easy to test
+	// A stack somebody wrote by hand carries no `x-casaos`, and one adopted from
+	// elsewhere may carry one that names no store app. Neither is a failure to answer:
+	// both mean there is no catalogue entry to compare against, which is the same
+	// answer as a store app id the catalogue no longer holds, handled below.
+	//
+	// Giving up here instead was how an app could wear the update badge and be told
+	// `is up to date` by the button in the same breath: the badge comes from the image
+	// check, and this never reached it.
 	storeInfo, err := composeApp.StoreInfo(false)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrComposeExtensionNameXCasaOSNotFound) {
 		logger.Error("failed to get store info of compose app, thus no update available", zap.Error(err))
 		return false, "", nil
 	}
 
 	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
-		return false, "", err
+		return imageUpdatable(composeApp.Name), "", nil
 	}
 
 	storeComposeApp, err := a.ComposeApp(*storeInfo.StoreAppID)

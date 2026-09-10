@@ -219,19 +219,29 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 		logger.Info("warning: multiple compose files found, only the first one will be used", zap.String("compose files", strings.Join(a.ComposeFiles, ",")))
 	}
 
+	// An app whose compose file carries no `x-casaos` at all, or one whose extension
+	// names no store app, has no catalogue entry -- and that is an answer, not a
+	// failure. It is the answer composeYAMLForUpdate is already written for: nil means
+	// there is nothing to update this app from but the tags it already names, so the
+	// update becomes a re-pull of those.
+	//
+	// Refusing here is what made `Check then update` fail on a stack somebody wrote by
+	// hand -- with ``extension `x-casaos` not found``, or `store info not found` -- on
+	// an app whose images really had moved and which the check had just said so about.
+	// The grid offers that button on every compose app, so the refusal was reachable
+	// from the menu of any of them.
 	storeInfo, err := a.StoreInfo(true)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrComposeExtensionNameXCasaOSNotFound) {
 		return err
-	}
-
-	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
-		return ErrStoreInfoNotFound
 	}
 
 	// nil means no catalogue entry, which is an answer rather than a failure
-	storeComposeApp, err := MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID)
-	if err != nil {
-		return err
+	var storeComposeApp *ComposeApp
+
+	if storeInfo != nil && storeInfo.StoreAppID != nil && *storeInfo.StoreAppID != "" {
+		if storeComposeApp, err = MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID); err != nil {
+			return err
+		}
 	}
 
 	newComposeYAML, err := a.composeYAMLForUpdate(storeComposeApp)
@@ -429,17 +439,17 @@ func sortedServiceNames(services types.Services) []string {
 	return names
 }
 
+// MainService is the service MainServiceName names. Reading it out of StoreInfo
+// instead meant a stack with no `x-casaos` had no main service at all, and every
+// caller of this and of MainTag failed on it -- including the check that runs when
+// the owner saves the settings of such an app.
 func (a *ComposeApp) MainService() (*App, error) {
-	storeInfo, err := a.StoreInfo(false)
-	if err != nil {
-		return nil, err
-	}
-
-	if storeInfo.Main == nil || *storeInfo.Main == "" {
+	name := a.MainServiceName()
+	if name == "" {
 		return nil, ErrMainServiceNotSpecified
 	}
 
-	return a.App(*storeInfo.Main), nil
+	return a.App(name), nil
 }
 
 func (a *ComposeApp) MainTag() (string, error) {
