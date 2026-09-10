@@ -341,7 +341,7 @@ changelog:
       - "^test:"
 release:
   github:
-    owner: inkly
+    owner: ReCasaOS
     name: CasaOS-AppManagement
   draft: false
   prerelease: auto

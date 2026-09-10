@@ -1,6 +1,6 @@
 # CasaOS-AppManagement
 
-> **Not affiliated with IceWhale.** An independent, community-maintained distribution of CasaOS, not produced or endorsed by Shanghai IceWhale Technology Limited. CASAOS is their trademark, used here only to say what this is a release of. The original project is [IceWhaleTech/CasaOS](https://github.com/IceWhaleTech/CasaOS); report problems with this distribution at [inkly/CasaOS/issues](https://github.com/inkly/CasaOS/issues).
+> **Not affiliated with IceWhale.** An independent, community-maintained distribution of CasaOS, not produced or endorsed by Shanghai IceWhale Technology Limited. CASAOS is their trademark, used here only to say what this is a release of. The original project is [IceWhaleTech/CasaOS](https://github.com/IceWhaleTech/CasaOS); report problems with this distribution at [inkly/CasaOS/issues](https://github.com/ReCasaOS/CasaOS/issues).
 
 The service that installs and runs apps on a CasaOS host. It is the Docker Compose layer of the system: it keeps the app store catalogues, turns a store entry into a `docker-compose.yml`, runs Compose against the local Docker daemon, and reports container status, logs and available updates back to the dashboard.
 
@@ -36,10 +36,10 @@ There is no database. An installed app is its compose file plus whatever the Doc
 Components are not installed on their own. The distribution is installed and upgraded with one command:
 
 ```sh
-curl -fsSL https://github.com/inkly/CasaOS-Install/releases/latest/download/install.sh | sudo bash
+curl -fsSL https://github.com/ReCasaOS/CasaOS-Install/releases/latest/download/install.sh | sudo bash
 ```
 
-What a release contains, and how it is built, is described in [CasaOS-Install](https://github.com/inkly/CasaOS-Install#readme).
+What a release contains, and how it is built, is described in [CasaOS-Install](https://github.com/ReCasaOS/CasaOS-Install#readme).
 
 ## What this fork changed
 
