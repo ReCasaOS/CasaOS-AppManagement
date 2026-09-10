@@ -1,5 +1,5 @@
 {
-  "name": "@icewhale/casaos-appmanagement-openapi",
+  "name": "casaos-appmanagement-openapi",
   "version": "0.0.1",
   "scripts": {
     "clean": "rm -rf generate",
@@ -9,7 +9,7 @@
     "generate:ts": "npx openapi-typescript-codegen --input ./api/app_management/openapi.yaml --output ./generate",
     "start": "yarn generate:local && yarn build"
   },
-  "homepage": "https://github.com/IceWhaleTech/CasaOS-AppManagement#readme",
+  "homepage": "https://github.com/ReCasaOS/CasaOS-AppManagement#readme",
   "description": "Casaos-AppManagement Typescript+Axios SDK",
   "keywords": [
     "CasaOS-AppManagement",
