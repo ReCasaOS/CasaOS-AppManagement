@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/service"
-	"github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/CasaOS-AppManagement/service"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"gotest.tools/v3/assert"
 )
 

@@ -1,7 +1,7 @@
 package v2
 
 import (
-	"github.com/inkly/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/labstack/echo/v4"
 )
 

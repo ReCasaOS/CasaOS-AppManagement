@@ -3,9 +3,9 @@ package v2
 import (
 	"net/http"
 
-	"github.com/inkly/CasaOS-AppManagement/codegen"
-	"github.com/inkly/CasaOS-AppManagement/service"
-	"github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/service"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )

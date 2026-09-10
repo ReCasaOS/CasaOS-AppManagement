@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
 )
 
 // shortestUpWaitTimeout is the shortest deadline the config accepts: below a second is

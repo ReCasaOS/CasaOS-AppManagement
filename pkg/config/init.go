@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-AppManagement/model"
-	"github.com/inkly/CasaOS-Common/utils/constants"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/model"
+	"github.com/ReCasaOS/CasaOS-Common/utils/constants"
 	"gopkg.in/ini.v1"
 )
 

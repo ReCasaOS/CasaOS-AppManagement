@@ -3,7 +3,7 @@ package docker_test
 import (
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/docker"
 	"gotest.tools/v3/assert"
 )
 

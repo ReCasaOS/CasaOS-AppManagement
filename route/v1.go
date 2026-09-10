@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	v1 "github.com/inkly/CasaOS-AppManagement/route/v1"
-	"github.com/inkly/CasaOS-Common/external"
-	"github.com/inkly/CasaOS-Common/utils/jwt"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	v1 "github.com/ReCasaOS/CasaOS-AppManagement/route/v1"
+	"github.com/ReCasaOS/CasaOS-Common/external"
+	"github.com/ReCasaOS/CasaOS-Common/utils/jwt"
 	"github.com/labstack/echo/v4"
 	echo_middleware "github.com/labstack/echo/v4/middleware"
 )

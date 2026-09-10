@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"gotest.tools/v3/assert"
 )
 

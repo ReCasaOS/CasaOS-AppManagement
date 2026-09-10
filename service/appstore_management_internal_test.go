@@ -3,12 +3,12 @@ package service
 import (
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/codegen"
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	pkg_utils "github.com/inkly/CasaOS-AppManagement/pkg/utils"
-	"github.com/inkly/CasaOS-Common/utils"
-	"github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	pkg_utils "github.com/ReCasaOS/CasaOS-AppManagement/pkg/utils"
+	"github.com/ReCasaOS/CasaOS-Common/utils"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"gotest.tools/v3/assert"
 )
 

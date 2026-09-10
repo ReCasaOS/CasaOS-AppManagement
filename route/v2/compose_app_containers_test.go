@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/samber/lo"
 	"gotest.tools/v3/assert"
 )

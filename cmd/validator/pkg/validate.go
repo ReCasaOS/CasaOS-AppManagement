@@ -1,10 +1,10 @@
 package pkg
 
 import (
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/service"
 	"github.com/compose-spec/compose-go/v2/loader"
-	"github.com/inkly/CasaOS-AppManagement/codegen"
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-AppManagement/service"
 )
 
 func VaildDockerCompose(yaml []byte) (err error) {

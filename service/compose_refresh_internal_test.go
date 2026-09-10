@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"gotest.tools/v3/assert"
 )
 

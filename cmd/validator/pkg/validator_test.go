@@ -3,8 +3,8 @@ package pkg_test
 import (
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/cmd/validator/pkg"
-	utils_logger "github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/CasaOS-AppManagement/cmd/validator/pkg"
+	utils_logger "github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/stretchr/testify/assert"
 )
 

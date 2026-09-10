@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	"github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 )
 
 func setRuntimePathForTest(t *testing.T) {

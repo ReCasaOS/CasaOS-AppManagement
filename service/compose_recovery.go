@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-Common/utils/file"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/docker/compose/v2/pkg/api"
-	"github.com/inkly/CasaOS-AppManagement/codegen"
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	"github.com/inkly/CasaOS-Common/utils/file"
-	"github.com/inkly/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
 )
 

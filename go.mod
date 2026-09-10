@@ -1,4 +1,4 @@
-module github.com/inkly/CasaOS-AppManagement
+module github.com/ReCasaOS/CasaOS-AppManagement
 
 go 1.21
 
@@ -236,12 +236,12 @@ require (
 )
 
 require (
+	github.com/ReCasaOS/CasaOS-Common v0.4.23
 	github.com/compose-spec/compose-go/v2 v2.1.0
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/docker/cli v26.1.0+incompatible
 	github.com/docker/docker v26.1.0+incompatible
 	github.com/gorilla/websocket v1.5.0
-	github.com/inkly/CasaOS-Common v0.4.22
 	github.com/json-iterator/go v1.1.12
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

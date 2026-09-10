@@ -1,8 +1,8 @@
 package common
 
 import (
-	"github.com/inkly/CasaOS-AppManagement/codegen/message_bus"
-	"github.com/inkly/CasaOS-Common/utils"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen/message_bus"
+	"github.com/ReCasaOS/CasaOS-Common/utils"
 )
 
 // common properties

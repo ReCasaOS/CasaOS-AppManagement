@@ -3,9 +3,9 @@ package service
 import (
 	"testing"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-Common/utils/logger"
 )
 
 // A stack somebody wrote by hand carries no `x-casaos`, and one adopted from elsewhere

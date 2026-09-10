@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/docker"
 )
 
 func TestGetDir(t *testing.T) {

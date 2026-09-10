@@ -9,14 +9,14 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/docker"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/docker/compose/v2/pkg/api"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
-	"github.com/inkly/CasaOS-AppManagement/codegen"
-	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
-	"github.com/inkly/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )

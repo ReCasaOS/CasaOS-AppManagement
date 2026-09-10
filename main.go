@@ -1,5 +1,5 @@
 //go:generate bash -c "mkdir -p codegen && go run github.com/deepmap/oapi-codegen/cmd/oapi-codegen@v1.12.4 -generate types,server,spec -package codegen api/app_management/openapi.yaml > codegen/app_management_api.go"
-//go:generate bash -c "mkdir -p codegen/message_bus && go run github.com/deepmap/oapi-codegen/cmd/oapi-codegen@v1.12.4 -generate types,client -package message_bus https://raw.githubusercontent.com/inkly/CasaOS-MessageBus/v0.4.19/api/message_bus/openapi.yaml > codegen/message_bus/api.go"
+//go:generate bash -c "mkdir -p codegen/message_bus && go run github.com/deepmap/oapi-codegen/cmd/oapi-codegen@v1.12.4 -generate types,client -package message_bus https://raw.githubusercontent.com/ReCasaOS/CasaOS-MessageBus/v0.4.19/api/message_bus/openapi.yaml > codegen/message_bus/api.go"
 
 package main
 
@@ -14,18 +14,18 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-AppManagement/route"
+	"github.com/ReCasaOS/CasaOS-AppManagement/service"
+	"github.com/ReCasaOS/CasaOS-Common/model"
+	"github.com/ReCasaOS/CasaOS-Common/utils/file"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/coreos/go-systemd/daemon"
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	"github.com/inkly/CasaOS-AppManagement/route"
-	"github.com/inkly/CasaOS-AppManagement/service"
-	"github.com/inkly/CasaOS-Common/model"
-	"github.com/inkly/CasaOS-Common/utils/file"
-	"github.com/inkly/CasaOS-Common/utils/logger"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 
-	util_http "github.com/inkly/CasaOS-Common/utils/http"
+	util_http "github.com/ReCasaOS/CasaOS-Common/utils/http"
 )
 
 var (

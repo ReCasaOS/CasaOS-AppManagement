@@ -3,7 +3,7 @@ package v2
 import (
 	"testing"
 
-	"github.com/inkly/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"gotest.tools/v3/assert"
 )
 

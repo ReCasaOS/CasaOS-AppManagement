@@ -3,7 +3,7 @@ package service
 import (
 	"fmt"
 
-	"github.com/inkly/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 )
 
 var (

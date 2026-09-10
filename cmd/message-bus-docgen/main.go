@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/inkly/CasaOS-AppManagement/codegen/message_bus"
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-Common/external"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen/message_bus"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-Common/external"
 	"github.com/samber/lo"
 )
 

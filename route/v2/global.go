@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/inkly/CasaOS-AppManagement/codegen"
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	"github.com/inkly/CasaOS-AppManagement/service"
-	"github.com/inkly/CasaOS-Common/utils"
-	"github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-AppManagement/service"
+	"github.com/ReCasaOS/CasaOS-Common/utils"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
 
 	"github.com/labstack/echo/v4"

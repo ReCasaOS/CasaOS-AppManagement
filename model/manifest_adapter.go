@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/inkly/CasaOS-AppManagement/codegen"
-	"github.com/inkly/CasaOS-AppManagement/common"
 	"github.com/samber/lo"
 )
 

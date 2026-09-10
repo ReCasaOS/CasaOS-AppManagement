@@ -6,11 +6,11 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/docker"
 	"github.com/docker/distribution/manifest/manifestlist"
 	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
-	"github.com/inkly/CasaOS-AppManagement/pkg/docker"
 	"github.com/mitchellh/mapstructure"
 	"github.com/samber/lo"
 	"go.uber.org/goleak"

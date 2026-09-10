@@ -8,11 +8,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	"github.com/inkly/CasaOS-Common/utils/file"
-	"github.com/inkly/CasaOS-Common/utils/logger"
-	timeutils "github.com/inkly/CasaOS-Common/utils/time"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-Common/utils/file"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	timeutils "github.com/ReCasaOS/CasaOS-Common/utils/time"
 	"gopkg.in/yaml.v3"
 
 	"github.com/docker/cli/cli/command"

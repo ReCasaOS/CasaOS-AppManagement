@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/inkly/CasaOS-AppManagement/model"
+	"github.com/ReCasaOS/CasaOS-AppManagement/model"
 	"gopkg.in/yaml.v3"
 )
 

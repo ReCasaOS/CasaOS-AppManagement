@@ -14,11 +14,11 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/inkly/CasaOS-AppManagement/codegen/message_bus"
-	"github.com/inkly/CasaOS-AppManagement/common"
-	"github.com/inkly/CasaOS-AppManagement/pkg/config"
-	"github.com/inkly/CasaOS-Common/external"
-	"github.com/inkly/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen/message_bus"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-Common/external"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	jsoniter "github.com/json-iterator/go"
 	"go.uber.org/zap"
 )
