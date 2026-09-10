@@ -1,5 +1,7 @@
 # CasaOS-AppManagement
 
+> **Not affiliated with IceWhale.** An independent, community-maintained distribution of CasaOS, not produced or endorsed by Shanghai IceWhale Technology Limited. CASAOS is their trademark, used here only to say what this is a release of. The original project is [IceWhaleTech/CasaOS](https://github.com/IceWhaleTech/CasaOS); report problems with this distribution at [inkly/CasaOS/issues](https://github.com/inkly/CasaOS/issues).
+
 The service that installs and runs apps on a CasaOS host. It is the Docker Compose layer of the system: it keeps the app store catalogues, turns a store entry into a `docker-compose.yml`, runs Compose against the local Docker daemon, and reports container status, logs and available updates back to the dashboard.
 
 This repository is part of the **inkly distribution of CasaOS**, a maintained release of the project after upstream [IceWhaleTech](https://github.com/IceWhaleTech/CasaOS-AppManagement) stopped shipping in 2025. It descends from [alvins82's fork](https://github.com/alvins82/CasaOS-AppManagement), whose Docker SDK bump is what keeps CasaOS installable on a current daemon.
