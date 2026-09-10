@@ -27,11 +27,44 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
 
+	// Read once, for two readers: the port an app with no `x-casaos` can be opened on,
+	// and the list below that tells a loose container from one a compose app owns.
+	containersByApp := map[string]map[string][]codegen.ContainerSummary{}
+	composeAppContainers := []codegen.ContainerSummary{}
+	for id, app := range composeAppsWithStoreInfo {
+		composeApp := (service.ComposeApp)(*app.Compose)
+		containerLists, err := composeApp.Containers(ctx.Request().Context())
+		if err != nil {
+			// One app Docker cannot answer about is not the whole grid. This used to
+			// `return nil`, which in an echo handler is a 200 with no body at all --
+			// so a single unanswerable app emptied the dashboard rather than losing
+			// itself from it.
+			logger.Error("failed to get containers for compose app", zap.Error(err), zap.String("app", composeApp.Name))
+			continue
+		}
+
+		containersByApp[id] = containerLists
+		for _, containcontainerList := range containerLists {
+			composeAppContainers = append(composeAppContainers, containcontainerList...)
+		}
+	}
+
 	v2AppGridItems := lo.FilterMap(lo.Values(composeAppsWithStoreInfo), func(app codegen.ComposeAppWithStoreInfo, i int) (codegen.WebAppGridItem, bool) {
 		item, err := WebAppGridItemAdapterV2(&app)
 		if err != nil {
 			logger.Error("failed to adapt web app grid item", zap.Error(err), zap.String("app", app.Compose.Name))
 			return codegen.WebAppGridItem{}, false
+		}
+
+		// A stack written by hand declares no web interface, so the card had nothing to
+		// open. Docker knows which ports it publishes, and for most such stacks that is
+		// the whole answer. Settings > Web UI still wins wherever it is filled in --
+		// this only speaks when nothing else has.
+		if item.Port == nil || *item.Port == "" {
+			composeApp := (*service.ComposeApp)(app.Compose)
+			if port := inferWebUIPort(containersByApp[composeApp.Name], composeApp.MainServiceName()); port != "" {
+				item.Port = &port
+			}
 		}
 
 		return *item, true
@@ -48,21 +81,6 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 		}
 		return *item
 	})
-
-	// containers from compose apps
-	composeAppContainers := []codegen.ContainerSummary{}
-	for _, app := range composeAppsWithStoreInfo {
-		composeApp := (service.ComposeApp)(*app.Compose)
-		containerLists, err := composeApp.Containers(ctx.Request().Context())
-		if err != nil {
-			logger.Error("failed to get containers for compose app", zap.Error(err), zap.String("app", composeApp.Name))
-			return nil
-		}
-
-		for _, containcontainerList := range containerLists {
-			composeAppContainers = append(composeAppContainers, containcontainerList...)
-		}
-	}
 
 	containerAppGridItems := lo.FilterMap(*containers, func(app model.MyAppList, i int) (codegen.WebAppGridItem, bool) {
 		if lo.ContainsBy(composeAppContainers, func(container codegen.ContainerSummary) bool { return container.ID == app.ID }) {
