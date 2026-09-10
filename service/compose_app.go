@@ -593,6 +593,10 @@ func waitForApp(ctx context.Context, name string, up func(context.Context) error
 // unhealthy report is a failed apply, and the caller must put the previous definition
 // back.
 //
+// Only ever asked after compose has created the containers from the definition in
+// question, so what is running IS that definition. Asked any earlier it would answer
+// about the previous one, which is still up until convergence replaces it.
+//
 // Not being able to ask is not a yes. An apply nobody can judge keeps the older
 // behaviour, which is to roll back.
 func (a *ComposeApp) everyContainerSettled(ctx context.Context) bool {
@@ -639,20 +643,42 @@ func (a *ComposeApp) Up(ctx context.Context, service api.Service) error {
 // replaced may have declared a service the restored one does not, and a container left
 // over from it would keep running under no compose file at all. It stays off elsewhere,
 // where an unknown container of this project is an adopted one, not a leftover.
-func (a *ComposeApp) up(ctx context.Context, service api.Service, removeOrphans bool) error {
+// composeCreateStarter is the two halves of compose's Up, which is all `up` needs of
+// api.Service -- and narrow enough that the order it calls them in can be driven by a
+// test, which is the whole point of keeping them apart.
+type composeCreateStarter interface {
+	Create(ctx context.Context, project *types.Project, options api.CreateOptions) error
+	Start(ctx context.Context, projectName string, options api.StartOptions) error
+}
+
+func (a *ComposeApp) up(ctx context.Context, service composeCreateStarter, removeOrphans bool) error {
 	a.injectEnvVariableToComposeApp()
+
+	// Create and Start, rather than Up, which is exactly the two of them in one call
+	// (pkg/compose/up.go: create, then start). Keeping them apart is what tells a stack
+	// that came up and would not confirm from one compose never reached: everything
+	// before convergence -- an image that does not exist, a network or a volume it
+	// cannot create, a duplicate container_name -- fails HERE, with every container of
+	// the previous definition still running and healthy. Asking `settled` about those
+	// would read the old app as proof that the new definition worked and leave a compose
+	// file the app cannot start from, with the backup already gone. Once Create returns,
+	// the containers are the new definition, and only then does their state answer for
+	// it.
+	//
+	// No deadline of our own here: the pull that precedes an apply has none either, and
+	// Create's own work is bounded by ctx. UpWaitTimeout is the wait for an app to
+	// report itself running or healthy AFTER it is started, which is what it says.
+	if err := service.Create(ctx, (*codegen.ComposeApp)(a), api.CreateOptions{
+		RemoveOrphans: removeOrphans,
+	}); err != nil {
+		logger.Error("failed to create compose app", zap.Error(err), zap.String("name", a.Name))
+		return err
+	}
 
 	// no OnExit: compose only reads it when Start.Attach is set, and we never attach
 	// (pkg/compose/up.go) -- CascadeStop here was decoration.
 	if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
-		return service.Up(ctx, (*codegen.ComposeApp)(a), api.UpOptions{
-			Create: api.CreateOptions{
-				RemoveOrphans: removeOrphans,
-			},
-			Start: api.StartOptions{
-				Wait: true,
-			},
-		})
+		return service.Start(ctx, a.Name, api.StartOptions{Wait: true})
 	}, a.everyContainerSettled); err != nil {
 		logger.Error("failed to start original compose app", zap.Error(err), zap.String("name", a.Name))
 		return err
