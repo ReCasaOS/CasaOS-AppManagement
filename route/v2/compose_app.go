@@ -84,8 +84,11 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 		return ctx.String(http.StatusOK, string(yaml))
 	}
 
+	// A missing `x-casaos` is not a failure: the app grid has always answered for such
+	// a stack with no store info rather than an error, and this endpoint describes the
+	// same apps. Anything else wrong with the extension still is one.
 	storeInfo, err := composeApp.StoreInfo(true)
-	if err != nil {
+	if err != nil && !errors.Is(err, service.ErrComposeExtensionNameXCasaOSNotFound) {
 		message := err.Error()
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
 			Message: &message,
@@ -674,11 +677,12 @@ func (a *AppManagement) ComposeAppContainers(ctx echo.Context, id codegen.Compos
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
 
-	storeInfo, err := composeApp.StoreInfo(false)
-	if err != nil {
-		message := err.Error()
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
-	}
+	// Not StoreInfo: a stack nobody installed from the App Store has no `x-casaos`,
+	// and that used to come back from here as a 500 reading ``extension `x-casaos` not
+	// found`` -- so the Containers tab was broken for precisely the hand-assembled
+	// stacks it was added for. Which service leads is a question about the compose
+	// file and has an answer without the extension.
+	main := composeApp.MainServiceName()
 
 	// Every container of every service is reported. Until now the response kept only
 	// containerList[0] per service -- a workaround from v0.4.4 to spare the frontend a
@@ -686,7 +690,7 @@ func (a *AppManagement) ComposeAppContainers(ctx echo.Context, id codegen.Compos
 	// service whose list was empty.
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppContainersOK{
 		Data: &codegen.ComposeAppContainers{
-			Main:       storeInfo.Main,
+			Main:       &main,
 			Containers: &containerLists,
 		},
 	})

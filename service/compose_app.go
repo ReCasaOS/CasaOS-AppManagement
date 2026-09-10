@@ -97,6 +97,28 @@ func (a *ComposeApp) StoreInfo(includeApps bool) (*codegen.ComposeAppStoreInfo, 
 	return &storeInfo, nil
 }
 
+// MainServiceName is the service an app's interface is about: what `x-casaos.main`
+// names, and otherwise the alphabetically first service, which is the rule StoreInfo
+// has always applied when that key is absent.
+//
+// A stack somebody assembled by hand has no `x-casaos` at all, and gets the same
+// fallback rather than no answer. The extension carries presentation; which service
+// leads is a question about the compose file, and it has an answer either way.
+func (a *ComposeApp) MainServiceName() string {
+	if ex, ok := a.Extensions[common.ComposeExtensionNameXCasaOS]; ok {
+		var storeInfo codegen.ComposeAppStoreInfo
+		if err := loader.Transform(ex, &storeInfo); err == nil && storeInfo.Main != nil && *storeInfo.Main != "" {
+			return *storeInfo.Main
+		}
+	}
+
+	for _, name := range sortedServiceNames(a.Services) {
+		return name
+	}
+
+	return ""
+}
+
 func (a *ComposeApp) AuthorType() codegen.StoreAppAuthorType {
 	storeInfo, err := a.StoreInfo(false)
 	if err != nil {
