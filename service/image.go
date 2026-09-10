@@ -169,6 +169,10 @@ type StatusType string
 const (
 	Pull         StatusType = "Pulling fs layer"
 	PullComplete StatusType = "Pull complete"
+	// AlreadyExists is what the daemon sends for a layer this host already has. It
+	// arrives INSTEAD of the pulling/complete pair, never alongside it, so a layer
+	// reported this way is one that is both known and finished.
+	AlreadyExists StatusType = "Already exists"
 )
 
 type ProgressDetail struct {
@@ -225,14 +229,32 @@ func pullImageProgress(ctx context.Context, out io.ReadCloser, notificationType 
 		// pull a layer complete
 		case string(PullComplete):
 			completedLayerNum++
+		// a layer this host already has: counted on both sides, because it is a layer
+		// of the image and there is nothing left to do about it. Counting it nowhere is
+		// what left the bar at zero for the whole install of an image already on disk --
+		// every layer `Already exists`, so nothing was ever counted and the fraction
+		// below was 0/0.
+		case string(AlreadyExists):
+			layerNum++
+			completedLayerNum++
 		}
 
-		// layer progress
+		// Nothing has been announced yet: no layers means no fraction, not 0/0, which
+		// is a NaN that survives both clamps below and lands as whatever the conversion
+		// to int makes of it.
+		if layerNum == 0 {
+			continue
+		}
+
+		// layer progress, within the image being pulled right now
 		completedFraction := float32(completedLayerNum) / float32(layerNum)
 
-		// image progress
-		currentImageFraction := float32(currentImage) / float32(totalImageNum)
-		progress := completedFraction * currentImageFraction * 100
+		// and where that image sits in the whole job. currentImage is 1-based, so the
+		// images already done are currentImage-1: image 2 of 3 half pulled is (1+0.5)/3,
+		// half way through the second third. Multiplying by currentImage/totalImageNum
+		// instead capped the first image of two at 50% and then sent the bar back to
+		// zero for the second.
+		progress := (float32(currentImage-1) + completedFraction) / float32(totalImageNum) * 100
 
 		// reduce the event send frequency
 		throttler.ThrottleFunc(func() {
