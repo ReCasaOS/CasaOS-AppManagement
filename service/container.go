@@ -67,6 +67,7 @@ type DockerService interface {
 	GetContainerStats() []model.DockerStatsModel
 	RecreateContainer(ctx context.Context, id string, pull bool, force bool) error
 	RemoveContainer(name string, update bool) error
+	RestartContainer(id string) error
 	RenameContainer(name, id string) (err error)
 	StartContainer(name string) error
 	StopContainer(id string) error
@@ -806,6 +807,10 @@ func (ds *dockerService) RemoveContainer(name string, update bool) error {
 }
 
 // 停止镜像
+func (ds *dockerService) RestartContainer(id string) error {
+	return docker.RestartContainer(context.Background(), id)
+}
+
 func (ds *dockerService) StopContainer(id string) error {
 	ctx := context.Background()
 	return docker.StopContainer(ctx, id)

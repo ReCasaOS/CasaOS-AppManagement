@@ -653,6 +653,34 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /compose/{id}/containers/{containerId}/status:
+    put:
+      summary: Start, stop or restart one container of a compose app
+      description: |
+        Acts on a single container rather than on the whole app, which is what a
+        multi-service stack usually needs: restarting the one service that wedged,
+        without taking its siblings down with it.
+
+        The container must belong to the app named in the path. One that does not
+        is a 404 rather than an action on somebody else's container.
+      operationId: setComposeAppContainerStatus
+      tags:
+        - Compose methods
+      parameters:
+        - $ref: "#/components/parameters/ComposeAppID"
+        - $ref: "#/components/parameters/ComposeContainerID"
+      requestBody:
+        $ref: "#/components/requestBodies/RequestContainerStatus"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /compose/{id}/logs:
     get:
       summary: Get the logs of a compose app
@@ -918,6 +946,15 @@ components:
         type: string
         example: "syncthing"
 
+    ComposeContainerID:
+      name: containerId
+      description: ID of a container belonging to the compose app
+      in: path
+      required: true
+      schema:
+        type: string
+        example: "3f1c9a2b4d5e"
+
     ContainerIDs:
       name: container_ids
       description: a list of comma separated container IDs
@@ -1009,6 +1046,18 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ComposeApp"
+
+    RequestContainerStatus:
+      description: What to do to a single container
+      required: true
+      content:
+        application/json:
+          schema:
+            type: string
+            enum:
+              - "start"
+              - "restart"
+              - "stop"
 
     RequestComposeAppStatus:
       description: Compose app status

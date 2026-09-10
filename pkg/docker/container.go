@@ -126,6 +126,20 @@ func StartContainer(ctx context.Context, id string) error {
 	return nil
 }
 
+// RestartContainer restarts a container, and leaves it running whether or not it
+// was before. Docker's own restart is one call: stop-then-start from here would
+// race anything that reads the container in between, and would have to reinvent
+// the stop timeout the daemon already applies.
+func RestartContainer(ctx context.Context, id string) error {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
+	return cli.ContainerRestart(ctx, id, container.StopOptions{})
+}
+
 func StopContainer(ctx context.Context, id string) error {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
