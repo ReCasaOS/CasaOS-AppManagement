@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/docker/compose/v2/pkg/api"
@@ -350,8 +351,16 @@ func verdict(ctx context.Context, cli dockerDaemon, composeApp *ComposeApp, cont
 	var firstReason string
 	answered := false
 
+	// Without the digest. A compose file that pins one names the image as
+	// `repo:tag@sha256:<64 hex>`, and putting that in a message a person reads buries
+	// both the app and the cause under a line of hex. The full reference is in the
+	// logs, where something is actually being debugged.
 	reason := func(image, why string) {
 		if firstReason == "" {
+			if at := strings.Index(image, "@"); at > 0 {
+				image = image[:at]
+			}
+
 			firstReason = fmt.Sprintf("%s: %s", image, why)
 		}
 	}
