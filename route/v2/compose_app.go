@@ -806,29 +806,6 @@ func composeAppStatus(containerLists map[string][]codegen.ContainerSummary) stri
 	return worst
 }
 
-// isUncontrolled reads `x-casaos.is_uncontrolled` without assuming the extension is
-// there.
-//
-// What it replaces read the same value in one expression, and the FIRST of its two
-// type assertions had no comma-ok:
-//
-//	Extensions[x].(map[string]interface{})[y].(bool)
-//
-// A compose file written by hand carries no `x-casaos`, so Extensions[x] is a nil
-// interface, and asserting that to a map type panics. It was unreachable while the
-// caller gave up on such an app before getting here; it stopped being unreachable the
-// moment that early return was removed, and then the app grid -- which asks about
-// every installed app -- took the whole service down on any host running one such
-// stack, restart after restart.
-//
-// Indexing a nil map is fine in Go. Asserting a nil interface to a map type is not.
-func isUncontrolled(composeApp *service.ComposeApp) bool {
-	extension, _ := composeApp.Extensions[common.ComposeExtensionNameXCasaOS].(map[string]interface{})
-	uncontrolled, _ := extension[common.ComposeExtensionPropertyNameIsUncontrolled].(bool)
-
-	return uncontrolled
-}
-
 func composeAppsWithStoreInfo(ctx context.Context, opts composeAppsWithStoreInfoOpts) (map[string]codegen.ComposeAppWithStoreInfo, error) {
 	composeApps, err := service.MyService.Compose().List(ctx)
 	if err != nil {
@@ -882,7 +859,9 @@ func composeAppsWithStoreInfo(ctx context.Context, opts composeAppsWithStoreInfo
 			return composeAppWithStoreInfo
 		}
 
-		composeAppWithStoreInfo.IsUncontrolled = lo.ToPtr(isUncontrolled(composeApp))
+		// one rule for this, in service: the copy that used to live here is what took
+		// the whole service down on a compose file with no `x-casaos`
+		composeAppWithStoreInfo.IsUncontrolled = lo.ToPtr(composeApp.IsUncontrolled())
 
 		// The status used to be the state of the main service's FIRST container and
 		// nothing else, so an app whose database had died reported `running` and the

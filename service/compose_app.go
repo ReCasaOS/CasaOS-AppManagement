@@ -54,10 +54,10 @@ func (a *ComposeApp) StoreInfo(includeApps bool) (*codegen.ComposeAppStoreInfo, 
 		return nil, err
 	}
 
-	// TODO refactor this with ComposeAppWithStoreInfo
-	isUncontrolled, ok := a.Extensions[common.ComposeExtensionNameXCasaOS].(map[string]interface{})[common.ComposeExtensionPropertyNameIsUncontrolled].(bool)
-	if ok {
-		storeInfo.IsUncontrolled = &isUncontrolled
+	// Only when the file actually says so: a nil field means the compose file did not
+	// mention it, which is not the same answer as `false`.
+	if uncontrolled, declared := a.uncontrolled(); declared {
+		storeInfo.IsUncontrolled = &uncontrolled
 	}
 
 	// locate main app
@@ -117,6 +117,35 @@ func (a *ComposeApp) MainServiceName() string {
 	}
 
 	return ""
+}
+
+// IsUncontrolled reports whether the app declares `x-casaos.is_uncontrolled`.
+//
+// The read this replaces was one expression whose FIRST type assertion had no
+// comma-ok:
+//
+//	Extensions[x].(map[string]interface{})[y].(bool)
+//
+// The guard above it tests whether the KEY is present, which is not the same as the
+// value being a map: `x-casaos:` with nothing after it parses to a nil value under a
+// present key, and asserting that to a map type panics -- taking down whichever
+// service called it. The copy of this line in the app grid did exactly that to a whole
+// host in v0.4.61.
+//
+// Indexing a nil map is fine in Go. Asserting a nil interface to a map type is not.
+func (a *ComposeApp) IsUncontrolled() bool {
+	uncontrolled, _ := a.uncontrolled()
+
+	return uncontrolled
+}
+
+// uncontrolled also reports whether the compose file said anything at all, which
+// StoreInfo keeps: it leaves the field nil for a file that did not mention it.
+func (a *ComposeApp) uncontrolled() (value bool, declared bool) {
+	extension, _ := a.Extensions[common.ComposeExtensionNameXCasaOS].(map[string]interface{})
+	value, declared = extension[common.ComposeExtensionPropertyNameIsUncontrolled].(bool)
+
+	return value, declared
 }
 
 func (a *ComposeApp) AuthorType() codegen.StoreAppAuthorType {
