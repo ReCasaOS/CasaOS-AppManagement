@@ -6,6 +6,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/docker/docker/api/types"
@@ -240,6 +241,12 @@ func hostConfig(containerInfo *types.ContainerJSON) *container.HostConfig {
 // empty volume derived from the image VOLUME directive and the old volume is
 // orphaned when the original container is removed.
 //
+// Destinations are compared cleaned: what the owner typed is kept verbatim in Binds
+// (`-v /srv/data:/data/`) while the daemon reports the mount point normalised
+// (`/data`), and comparing the two raw makes the volume look unreferenced. Carrying
+// it again is a second mount on the same destination, which the daemon rejects -- so
+// the recreate fails outright and the container is left as it was.
+//
 // Only mount.TypeVolume entries are carried: a bind mount is already in
 // HostConfig.Binds and mounting it twice is a conflict, and a tmpfs holds no
 // data worth preserving.
@@ -249,17 +256,17 @@ func unreferencedVolumeMounts(containerInfo *types.ContainerJSON) []mount.Mount 
 	for _, bind := range containerInfo.HostConfig.Binds {
 		// source:destination[:options]
 		if parts := strings.Split(bind, ":"); len(parts) >= 2 {
-			referenced[parts[1]] = true
+			referenced[path.Clean(parts[1])] = true
 		}
 	}
 
 	for _, m := range containerInfo.HostConfig.Mounts {
-		referenced[m.Target] = true
+		referenced[path.Clean(m.Target)] = true
 	}
 
 	var mounts []mount.Mount
 	for _, mountPoint := range containerInfo.Mounts {
-		if mountPoint.Type != mount.TypeVolume || mountPoint.Name == "" || referenced[mountPoint.Destination] {
+		if mountPoint.Type != mount.TypeVolume || mountPoint.Name == "" || referenced[path.Clean(mountPoint.Destination)] {
 			continue
 		}
 

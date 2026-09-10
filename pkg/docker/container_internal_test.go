@@ -77,12 +77,17 @@ func TestHostConfigKeepsBindsUntouched(t *testing.T) {
 				"/srv/data:/data",
 				"pgdata:/var/lib/postgresql/data",
 				"/srv/conf:/etc/app:ro",
+				// what the owner typed, kept verbatim -- the daemon reports the mount
+				// point of this one as `/media`, and comparing the two raw carried it
+				// again as a second mount on the same destination
+				"films:/media/",
 			}},
 		},
 		Mounts: []types.MountPoint{
 			{Type: mount.TypeBind, Source: "/srv/data", Destination: "/data", RW: true},
 			{Type: mount.TypeVolume, Name: "pgdata", Destination: "/var/lib/postgresql/data", RW: true},
 			{Type: mount.TypeBind, Source: "/srv/conf", Destination: "/etc/app"},
+			{Type: mount.TypeVolume, Name: "films", Destination: "/media", RW: true},
 		},
 	}
 
