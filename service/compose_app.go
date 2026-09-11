@@ -395,7 +395,7 @@ func (a *ComposeApp) updatedComposeYAML(storeComposeApp *ComposeApp) ([]byte, er
 	for name, service := range storeComposeApp.Services {
 		localComposeAppService := local.Services[name] // present: storeAbsentOfLocal is empty
 
-		if updateWritesStoreImage(service.Image) {
+		if updateWritesStoreImage(localComposeAppService.Image, service.Image) {
 			localComposeAppService.Image = service.Image
 		}
 
@@ -419,16 +419,39 @@ func servicesUpdateCannotCreate(local, store types.Services) []string {
 }
 
 // updateWritesStoreImage reports whether an update would actually put the catalogue's
-// image in the file for a service. A tag republished under the same name says nothing
-// about which image to run, so the local reference stays and the pull is what moves
-// it -- and a decision that counted such a service as a change badged an app whose
-// file the update then left exactly as it was, for ever.
+// image in the file for a service. Both halves of an update read it -- the write and
+// the decision to offer one at all -- and they have to give the same answer, or the
+// dashboard badges an app whose file the update then leaves exactly as it was, for
+// ever.
 //
-// This used to be a loop over NeedCheckDigestTags whose LAST iteration won: with a
-// second entry in that list, any tag but the last one would have had its image
-// replaced anyway.
-func updateWritesStoreImage(storeImage string) bool {
-	_, tag := docker.ExtractImageAndTag(storeImage)
+// The LOCAL reference decides first, and that is the fix for the case this was got
+// wrong on: an app tracking `develop` had its tag replaced by whatever fixed version
+// the catalogue named. Naming a stream is a choice, not an omission -- an update
+// pulls it rather than re-pinning it. A digest reference is the same answer for the
+// opposite reason: it names one exact image, and nothing about an update makes that
+// a different image.
+//
+// Only when the local reference names a version, and the catalogue names one too, is
+// the catalogue's the new version to write. A catalogue that floats says nothing
+// about which version to run, so it cannot un-pin somebody who pinned.
+//
+// This used to read the STORE image alone, so the answer depended on the tag the
+// catalogue happened to carry: a local `develop` survived a catalogue on `latest`
+// and was overwritten by a catalogue on `1.2.3`. Not a rule -- an accident.
+func updateWritesStoreImage(localImage, storeImage string) bool {
+	return referenceIsFixed(localImage) && referenceIsFixed(storeImage)
+}
+
+// referenceIsFixed reports whether an image reference names one particular version:
+// not a stream republished under the same name, and not a digest, which is already
+// as exact as a reference gets.
+func referenceIsFixed(image string) bool {
+	_, tag := docker.ExtractImageAndTag(image)
+
+	// ExtractImageAndTag answers "" for a digest reference
+	if tag == "" {
+		return false
+	}
 
 	return !lo.Contains(common.NeedCheckDigestTags, tag)
 }

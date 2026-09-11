@@ -624,7 +624,7 @@ func (a *AppStoreManagement) IsUpdateAvailableWith(composeApp *ComposeApp, store
 		// republished under the same name keeps the local reference (see
 		// updateWritesStoreImage). Counting it as a change badged an app whose file
 		// the update then left exactly as it was, so the badge came back for ever.
-		if !updateWritesStoreImage(storeService.Image) {
+		if !updateWritesStoreImage(service.Image, storeService.Image) {
 			continue
 		}
 
