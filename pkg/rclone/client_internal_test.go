@@ -1,0 +1,181 @@
+package rclone
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/go-resty/resty/v2"
+)
+
+// The daemon answers over a unix socket in production. Everything below drives the
+// same code against an ordinary test server: what is worth pinning is the shape of
+// the calls and how answers are read, not which kind of socket carries them.
+func serverFor(t *testing.T, handler http.HandlerFunc) (*Client, *[]*http.Request) {
+	t.Helper()
+
+	seen := &[]*http.Request{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("bad form: %v", err)
+		}
+		*seen = append(*seen, r)
+		handler(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	return &Client{http: resty.New().SetBaseURL(server.URL)}, seen
+}
+
+func TestDestinationsAreTheRemotesThisProjectPutThere(t *testing.T) {
+	// a real box holds cloud drives in the same config, which are not backup
+	// destinations and must not be offered as if they were
+	client, seen := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string][]string{"remotes": {
+			"GoogleDrive-gary",
+			"casaos-backup-nas",
+			"Dropbox",
+			"casaos-backup-offsite",
+		}})
+	})
+
+	names, err := client.Destinations()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(names) != 2 || names[0] != "nas" || names[1] != "offsite" {
+		t.Fatalf("want the two backup destinations, without the prefix: %v", names)
+	}
+	if (*seen)[0].URL.Path != "/config/listremotes" {
+		t.Fatalf("wrong endpoint: %s", (*seen)[0].URL.Path)
+	}
+}
+
+func TestCreatingADestination(t *testing.T) {
+	client, seen := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	err := client.CreateDestination("offsite", "s3", map[string]string{
+		"provider":          "Wasabi",
+		"access_key_id":     "AKIA...",
+		"secret_access_key": "shhh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := (*seen)[0].PostForm
+	if form.Get("name") != "casaos-backup-offsite" {
+		t.Fatalf("the prefix is added here, not by the caller: %q", form.Get("name"))
+	}
+	if form.Get("type") != "s3" {
+		t.Fatalf("want backend s3, got %q", form.Get("type"))
+	}
+
+	// the backend's own options are passed through: rclone knows what each backend
+	// needs, and a list of required fields kept on this side would go stale
+	var parameters map[string]string
+	if err := json.Unmarshal([]byte(form.Get("parameters")), &parameters); err != nil {
+		t.Fatalf("parameters are not JSON: %v", err)
+	}
+	if parameters["provider"] != "Wasabi" || parameters["secret_access_key"] != "shhh" {
+		t.Fatalf("parameters did not survive: %v", parameters)
+	}
+}
+
+func TestADestinationNeedsANameAndABackend(t *testing.T) {
+	client, seen := serverFor(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+
+	if err := client.CreateDestination("", "s3", nil); err == nil {
+		t.Error("a destination with no name is not a destination")
+	}
+	if err := client.CreateDestination("offsite", "", nil); err == nil {
+		t.Error("a destination with no backend is not a destination")
+	}
+	if len(*seen) != 0 {
+		t.Fatal("neither should have reached the daemon")
+	}
+}
+
+// The daemon says what went wrong in the body; the status code alone says nothing
+// anyone can act on.
+func TestRcloneSaysWhyItRefused(t *testing.T) {
+	client, _ := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"didn't find backend called \"s4\""}`))
+	})
+
+	err := client.CreateDestination("offsite", "s4", nil)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if got := err.Error(); got != `rclone: didn't find backend called "s4"` {
+		t.Fatalf("the daemon's own words: %q", got)
+	}
+}
+
+func TestAnErrorWithNothingToSayStillSaysSomething(t *testing.T) {
+	client, _ := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`not json at all`))
+	})
+
+	if _, err := client.Destinations(); err == nil {
+		t.Fatal("a status with no message is still an error, not an empty list")
+	}
+}
+
+// rclone not running is a different problem from a destination being wrong, and
+// the two deserve different advice -- so they are different errors.
+func TestADaemonThatIsNotThere(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := server.URL
+	server.Close()
+
+	client := &Client{http: resty.New().SetBaseURL(url)}
+
+	_, err := client.Destinations()
+	if !errors.Is(err, ErrDaemonUnreachable) {
+		t.Fatalf("want ErrDaemonUnreachable, got %v", err)
+	}
+}
+
+// A destination is checked when somebody configures it, not at 3am by a scheduled
+// job nobody is watching.
+func TestCheckingADestination(t *testing.T) {
+	client, seen := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"used":1024,"free":2048,"total":3072}`))
+	})
+
+	space, err := client.CheckDestination("offsite")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if (*seen)[0].PostForm.Get("fs") != "casaos-backup-offsite:" {
+		t.Fatalf("an fs is a remote followed by a colon: %q", (*seen)[0].PostForm.Get("fs"))
+	}
+	if space.Used == nil || *space.Used != 1024 || space.Free == nil || *space.Free != 2048 {
+		t.Fatalf("space did not survive: %+v", space)
+	}
+}
+
+// Object stores mostly have no answer to "how much room is left", and inventing a
+// zero would read as a full destination.
+func TestADestinationThatCannotSayHowMuchRoomItHas(t *testing.T) {
+	client, _ := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	space, err := client.CheckDestination("offsite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if space.Free != nil || space.Used != nil || space.Total != nil {
+		t.Fatalf("nothing said is not zero: %+v", space)
+	}
+}
