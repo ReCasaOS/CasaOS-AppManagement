@@ -137,6 +137,16 @@ func main() {
 			panic(err)
 		}
 
+		// Backups that go off by themselves. A minute because the smallest thing
+		// anyone can schedule is a time of day, and a tick that finds nothing due
+		// costs one file read.
+		backupRunner := service.NewScheduledBackupRunner()
+		if _, err := crontab.AddFunc("@every 1m", func() {
+			service.RunDueBackups(ctx, time.Now(), backupRunner)
+		}); err != nil {
+			panic(err)
+		}
+
 		crontab.Start()
 		defer crontab.Stop()
 

@@ -86,7 +86,9 @@ type backupRunner interface {
 // applies retention.
 //
 // It returns rather than loops, and takes `now`, so the whole of the decision can
-// be exercised in a test. The ticker below is the only part that reads a clock.
+// be exercised in a test. main drives it from the crontab that is already there,
+//
+// which is the only part that reads a clock.
 //
 // A schedule's LastRun is written whether the run SUCCEEDED or not. Retrying a
 // failing backup every minute until the disk fills is worse than waiting for
@@ -173,24 +175,4 @@ func applyRetention(ctx context.Context, schedule BackupSchedule, runner backupR
 				zap.Error(err), zap.String("app", schedule.App), zap.String("run", stamp))
 		}
 	}
-}
-
-// StartBackupScheduler ticks once a minute for the life of the process.
-//
-// A minute because the smallest thing anyone can schedule here is a time of day,
-// and because a tick that finds nothing due costs one file read.
-func StartBackupScheduler(ctx context.Context, runner backupRunner) {
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				RunDueBackups(ctx, now, runner)
-			}
-		}
-	}()
 }
