@@ -1,0 +1,169 @@
+package rclone
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// Nothing here should wait two seconds to find out a job finished.
+func fastPolling(t *testing.T) {
+	t.Helper()
+
+	was := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = was })
+}
+
+func TestCopyingAFolderStartsAJobAndWaitsForIt(t *testing.T) {
+	fastPolling(t)
+
+	var polls int32
+	client, seen := serverFor(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sync/copy":
+			_, _ = w.Write([]byte(`{"jobid": 7}`))
+		case "/job/status":
+			// two frames of "still going" before it finishes, so the wait is real
+			if atomic.AddInt32(&polls, 1) < 3 {
+				_, _ = w.Write([]byte(`{"id":7,"finished":false}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":7,"finished":true,"success":true}`))
+		}
+	})
+
+	if err := client.CopyDirectory(context.Background(), "/DATA/Media", "offsite", "nextcloud/run/binds/1"); err != nil {
+		t.Fatal(err)
+	}
+
+	start := (*seen)[0].PostForm
+	if start.Get("srcFs") != "/DATA/Media" {
+		t.Fatalf("source: %q", start.Get("srcFs"))
+	}
+	if start.Get("dstFs") != "casaos-backup-offsite:nextcloud/run/binds/1" {
+		t.Fatalf("destination: %q", start.Get("dstFs"))
+	}
+	// nothing holds an HTTP request open for the length of a transfer
+	if start.Get("_async") != "true" {
+		t.Fatal("the copy must be a job")
+	}
+	if atomic.LoadInt32(&polls) < 3 {
+		t.Fatalf("it should have waited: %d polls", polls)
+	}
+}
+
+// rclone addresses a file as a folder plus a name, on both sides. Handing a file
+// to the directory call copies its whole parent.
+func TestCopyingASingleFileAddressesItAsFolderAndName(t *testing.T) {
+	fastPolling(t)
+
+	client, seen := serverFor(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/operations/copyfile" {
+			_, _ = w.Write([]byte(`{"jobid": 9}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":9,"finished":true,"success":true}`))
+	})
+
+	err := client.CopyFile(context.Background(),
+		"/var/lib/casaos/apps/nextcloud/docker-compose.yml", "offsite", "nextcloud/run/compose/docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	form := (*seen)[0].PostForm
+	for field, want := range map[string]string{
+		"srcFs":     "/var/lib/casaos/apps/nextcloud",
+		"srcRemote": "docker-compose.yml",
+		"dstFs":     "casaos-backup-offsite:nextcloud/run/compose",
+		"dstRemote": "docker-compose.yml",
+	} {
+		if got := form.Get(field); got != want {
+			t.Errorf("%s: want %q, got %q", field, want, got)
+		}
+	}
+}
+
+func TestAJobThatFailsSaysWhy(t *testing.T) {
+	fastPolling(t)
+
+	client, _ := serverFor(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sync/copy" {
+			_, _ = w.Write([]byte(`{"jobid": 3}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":3,"finished":true,"success":false,"error":"AccessDenied: no write permission"}`))
+	})
+
+	err := client.CopyDirectory(context.Background(), "/DATA", "offsite", "x")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if err.Error() != "rclone: AccessDenied: no write permission" {
+		t.Fatalf("the daemon's own words: %q", err)
+	}
+}
+
+// A job that reports failure and says nothing must still be an error, not a
+// silent success.
+func TestAJobThatFailsSilently(t *testing.T) {
+	fastPolling(t)
+
+	client, _ := serverFor(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/sync/copy" {
+			_, _ = w.Write([]byte(`{"jobid": 4}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":4,"finished":true,"success":false}`))
+	})
+
+	if err := client.CopyDirectory(context.Background(), "/DATA", "offsite", "x"); err == nil {
+		t.Fatal("a job that did not succeed did not succeed")
+	}
+}
+
+// Walking away from a running transfer leaves it writing to the destination long
+// after whoever asked for it has gone, and the next run then races it.
+func TestCancellingStopsTheJobRatherThanWalkingAway(t *testing.T) {
+	fastPolling(t)
+
+	var stopped int32
+	ctx, cancel := context.WithCancel(context.Background())
+
+	client, _ := serverFor(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sync/copy":
+			_, _ = w.Write([]byte(`{"jobid": 11}`))
+		case "/job/status":
+			cancel() // it is running, and the caller gives up
+			_, _ = w.Write([]byte(`{"id":11,"finished":false}`))
+		case "/job/stop":
+			atomic.AddInt32(&stopped, 1)
+			_, _ = w.Write([]byte(`{}`))
+		}
+	})
+
+	err := client.CopyDirectory(ctx, "/DATA/Media", "offsite", "x")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want the cancellation, got %v", err)
+	}
+	if atomic.LoadInt32(&stopped) != 1 {
+		t.Fatal("the job must be stopped, not abandoned")
+	}
+}
+
+// A daemon that accepts the call and starts nothing would otherwise be polled for
+// job zero for ever.
+func TestACallThatStartsNoJob(t *testing.T) {
+	client, _ := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+
+	if err := client.CopyDirectory(context.Background(), "/DATA", "offsite", "x"); err == nil {
+		t.Fatal("no job number is not a copy in progress")
+	}
+}
