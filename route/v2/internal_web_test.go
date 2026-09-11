@@ -136,3 +136,47 @@ func TestWebAppGridItemCarriesStatusWithoutStoreInfo(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, *stopped.Status, "exited")
 }
+
+// Docker hands out names like `adoring_antonelli`, so for a container CasaOS did
+// not install the image, the port and the age are the only things that identify
+// it -- and the adapter had all three in hand and was throwing them away.
+func TestAnAdoptedContainerArrivesWithWhatIdentifiesIt(t *testing.T) {
+	item, err := v2.WebAppGridItemAdapterContainer(&model.MyAppList{
+		ID:       "59315ef1c1721d4a462b6035",
+		Name:     "adoring_antonelli",
+		Image:    "nginx:alpine",
+		State:    "running",
+		Port:     "8080",
+		Index:    "/admin",
+		Host:     "192.168.1.50",
+		Protocol: "http",
+		Icon:     "https://icon.casaos.io/main/all/nginx.png",
+		Created:  1757548800,
+	})
+	assert.NilError(t, err)
+
+	assert.Equal(t, *item.Image, "nginx:alpine")
+	assert.Equal(t, *item.Port, "8080")
+	assert.Equal(t, *item.Index, "/admin")
+	assert.Equal(t, *item.Hostname, "192.168.1.50")
+	assert.Equal(t, *item.Created, int64(1757548800))
+	assert.Equal(t, *item.Icon, "https://icon.casaos.io/main/all/nginx.png")
+}
+
+// A port of "" drawn as a port is worse than no port: the dashboard would show an
+// empty field where a person is looking for a number.
+func TestWhatIsNotKnownIsAbsentRatherThanEmpty(t *testing.T) {
+	item, err := v2.WebAppGridItemAdapterContainer(&model.MyAppList{
+		ID: "abc123", Name: "gifted_mendeleev", Image: "alpine", State: "exited",
+	})
+	assert.NilError(t, err)
+
+	assert.Assert(t, item.Port == nil)
+	assert.Assert(t, item.Icon == nil)
+	assert.Assert(t, item.Index == nil)
+	assert.Assert(t, item.Hostname == nil)
+	assert.Assert(t, item.Scheme == nil)
+
+	// but the age is a number, and zero is a real answer the dashboard can read
+	assert.Equal(t, *item.Created, int64(0))
+}

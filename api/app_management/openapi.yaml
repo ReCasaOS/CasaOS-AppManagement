@@ -2441,6 +2441,15 @@ components:
             - v1app
             - container
             - link
+        created:
+          type: integer
+          format: int64
+          description: |-
+            When the container was made, in seconds since the epoch. The one fact that
+            separates a container somebody started last week from one left behind two
+            years ago, and the dashboard had no way to tell them apart.
+          example: 1757548800
+
         compose_project:
           description: |
             Name of the compose project this container belongs to, absent when it belongs to none.

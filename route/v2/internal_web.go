@@ -228,6 +228,10 @@ func WebAppGridItemAdapterContainer(container *model.MyAppList) (*codegen.WebApp
 		return nil, fmt.Errorf("container is nil")
 	}
 
+	// Everything known about it, because a container CasaOS did not install is
+	// exactly the case where a name says nothing: Docker hands out `adoring_antonelli`,
+	// and the image, the port and the age are the only things that identify it. All of
+	// this was already in hand here and was being thrown away.
 	item := &codegen.WebAppGridItem{
 		AppType: codegen.Container,
 		Name:    &container.ID,
@@ -237,6 +241,25 @@ func WebAppGridItemAdapterContainer(container *model.MyAppList) (*codegen.WebApp
 			common.DefaultLanguage: container.Name,
 		},
 		IsUncontrolled: &container.IsUncontrolled,
+		Created:        &container.Created,
+	}
+
+	// Empty rather than absent for several of these, so only what is really known
+	// reaches the dashboard: a port of "" drawn as a port is worse than no port.
+	if container.Port != "" {
+		item.Port = &container.Port
+	}
+	if container.Icon != "" {
+		item.Icon = &container.Icon
+	}
+	if container.Index != "" {
+		item.Index = &container.Index
+	}
+	if container.Host != "" {
+		item.Hostname = &container.Host
+	}
+	if container.Protocol != "" {
+		item.Scheme = (*codegen.Scheme)(&container.Protocol)
 	}
 
 	// Set only when a compose project claims the container. It reaches this adapter
