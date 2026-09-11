@@ -69,3 +69,35 @@ func (ds *dockerService) SampleContainerStats(ctx context.Context, ids []string)
 
 	return out
 }
+
+// VolumeMountpoints asks the daemon where each of these volumes lives.
+//
+// A volume it cannot place is absent from the result rather than present with a
+// guessed path: the plan skips those and says so, which is the difference between
+// a backup that reports what it could not take and one that reports success
+// having copied an empty folder.
+func (ds *dockerService) VolumeMountpoints(ctx context.Context, names []string) map[string]string {
+	out := map[string]string{}
+	if len(names) == 0 {
+		return out
+	}
+
+	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
+	if err != nil {
+		logger.Error("failed to open a docker client for volumes", zap.Error(err))
+		return out
+	}
+	defer cli.Close()
+
+	for _, name := range names {
+		mountpoint, err := docker.VolumeMountpoint(ctx, cli, name)
+		if err != nil {
+			logger.Info("could not locate volume", zap.Error(err), zap.String("volume", name))
+			continue
+		}
+
+		out[name] = mountpoint
+	}
+
+	return out
+}

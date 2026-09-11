@@ -69,6 +69,7 @@ type DockerService interface {
 	RemoveContainer(name string, update bool) error
 	RestartContainer(id string) error
 	SampleContainerStats(ctx context.Context, ids []string) map[string]*types.StatsJSON
+	VolumeMountpoints(ctx context.Context, names []string) map[string]string
 	RenameContainer(name, id string) (err error)
 	StartContainer(name string) error
 	StopContainer(id string) error
