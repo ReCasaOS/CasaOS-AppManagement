@@ -177,3 +177,125 @@ func holdStillFrom(request codegen.BackupRequest) bool {
 
 	return *request.HoldStill
 }
+
+// BackupSchedules lists the standing arrangements.
+func (a *AppManagement) BackupSchedules(ctx echo.Context) error {
+	schedules, err := service.BackupSchedules()
+	if err != nil {
+		return backupError(ctx, err)
+	}
+
+	out := make([]codegen.BackupSchedule, 0, len(schedules))
+	for _, schedule := range schedules {
+		out = append(out, toCodegenSchedule(schedule))
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.BackupSchedulesOK{
+		Message: utils.Ptr("OK"), Data: &out,
+	})
+}
+
+// SetBackupSchedules replaces the lot.
+//
+// Every schedule is checked before any is saved. A list saved half-valid is a box
+// where some backups run and some silently never will, and nothing on the screen
+// tells the two apart.
+func (a *AppManagement) SetBackupSchedules(ctx echo.Context) error {
+	var incoming []codegen.BackupSchedule
+	if err := ctx.Bind(&incoming); err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	// What is already on disk, so a LastRun the screen never saw is not lost --
+	// losing it makes every schedule fire again at the next tick.
+	existing, err := service.BackupSchedules()
+	if err != nil {
+		return backupError(ctx, err)
+	}
+
+	lastRuns := map[string]time.Time{}
+	for _, schedule := range existing {
+		lastRuns[schedule.App+"\x00"+schedule.Destination] = schedule.LastRun
+	}
+
+	schedules := make([]service.BackupSchedule, 0, len(incoming))
+	for _, item := range incoming {
+		schedule := fromCodegenSchedule(item)
+		schedule.LastRun = lastRuns[schedule.App+"\x00"+schedule.Destination]
+
+		if _, err := service.IsDue(schedule, time.Now()); err != nil {
+			message := err.Error()
+			return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+		}
+
+		schedules = append(schedules, schedule)
+	}
+
+	if err := service.SaveBackupSchedules(schedules); err != nil {
+		return backupError(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.BaseResponse{
+		Message: utils.Ptr(fmt.Sprintf("%d schedule(s) saved", len(schedules))),
+	})
+}
+
+// BackupRuns is what happened, newest first, failures included.
+func (a *AppManagement) BackupRuns(ctx echo.Context) error {
+	records, err := service.BackupRuns()
+	if err != nil {
+		return backupError(ctx, err)
+	}
+
+	out := make([]codegen.BackupRunRecord, 0, len(records))
+	for _, record := range records {
+		out = append(out, codegen.BackupRunRecord{
+			App: &record.App, Destination: &record.Destination, Stamp: &record.Stamp,
+			StartedAt: &record.StartedAt, FinishedAt: &record.FinishedAt,
+			Scheduled: &record.Scheduled, ContainersStopped: &record.ContainersStopped,
+			Copied: &record.Copied, SkippedCount: &record.SkippedCount,
+			Error: &record.Error,
+		})
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.BackupRunsOK{
+		Message: utils.Ptr("OK"), Data: &out,
+	})
+}
+
+func toCodegenSchedule(schedule service.BackupSchedule) codegen.BackupSchedule {
+	weekday := int(schedule.Weekday)
+	every := string(schedule.Every)
+	lastRun := schedule.LastRun
+
+	return codegen.BackupSchedule{
+		App: schedule.App, Destination: schedule.Destination,
+		Every: codegen.BackupScheduleEvery(every), At: schedule.At,
+		Weekday: &weekday, Keep: &schedule.Keep,
+		HoldStill: &schedule.HoldStill, Enabled: &schedule.Enabled,
+		LastRun: &lastRun,
+	}
+}
+
+func fromCodegenSchedule(item codegen.BackupSchedule) service.BackupSchedule {
+	schedule := service.BackupSchedule{
+		App: item.App, Destination: item.Destination,
+		Every: service.ScheduleEvery(item.Every), At: item.At,
+	}
+
+	if item.Weekday != nil {
+		schedule.Weekday = time.Weekday(*item.Weekday)
+	}
+	if item.Keep != nil {
+		schedule.Keep = *item.Keep
+	}
+	if item.HoldStill != nil {
+		schedule.HoldStill = *item.HoldStill
+	}
+	if item.Enabled != nil {
+		schedule.Enabled = *item.Enabled
+	}
+
+	return schedule
+}
