@@ -932,6 +932,56 @@ paths:
           $ref: "#/components/responses/ResponseNotFound"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
+    delete:
+      summary: Remove a container, and optionally some of its named volumes
+      description: |
+        The container goes; a volume goes only if it is named in `volumes` AND the
+        daemon says nothing else uses it. A volume another container still uses is
+        refused, and so is one this container does not mount — the list is decided
+        again here rather than trusted, because the screen that produced it may
+        have been overtaken.
+
+        A container belonging to a compose project is refused outright: removing one
+        service through this door leaves the project in a state its own manager does
+        not expect.
+      operationId: deleteContainer
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+      requestBody:
+        $ref: "#/components/requestBodies/RequestContainerRemoval"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerRemovedOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /container/{id}/detail:
+    get:
+      summary: Everything known about one container
+      description: |
+        For a container CasaOS did not install, where the name Docker invented says
+        nothing and the dashboard had no way to answer "what is this".
+
+        Named volumes come back with their size and how many containers use them,
+        which is what a deletion needs before it offers anything.
+      operationId: containerDetail
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerDetailOK"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
 
   /container/{id}/healthcheck:
     get:
@@ -1243,6 +1293,19 @@ components:
             items:
               $ref: "#/components/schemas/BackupSchedule"
 
+    RequestContainerRemoval:
+      description: Which of the container's named volumes to remove with it
+      required: false
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              volumes:
+                type: array
+                items:
+                  type: string
+
     RequestBackupDestination:
       description: An rclone backend and its own options
       required: true
@@ -1550,6 +1613,39 @@ components:
               - properties:
                   data:
                     $ref: "#/components/schemas/ComposeAppContainers"
+
+    ContainerDetailOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ContainerDetail"
+
+    ContainerRemovedOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    type: object
+                    properties:
+                      removed:
+                        type: array
+                        description: Volumes actually deleted.
+                        items:
+                          type: string
+                      refused:
+                        type: object
+                        description: Volumes not deleted, each with the reason.
+                        additionalProperties:
+                          type: string
 
     BackupSchedulesOK:
       description: OK
@@ -2049,6 +2145,98 @@ components:
             $ref: "#/components/schemas/DeviceStoreInfo"
           x-oapi-codegen-extra-tags:
             yaml: ",omitempty"
+
+    ContainerDetail:
+      description: What one container is, for somebody who did not create it.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        image:
+          type: string
+        state:
+          type: string
+        status:
+          type: string
+          description: Docker's own line, "Up 3 hours" or "Exited (0) 2 days ago".
+        created:
+          type: integer
+          format: int64
+        command:
+          type: string
+        restart_policy:
+          type: string
+        compose_project:
+          type: string
+          description: |-
+            Set when the container belongs to a compose project. Removal is refused
+            for those: taking one service out leaves the project in a state its own
+            manager does not expect.
+        networks:
+          type: array
+          items:
+            type: string
+        ports:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContainerPortMapping"
+        volumes:
+          type: array
+          description: Named volumes, with what a deletion needs to know about each.
+          items:
+            $ref: "#/components/schemas/ContainerVolume"
+        binds:
+          type: array
+          description: Host paths the container mounts directly.
+          items:
+            $ref: "#/components/schemas/ContainerBind"
+        env:
+          type: array
+          description: |-
+            Environment, as Docker holds it. These often carry credentials; they are
+            shown because rebuilding a container without them is not possible, and
+            the compose editor already shows the same for installed apps.
+          items:
+            type: string
+
+    ContainerPortMapping:
+      properties:
+        host:
+          type: string
+        container:
+          type: string
+        protocol:
+          type: string
+
+    ContainerVolume:
+      properties:
+        name:
+          type: string
+        target:
+          type: string
+        size:
+          type: integer
+          format: int64
+          description: Bytes, or -1 when the driver cannot measure it.
+        containers:
+          type: integer
+          format: int64
+          description: How many containers use it, this one included, or -1 when unknown.
+        removable:
+          type: boolean
+        reason:
+          type: string
+          description: Why it may not be removed, when it may not.
+
+    ContainerBind:
+      properties:
+        source:
+          type: string
+        target:
+          type: string
+        read_only:
+          type: boolean
 
     BackupSchedule:
       required:

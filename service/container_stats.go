@@ -101,3 +101,40 @@ func (ds *dockerService) VolumeMountpoints(ctx context.Context, names []string) 
 
 	return out
 }
+
+// VolumeUsage is how much room each named volume takes and how many containers
+// reference it, for every volume on the host.
+//
+// One call rather than one per volume: the daemon walks the filesystem to answer
+// it, and asking repeatedly is how a panel listing four volumes takes ten seconds
+// to open. An empty answer means the daemon could not say, which every caller
+// must read as "do not offer to delete anything".
+func (ds *dockerService) VolumeUsage(ctx context.Context) map[string]docker.VolumeSpace {
+	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
+	if err != nil {
+		logger.Error("failed to open a docker client for volume usage", zap.Error(err))
+		return map[string]docker.VolumeSpace{}
+	}
+	defer cli.Close()
+
+	usage, err := docker.VolumeUsage(ctx, cli)
+	if err != nil {
+		logger.Error("could not measure volumes", zap.Error(err))
+		return map[string]docker.VolumeSpace{}
+	}
+
+	return usage
+}
+
+// RemoveVolume deletes one named volume. Refused by the daemon itself while
+// anything still uses it, which is a second guard behind the decision that
+// already declined to offer such a volume.
+func (ds *dockerService) RemoveVolume(ctx context.Context, name string) error {
+	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
+	return cli.VolumeRemove(ctx, name, false)
+}
