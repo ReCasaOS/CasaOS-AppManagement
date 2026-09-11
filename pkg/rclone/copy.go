@@ -142,3 +142,50 @@ func (c *Client) CopyFile(ctx context.Context, source, destinationName, destinat
 
 	return c.waitForJob(ctx, id)
 }
+
+// Runs lists the runs an app has at a destination, by their stamp.
+//
+// Directories only, one level down: the layout puts every run of an app in its
+// own folder under the app's, and nothing else lives there.
+func (c *Client) Runs(destinationName, appPath string) ([]string, error) {
+	var listing struct {
+		List []struct {
+			Name  string `json:"Name"`
+			IsDir bool   `json:"IsDir"`
+		} `json:"list"`
+	}
+
+	err := c.call("/operations/list", map[string]string{
+		"fs":     DestinationPrefix + destinationName + ":",
+		"remote": appPath,
+		"opt":    `{"dirsOnly": true}`,
+	}, &listing)
+	if err != nil {
+		return nil, err
+	}
+
+	stamps := []string{}
+	for _, entry := range listing.List {
+		if entry.IsDir && entry.Name != "" {
+			stamps = append(stamps, entry.Name)
+		}
+	}
+
+	return stamps, nil
+}
+
+// Purge deletes one run and everything under it.
+//
+// The only call in this package that removes anything, kept separate from the
+// copies for that reason: nothing that copies can reach it by accident.
+func (c *Client) Purge(ctx context.Context, destinationName, remotePath string) error {
+	id, err := c.startJob("/operations/purge", map[string]string{
+		"fs":     DestinationPrefix + destinationName + ":",
+		"remote": remotePath,
+	})
+	if err != nil {
+		return err
+	}
+
+	return c.waitForJob(ctx, id)
+}

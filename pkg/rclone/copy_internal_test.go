@@ -167,3 +167,46 @@ func TestACallThatStartsNoJob(t *testing.T) {
 		t.Fatal("no job number is not a copy in progress")
 	}
 }
+
+func TestListingTheRunsAnAppHasAtADestination(t *testing.T) {
+	client, seen := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"list":[
+			{"Name":"2026-09-10T03-00-00Z","IsDir":true},
+			{"Name":"2026-09-11T03-00-00Z","IsDir":true},
+			{"Name":"stray.txt","IsDir":false}
+		]}`))
+	})
+
+	stamps, err := client.Runs("offsite", "nextcloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stamps) != 2 {
+		t.Fatalf("only the run folders: %v", stamps)
+	}
+	if (*seen)[0].PostForm.Get("remote") != "nextcloud" {
+		t.Fatalf("one app's folder: %q", (*seen)[0].PostForm.Get("remote"))
+	}
+}
+
+// The only call here that removes anything.
+func TestPurgingOneRun(t *testing.T) {
+	fastPolling(t)
+
+	client, seen := serverFor(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/operations/purge" {
+			_, _ = w.Write([]byte(`{"jobid": 21}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":21,"finished":true,"success":true}`))
+	})
+
+	if err := client.Purge(context.Background(), "offsite", "nextcloud/2026-09-08T03-00-00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	form := (*seen)[0].PostForm
+	if form.Get("fs") != "casaos-backup-offsite:" || form.Get("remote") != "nextcloud/2026-09-08T03-00-00Z" {
+		t.Fatalf("one run, not the app: fs=%q remote=%q", form.Get("fs"), form.Get("remote"))
+	}
+}

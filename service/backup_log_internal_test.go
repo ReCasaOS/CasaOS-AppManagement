@@ -140,3 +140,7 @@ func TestTheLogIsReplacedRatherThanRewrittenInPlace(t *testing.T) {
 		t.Fatalf("the file on disk must be readable: %v", err)
 	}
 }
+
+func writeRaw(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o600)
+}
