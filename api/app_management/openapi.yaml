@@ -653,6 +653,111 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /backup/destinations:
+    get:
+      summary: List the backup destinations this box knows
+      description: |
+        Names only. A destination's credentials live in rclone's own config and are
+        never read back out through here.
+      operationId: backupDestinations
+      tags:
+        - Backup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/BackupDestinationsOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /backup/destinations/{name}:
+    put:
+      summary: Add or replace a backup destination
+      description: |
+        `backend` is an rclone backend name -- s3, sftp, ftp -- and `parameters` are
+        that backend's own options, passed through untouched. rclone validates them
+        and knows what each backend needs.
+
+        Credentials are stored by rclone, in the same config as the cloud drives
+        this box already mounts.
+      operationId: setBackupDestination
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/BackupDestinationName"
+      requestBody:
+        $ref: "#/components/requestBodies/RequestBackupDestination"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    delete:
+      summary: Forget a backup destination
+      description: |
+        Removes the way in, not the backups. Whatever was already copied there stays
+        where it is.
+      operationId: deleteBackupDestination
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/BackupDestinationName"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /backup/destinations/{name}/check:
+    post:
+      summary: Ask a destination whether it is reachable
+      description: |
+        Worth doing when somebody configures a destination rather than at 3am by a
+        scheduled job nobody is watching: a typo in a bucket name found then is a
+        backup that never existed.
+
+        The space figures are absent for the many backends that have no answer to
+        "how much room is left".
+      operationId: checkBackupDestination
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/BackupDestinationName"
+      responses:
+        "200":
+          $ref: "#/components/responses/BackupDestinationCheckOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /compose/{id}/backup:
+    post:
+      summary: Back this app up to a destination
+      description: |
+        Returns as soon as the copy has started. A backup takes as long as it takes,
+        and its progress arrives on the message bus.
+
+        `hold_still` stops the app's containers for the length of the copy. Copying a
+        database while it is writing produces a backup that looks fine and does not
+        restore, so this defaults to stopping -- a real outage, chosen deliberately,
+        which the manifest records either way.
+      operationId: backupComposeApp
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/ComposeAppID"
+      requestBody:
+        $ref: "#/components/requestBodies/RequestBackup"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /compose/{id}/containers/stats:
     get:
       summary: Sample the CPU and memory usage of an app's containers
@@ -971,6 +1076,15 @@ components:
         type: string
         example: "syncthing"
 
+    BackupDestinationName:
+      name: name
+      description: Name of a backup destination
+      in: path
+      required: true
+      schema:
+        type: string
+        example: "offsite"
+
     ComposeContainerID:
       name: containerId
       description: ID of a container belonging to the compose app
@@ -1071,6 +1185,22 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ComposeApp"
+
+    RequestBackupDestination:
+      description: An rclone backend and its own options
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BackupDestinationSpec"
+
+    RequestBackup:
+      description: Where to put this backup, and whether to stop the app first
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BackupRequest"
 
     RequestContainerStatus:
       description: What to do to a single container
@@ -1363,6 +1493,31 @@ components:
               - properties:
                   data:
                     $ref: "#/components/schemas/ComposeAppContainers"
+
+    BackupDestinationsOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    type: array
+                    items:
+                      type: string
+                      example: "offsite"
+
+    BackupDestinationCheckOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/BackupDestinationSpace"
 
     ComposeAppContainerStatsOK:
       description: OK
@@ -1811,6 +1966,52 @@ components:
             $ref: "#/components/schemas/DeviceStoreInfo"
           x-oapi-codegen-extra-tags:
             yaml: ",omitempty"
+
+    BackupDestinationSpec:
+      required:
+        - backend
+      properties:
+        backend:
+          type: string
+          description: An rclone backend name, passed through untouched.
+          example: "s3"
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+          description: |-
+            That backend's own options. Not interpreted here: rclone knows what each
+            backend needs, and a list of required fields kept on this side would be
+            wrong the first time rclone gained an option.
+          example:
+            provider: "Wasabi"
+            access_key_id: "..."
+
+    BackupDestinationSpace:
+      properties:
+        used:
+          type: integer
+          format: int64
+        free:
+          type: integer
+          format: int64
+        total:
+          type: integer
+          format: int64
+
+    BackupRequest:
+      required:
+        - destination
+      properties:
+        destination:
+          type: string
+          example: "offsite"
+        hold_still:
+          type: boolean
+          default: true
+          description: |-
+            Stop the app's containers for the length of the copy. Leaving it running
+            takes a copy that may not restore.
 
     ContainerStats:
       description: What one container is using, sampled just now.
