@@ -42,11 +42,19 @@ func TestWhichImageAnUpdateWrites(t *testing.T) {
 			"stream to stream", "app:latest", "app:latest", false,
 		},
 		{
-			// a digest names one exact image; nothing about an update makes it another
-			"digest stays", "app@sha256:abc123", "app:1.2.3", false,
+			// A digest cannot be moved by a pull: `pull app@sha256:abc` returns that
+			// same image for ever. Writing the catalogue's reference over it is the
+			// ONLY way such an app updates, and leaving it alone freezes it -- which
+			// is what an earlier version of this rule did, and what
+			// TestDigestPinnedAppComparesByReference caught.
+			"a digest can only move by being rewritten", "app@sha256:abc123", "app:1.2.3", true,
 		},
 		{
-			"nothing writes over a digest in the catalogue either", "app:1.2.3", "app@sha256:abc123", false,
+			"and the catalogue may pin one", "app:1.2.3", "app@sha256:abc123", true,
+		},
+		{
+			// the catalogue floating still stops it: nothing there says which version
+			"a floating catalogue cannot un-pin a digest", "app@sha256:abc123", "app:latest", false,
 		},
 		{
 			// no tag at all means latest, which is a stream
@@ -85,6 +93,7 @@ func TestTheRuleReadsTheSameWhicheverWayRound(t *testing.T) {
 		{"app:1.2.3", "app:1.2.4"},
 		{"app:latest", "app:1.2.3"},
 		{"app@sha256:abc123", "app:1.2.3"},
+		{"app@sha256:abc123", "app:latest"},
 	}
 
 	for _, p := range pairs {

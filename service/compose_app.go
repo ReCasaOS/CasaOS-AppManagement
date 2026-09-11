@@ -424,28 +424,37 @@ func servicesUpdateCannotCreate(local, store types.Services) []string {
 // dashboard badges an app whose file the update then leaves exactly as it was, for
 // ever.
 //
-// The LOCAL reference decides first, and that is the fix for the case this was got
-// wrong on: an app tracking `develop` had its tag replaced by whatever fixed version
-// the catalogue named. Naming a stream is a choice, not an omission -- an update
-// pulls it rather than re-pinning it. A digest reference is the same answer for the
-// opposite reason: it names one exact image, and nothing about an update makes that
-// a different image.
+// The question it really asks is: can a PULL alone bring this app up to date? If it
+// can, the file keeps the reference it has. If it cannot, the catalogue's reference
+// is the only way forward and gets written.
 //
-// Only when the local reference names a version, and the catalogue names one too, is
-// the catalogue's the new version to write. A catalogue that floats says nothing
-// about which version to run, so it cannot un-pin somebody who pinned.
+// A local reference that floats can be pulled, so it stays -- which is the fix for
+// the case this was got wrong on: an app tracking `develop` had its tag replaced by
+// whatever fixed version the catalogue named, and naming a stream is a choice rather
+// than an omission.
+//
+// A digest is the opposite case, and reading it as "already exact, so leave it"
+// gets it exactly backwards: `pull acme/app@sha256:0000` returns that same image for
+// ever, so an app pinned to a digest can ONLY be updated by writing the catalogue's
+// new reference over it. Leaving it alone freezes the app.
+//
+// The catalogue floating is the one thing that stops a write either way: a
+// catalogue naming a stream says nothing about which version to run, so it cannot
+// un-pin somebody who pinned.
 //
 // This used to read the STORE image alone, so the answer depended on the tag the
 // catalogue happened to carry: a local `develop` survived a catalogue on `latest`
 // and was overwritten by a catalogue on `1.2.3`. Not a rule -- an accident.
 func updateWritesStoreImage(localImage, storeImage string) bool {
-	return referenceIsFixed(localImage) && referenceIsFixed(storeImage)
+	return !referenceFloats(localImage) && !referenceFloats(storeImage)
 }
 
-// referenceIsFixed reports whether an image reference names one particular version:
-// not a stream republished under the same name, and not a digest, which is already
-// as exact as a reference gets.
-func referenceIsFixed(image string) bool {
+// referenceFloats reports whether a pull can move this reference: a tag republished
+// under the same name as new images are built.
+//
+// A digest does not float. It is exact, and that is precisely why it has to be
+// rewritten to move.
+func referenceFloats(image string) bool {
 	_, tag := docker.ExtractImageAndTag(image)
 
 	// ExtractImageAndTag answers "" for a digest reference
@@ -453,7 +462,7 @@ func referenceIsFixed(image string) bool {
 		return false
 	}
 
-	return !lo.Contains(common.NeedCheckDigestTags, tag)
+	return lo.Contains(common.NeedCheckDigestTags, tag)
 }
 
 // TODO rename the function to service and add error return value
