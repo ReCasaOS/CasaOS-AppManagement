@@ -653,6 +653,31 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /compose/{id}/containers/stats:
+    get:
+      summary: Sample the CPU and memory usage of an app's containers
+      description: |
+        One entry per RUNNING container. A container that is not running uses
+        nothing, and the daemon has no sample to give for it.
+
+        CPU usage cannot be read from a single sample -- it is a counter that only
+        goes up, so one reading says how much CPU the container has used since it
+        started, not how much it is using now. Two frames are taken off the
+        daemon's stream per container, which is why this call takes about a second
+        whatever the size of the app.
+      operationId: composeAppContainerStats
+      tags:
+        - Compose methods
+      parameters:
+        - $ref: "#/components/parameters/ComposeAppID"
+      responses:
+        "200":
+          $ref: "#/components/responses/ComposeAppContainerStatsOK"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /compose/{id}/containers/{containerId}/status:
     put:
       summary: Start, stop or restart one container of a compose app
@@ -1339,6 +1364,19 @@ components:
                   data:
                     $ref: "#/components/schemas/ComposeAppContainers"
 
+    ComposeAppContainerStatsOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ContainerStats"
+
     ComposeAppLogsOK:
       description: OK
       content:
@@ -1773,6 +1811,41 @@ components:
             $ref: "#/components/schemas/DeviceStoreInfo"
           x-oapi-codegen-extra-tags:
             yaml: ",omitempty"
+
+    ContainerStats:
+      description: What one container is using, sampled just now.
+      required:
+        - container_id
+        - service
+        - cpu_percent
+        - memory_used
+        - memory_limit
+      properties:
+        container_id:
+          type: string
+          example: "3f1c9a2b4d5e"
+        service:
+          type: string
+          example: "jellyfin"
+        cpu_percent:
+          type: number
+          format: double
+          description: |-
+            Percent of ONE CPU, as `docker stats` reports it: a container using all
+            of two cores reads 200, not 100.
+          example: 12.5
+        memory_used:
+          type: integer
+          format: int64
+          description: Bytes held, with the page cache subtracted.
+          example: 268435456
+        memory_limit:
+          type: integer
+          format: int64
+          description: |-
+            Bytes the container may use. The host's whole memory when the container
+            declares no limit of its own.
+          example: 8589934592
 
     ComposeAppContainers:
       description: |-
