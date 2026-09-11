@@ -5,6 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
+
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"go.uber.org/zap"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 )
@@ -33,6 +37,7 @@ type containerStopStarter interface {
 // they were stopped.
 type heldApp struct {
 	docker  containerStopStarter
+	app     string
 	stopped []string
 }
 
@@ -69,10 +74,21 @@ func runningContainerIDs(containerLists map[string][]codegen.ContainerSummary) [
 // caller that defers it immediately cannot forget, and a failure part-way through
 // has already put some containers down that must come back up. Returning nil on
 // the error path is how half an app stays stopped.
-func holdApp(ctx context.Context, docker containerStopStarter, containerLists map[string][]codegen.ContainerSummary) (release func() error, err error) {
-	held := &heldApp{docker: docker}
+func holdApp(ctx context.Context, docker containerStopStarter, app string, containerLists map[string][]codegen.ContainerSummary) (release func() error, err error) {
+	held := &heldApp{docker: docker, app: app}
 
-	for _, id := range runningContainerIDs(containerLists) {
+	running := runningContainerIDs(containerLists)
+
+	// Written down BEFORE the first stop. A process killed between the two is
+	// exactly what this note exists for, and one written afterwards would not be
+	// there yet. A note that cannot be written is not fatal -- the backup still
+	// runs and the deferred release still covers every failure except the one
+	// where nothing runs at all.
+	if err := rememberHeld(app, running, time.Now()); err != nil {
+		logger.Error("could not write down which containers are being stopped", zap.Error(err), zap.String("app", app))
+	}
+
+	for _, id := range running {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return held.release, ctxErr
 		}
@@ -106,6 +122,13 @@ func (h *heldApp) release() error {
 	}
 
 	h.stopped = nil
+
+	// Erased only once every container has been attempted. A note left behind by a
+	// release that half-failed is a note that gets acted on at the next startup,
+	// which is the right outcome.
+	if err := forgetHeld(h.app); err != nil {
+		failures = append(failures, err)
+	}
 
 	return errors.Join(failures...)
 }

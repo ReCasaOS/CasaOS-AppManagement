@@ -79,6 +79,15 @@ func main() {
 		// last run left rather than none until a sweep has finished
 		service.LoadImageUpdates()
 
+		// A backup stops the app it is copying and starts it again afterwards. A
+		// process killed in between -- an upgrade, a power cut -- leaves the app off
+		// and nothing looking at it. This is the only thing that looks.
+		//
+		// Once, here, and never on a tick: a note belonging to a backup running right
+		// now would be read as one to undo, and the app would come back up in the
+		// middle of its own copy.
+		service.RecoverHeldApps(service.MyService.Docker())
+
 		config.RemoveRuntimeIfNoNvidiaGPUFlag = *removeRuntimeIfNoNvidiaGPUFlag
 	}
 

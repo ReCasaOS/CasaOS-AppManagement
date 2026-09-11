@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 )
@@ -38,6 +41,18 @@ func (f *fakeDocker) StartContainer(id string) error {
 	return nil
 }
 
+// holdApp now writes down what it is about to stop, so every test here needs
+// somewhere of its own to write it -- otherwise they scribble on the real path.
+func holdNoteInTempDir(t *testing.T) {
+	t.Helper()
+
+	logger.LogInitConsoleOnly()
+
+	was := BackupHoldPath
+	BackupHoldPath = filepath.Join(t.TempDir(), "holding.json")
+	t.Cleanup(func() { BackupHoldPath = was })
+}
+
 func lists(states ...[2]string) map[string][]codegen.ContainerSummary {
 	out := map[string][]codegen.ContainerSummary{}
 	for i, s := range states {
@@ -49,9 +64,11 @@ func lists(states ...[2]string) map[string][]codegen.ContainerSummary {
 }
 
 func TestOnlyWhatWasRunningIsStoppedAndStartedAgain(t *testing.T) {
+	holdNoteInTempDir(t)
+
 	docker := &fakeDocker{}
 
-	release, err := holdApp(context.Background(), docker, lists(
+	release, err := holdApp(context.Background(), docker, "demo", lists(
 		[2]string{"c1", "running"},
 		[2]string{"c2", "exited"},
 		[2]string{"c3", "running"},
@@ -79,9 +96,11 @@ func TestOnlyWhatWasRunningIsStoppedAndStartedAgain(t *testing.T) {
 // An app half stopped is worse than one that was never touched, and the caller
 // cannot tell how far this got.
 func TestAFailureToStopPutsBackWhatWasAlreadyDown(t *testing.T) {
+	holdNoteInTempDir(t)
+
 	docker := &fakeDocker{failStop: map[string]error{"c2": errors.New("daemon said no")}}
 
-	release, err := holdApp(context.Background(), docker, lists(
+	release, err := holdApp(context.Background(), docker, "demo", lists(
 		[2]string{"c1", "running"},
 		[2]string{"c2", "running"},
 		[2]string{"c3", "running"},
@@ -109,9 +128,11 @@ func TestAFailureToStopPutsBackWhatWasAlreadyDown(t *testing.T) {
 // Stopping at the first failure would leave the rest of the app off for the sake
 // of a tidier error.
 func TestEveryContainerIsStartedEvenAfterOneFails(t *testing.T) {
+	holdNoteInTempDir(t)
+
 	docker := &fakeDocker{failStart: map[string]error{"c2": errors.New("port already bound")}}
 
-	release, err := holdApp(context.Background(), docker, lists(
+	release, err := holdApp(context.Background(), docker, "demo", lists(
 		[2]string{"c1", "running"},
 		[2]string{"c2", "running"},
 		[2]string{"c3", "running"},
@@ -135,9 +156,11 @@ func TestEveryContainerIsStartedEvenAfterOneFails(t *testing.T) {
 
 // Releasing twice must not start an app somebody stopped in between.
 func TestReleasingTwiceStartsNothingTheSecondTime(t *testing.T) {
+	holdNoteInTempDir(t)
+
 	docker := &fakeDocker{}
 
-	release, err := holdApp(context.Background(), docker, lists([2]string{"c1", "running"}))
+	release, err := holdApp(context.Background(), docker, "demo", lists([2]string{"c1", "running"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,9 +180,11 @@ func TestReleasingTwiceStartsNothingTheSecondTime(t *testing.T) {
 // A paused or restarting container is not a settled state to copy from either,
 // and it stops and starts with the same calls.
 func TestPausedAndRestartingCountAsUp(t *testing.T) {
+	holdNoteInTempDir(t)
+
 	docker := &fakeDocker{}
 
-	if _, err := holdApp(context.Background(), docker, lists(
+	if _, err := holdApp(context.Background(), docker, "demo", lists(
 		[2]string{"c1", "paused"},
 		[2]string{"c2", "restarting"},
 		[2]string{"c3", "dead"},
@@ -173,11 +198,13 @@ func TestPausedAndRestartingCountAsUp(t *testing.T) {
 }
 
 func TestACancelledContextStopsStoppingAndGivesBackWhatItTook(t *testing.T) {
+	holdNoteInTempDir(t)
+
 	docker := &fakeDocker{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	release, err := holdApp(ctx, docker, lists([2]string{"c1", "running"}))
+	release, err := holdApp(ctx, docker, "demo", lists([2]string{"c1", "running"}))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want the cancellation, got %v", err)
 	}
@@ -195,9 +222,11 @@ func TestACancelledContextStopsStoppingAndGivesBackWhatItTook(t *testing.T) {
 // A service the compose file declares but Docker runs nothing for contributes no
 // container to stop, and an empty app is not an error.
 func TestAnAppThatIsAlreadyDown(t *testing.T) {
+	holdNoteInTempDir(t)
+
 	docker := &fakeDocker{}
 
-	release, err := holdApp(context.Background(), docker, map[string][]codegen.ContainerSummary{
+	release, err := holdApp(context.Background(), docker, "demo", map[string][]codegen.ContainerSummary{
 		"web":  {},
 		"idle": nil,
 	})

@@ -102,7 +102,7 @@ func RunBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 			return manifest, fmt.Errorf("could not read the app's containers, so it was not held still: %w", err)
 		}
 
-		release, err := holdApp(ctx, docker, containerLists)
+		release, err := holdApp(ctx, docker, app.Name, containerLists)
 		// Deferred before the error is examined: a stop that failed part-way has
 		// already put containers down, and they come back either way.
 		defer func() {
