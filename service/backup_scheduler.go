@@ -133,16 +133,7 @@ func runScheduled(ctx context.Context, now time.Time, schedule BackupSchedule, r
 	}
 
 	manifest, err := runner.Run(ctx, schedule, stamp)
-	record.FinishedAt = time.Now()
-	record.Copied = len(manifest.Operations)
-	record.SkippedCount = len(manifest.Skipped)
-	if err != nil {
-		record.Error = err.Error()
-	}
-
-	if logErr := RecordBackupRun(record); logErr != nil {
-		logger.Error("a backup ran and could not be written down", zap.Error(logErr), zap.String("app", schedule.App))
-	}
+	finishBackupRecord(&record, manifest, err)
 
 	if err != nil {
 		logger.Error("scheduled backup failed",

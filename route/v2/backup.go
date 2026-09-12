@@ -135,7 +135,7 @@ func (a *AppManagement) BackupComposeApp(ctx echo.Context, id codegen.ComposeApp
 }
 
 func runBackupInBackground(ctx context.Context, composeApp *service.ComposeApp, destination, stamp string, holdStill bool) {
-	manifest, err := service.RunBackup(ctx, composeApp, service.MyService.Docker(), rclone.NewClient(), service.BackupOptions{
+	manifest, err := service.BackupOnDemand(ctx, composeApp, service.MyService.Docker(), rclone.NewClient(), service.BackupOptions{
 		Destination: destination,
 		Stamp:       stamp,
 		HoldStill:   holdStill,
