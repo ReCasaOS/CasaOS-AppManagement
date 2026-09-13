@@ -13,6 +13,7 @@ require (
 	github.com/getkin/kin-openapi v0.114.0
 	github.com/go-resty/resty/v2 v2.7.0
 	github.com/hashicorp/go-getter v1.7.0
+	github.com/labstack/echo-jwt/v4 v4.4.0
 	github.com/labstack/echo/v4 v4.15.4
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/opencontainers/image-spec v1.1.0
@@ -121,7 +122,6 @@ require (
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/klauspost/pgzip v1.2.5 // indirect
-	github.com/labstack/echo-jwt/v4 v4.4.0 // indirect
 	github.com/labstack/gommon v0.5.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
@@ -235,7 +235,7 @@ require (
 )
 
 require (
-	github.com/ReCasaOS/CasaOS-Common v0.4.24
+	github.com/ReCasaOS/CasaOS-Common v0.4.25
 	github.com/compose-spec/compose-go/v2 v2.1.0
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf
 	github.com/docker/cli v26.1.0+incompatible
