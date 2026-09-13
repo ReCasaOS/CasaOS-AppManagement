@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -53,12 +54,39 @@ func (a *AppManagement) SetBackupDestination(ctx echo.Context, name codegen.Back
 		parameters = *spec.Parameters
 	}
 
-	if err := rclone.NewClient().CreateDestination(string(name), spec.Backend, parameters); err != nil {
+	var err error
+	if spec.Encrypt != nil && *spec.Encrypt {
+		password := ""
+		if spec.Password != nil {
+			password = *spec.Password
+		}
+		err = rclone.NewClient().CreateEncryptedDestination(string(name), spec.Backend, parameters, password)
+	} else {
+		err = rclone.NewClient().CreateDestination(string(name), spec.Backend, parameters)
+	}
+	if err != nil {
 		return backupError(ctx, err)
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.BaseResponse{
 		Message: utils.Ptr(fmt.Sprintf("destination `%s` saved", name)),
+	})
+}
+
+// DeleteBackupRun removes one backup from a destination. The run log keeps its
+// record: that a backup was taken and later deleted is history worth keeping.
+func (a *AppManagement) DeleteBackupRun(ctx echo.Context, name codegen.BackupDestinationName, app codegen.BackupApp, stamp codegen.BackupStamp) error {
+	if app == "" || stamp == "" {
+		message := "a backup is named by its app and its stamp"
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	if err := rclone.NewClient().Purge(ctx.Request().Context(), string(name), path.Join(string(app), string(stamp))); err != nil {
+		return backupError(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.BaseResponse{
+		Message: utils.Ptr(fmt.Sprintf("backup `%s` of `%s` deleted from `%s`", stamp, app, name)),
 	})
 }
 

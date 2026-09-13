@@ -30,6 +30,12 @@ import (
 // SocketPath is where the unit file puts the daemon's socket.
 const SocketPath = "/var/run/rclone/rclone.sock"
 
+// RawSuffix marks the remote underneath an encrypted destination: the bucket or
+// the server itself, which holds only ciphertext and is never listed as a
+// destination in its own right. A name ending in it is refused, so the two can
+// always be told apart.
+const RawSuffix = "-raw"
+
 // DestinationPrefix marks a remote as one of ours.
 //
 // Backup destinations live in rclone's own config, next to the cloud drives
@@ -115,7 +121,7 @@ func (c *Client) Destinations() ([]string, error) {
 
 	names := []string{}
 	for _, remote := range result.Remotes {
-		if short, ok := strings.CutPrefix(remote, DestinationPrefix); ok {
+		if short, ok := strings.CutPrefix(remote, DestinationPrefix); ok && !strings.HasSuffix(short, RawSuffix) {
 			names = append(names, short)
 		}
 	}
@@ -152,9 +158,20 @@ func (c *Client) CreateDestination(name, backend string, parameters map[string]s
 // DeleteDestination forgets a destination and its credentials. Whatever was
 // already copied to it stays where it is: this removes the way in, not the backup.
 func (c *Client) DeleteDestination(name string) error {
-	return c.call("/config/delete", map[string]string{
+	if err := c.call("/config/delete", map[string]string{
 		"name": DestinationPrefix + name,
+	}, nil); err != nil {
+		return err
+	}
+
+	// The remote underneath an encrypted destination goes with it. Deleting a
+	// remote that does not exist is not an error worth reporting: a plain
+	// destination has none.
+	_ = c.call("/config/delete", map[string]string{
+		"name": DestinationPrefix + name + RawSuffix,
 	}, nil)
+
+	return nil
 }
 
 // DestinationSpace is what a destination says about itself when asked.
@@ -181,4 +198,52 @@ func (c *Client) CheckDestination(name string) (DestinationSpace, error) {
 	}, &space)
 
 	return space, err
+}
+
+// CreateEncryptedDestination makes a destination whose contents -- names and
+// bytes both -- are encrypted before they leave this box.
+//
+// Two remotes: the backend itself under the raw name, and rclone's crypt backend
+// on top of it under the destination's name. Everything else in this package
+// talks to the top one and never knows the difference; a bucket at a provider
+// holds ciphertext it cannot read. The password is obscured by rclone into its
+// config the way it obscures every password it keeps, and is not readable back
+// through this API.
+func (c *Client) CreateEncryptedDestination(name, backend string, parameters map[string]string, password string) error {
+	if name == "" {
+		return errors.New("a destination needs a name")
+	}
+	if strings.HasSuffix(name, RawSuffix) {
+		return fmt.Errorf("a destination's name cannot end in %q", RawSuffix)
+	}
+	if password == "" {
+		return errors.New("an encrypted destination needs a password")
+	}
+
+	if err := c.CreateDestination(name+RawSuffix, backend, parameters); err != nil {
+		return err
+	}
+
+	encoded, err := json.Marshal(map[string]string{
+		"remote":   DestinationPrefix + name + RawSuffix + ":",
+		"password": password,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := c.call("/config/create", map[string]string{
+		"name":       DestinationPrefix + name,
+		"type":       "crypt",
+		"parameters": string(encoded),
+		"opt":        `{"obscure": true}`,
+	}, nil); err != nil {
+		// half a destination is worse than none: the raw remote alone would be
+		// listed by nothing and reachable by anything
+		_ = c.DeleteDestination(name + RawSuffix)
+
+		return err
+	}
+
+	return nil
 }

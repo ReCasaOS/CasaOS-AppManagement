@@ -777,6 +777,26 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /backup/destinations/{name}/runs/{app}/{stamp}:
+    delete:
+      summary: Delete one backup at a destination
+      description: |
+        Removes that run's folder from the destination. The run log keeps its
+        record -- that a backup was taken and later deleted is history worth
+        keeping -- and the destination no longer lists it.
+      operationId: deleteBackupRun
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/BackupDestinationName"
+        - $ref: "#/components/parameters/BackupApp"
+        - $ref: "#/components/parameters/BackupStamp"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /backup/destinations/{name}/runs:
     get:
       summary: What a destination holds
@@ -1230,6 +1250,22 @@ components:
     BackupDestinationName:
       name: name
       description: Name of a backup destination
+      in: path
+      required: true
+      schema:
+        type: string
+
+    BackupApp:
+      name: app
+      description: The app a backup is of
+      in: path
+      required: true
+      schema:
+        type: string
+
+    BackupStamp:
+      name: stamp
+      description: Which run, as the run log names it
       in: path
       required: true
       schema:
@@ -2389,6 +2425,16 @@ components:
           type: string
           description: An rclone backend name, passed through untouched.
           example: "s3"
+        encrypt:
+          type: boolean
+          description: |-
+            Encrypt names and contents before they leave this box, with rclone's
+            crypt backend on top of the one named. A bucket at a provider then holds
+            ciphertext it cannot read. The password is kept by rclone, obscured, and
+            cannot be read back; losing it loses every backup at this destination.
+        password:
+          type: string
+          description: The encryption password. Required with `encrypt`; never returned.
         parameters:
           type: object
           additionalProperties:
