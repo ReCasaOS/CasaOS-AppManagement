@@ -777,6 +777,29 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /backup/destinations/{name}/runs:
+    get:
+      summary: What a destination holds
+      description: |
+        The apps a destination holds backups of, and their runs, newest first --
+        for somebody restoring to a box whose own run log is empty. Each app says
+        whether this box runs it now; a restore of one that it does not installs
+        it first, from the backup's own compose file.
+
+        Two folder listings per app and no manifest reads: a destination holding a
+        year of nightly runs would take a year of round trips to describe, and the
+        restore reads the one manifest it needs.
+      operationId: backupDestinationRuns
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/BackupDestinationName"
+      responses:
+        "200":
+          $ref: "#/components/responses/BackupDestinationRunsOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /compose/{id}/backup:
     post:
       summary: Back this app up to a destination
@@ -1699,6 +1722,19 @@ components:
                     items:
                       $ref: "#/components/schemas/BackupSchedule"
 
+    BackupDestinationRunsOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BackupHeldApp"
+
     BackupRunsOK:
       description: OK
       content:
@@ -2376,6 +2412,24 @@ components:
         total:
           type: integer
           format: int64
+
+    BackupHeldApp:
+      description: One app a destination holds backups of.
+      required:
+        - app
+        - installed
+        - stamps
+      properties:
+        app:
+          type: string
+        installed:
+          type: boolean
+          description: Whether this box runs the app now. A restore of one it does not installs it first, from the backup.
+        stamps:
+          type: array
+          description: Its runs, newest first, as the run log names them.
+          items:
+            type: string
 
     RestoreRequest:
       required:

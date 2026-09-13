@@ -398,3 +398,30 @@ func backupRunOut(record service.BackupRunRecord) codegen.BackupRunRecord {
 		Error: &record.Error, Restore: &record.Restore,
 	}
 }
+
+// BackupDestinationRuns is what a destination holds: the apps it has backups
+// of, their runs newest first, and whether this box runs each app now.
+func (a *AppManagement) BackupDestinationRuns(ctx echo.Context, name codegen.BackupDestinationName) error {
+	composeApps, err := service.MyService.Compose().List(ctx.Request().Context())
+	if err != nil {
+		return backupError(ctx, err)
+	}
+	installed := map[string]bool{}
+	for appName := range composeApps {
+		installed[appName] = true
+	}
+
+	held, err := service.DestinationContents(ctx.Request().Context(), rclone.NewClient(), string(name), installed)
+	if err != nil {
+		return backupError(ctx, err)
+	}
+
+	out := make([]codegen.BackupHeldApp, 0, len(held))
+	for _, app := range held {
+		out = append(out, codegen.BackupHeldApp{App: app.App, Installed: app.Installed, Stamps: app.Stamps})
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.BackupDestinationRunsOK{
+		Message: utils.Ptr("OK"), Data: &out,
+	})
+}
