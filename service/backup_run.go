@@ -66,6 +66,21 @@ func RunBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 		return BackupManifest{}, errors.New("a backup needs a name to file it under")
 	}
 
+	ctx = backupEventContext(ctx, app, opts.Destination, opts.Stamp, "backup")
+	publishBackupBegin(ctx)
+	manifest, err := runBackup(ctx, app, docker, copier, opts)
+	if err != nil {
+		publishBackupError(ctx, err)
+		return manifest, err
+	}
+	publishBackupEnd(ctx)
+
+	return manifest, nil
+}
+
+// runBackup is the copy itself; RunBackup wraps it in what it says about it.
+func runBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier BackupCopier, opts BackupOptions) (BackupManifest, error) {
+
 	inventory := app.BackupInventory()
 
 	// Which volumes, then where they are. Asked for all of them at once so one
@@ -118,7 +133,8 @@ func RunBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 
 	root := RootFor(app.Name, opts.Stamp)
 
-	for _, operation := range manifest.Operations {
+	for i, operation := range manifest.Operations {
+		publishBackupProgress(ctx, i, len(manifest.Operations)+1, operation.Destination)
 		destination := path.Join(root, operation.Destination)
 
 		var err error
@@ -133,6 +149,7 @@ func RunBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 		}
 	}
 
+	publishBackupProgress(ctx, len(manifest.Operations), len(manifest.Operations)+1, ManifestFileName)
 	if err := writeManifest(ctx, manifest, copier, opts.Destination, root); err != nil {
 		return manifest, err
 	}

@@ -93,6 +93,23 @@ func RestoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 	if err != nil {
 		return report, err
 	}
+	// Said from here rather than from the top: an app that is not installed has
+	// no title to say until its manifest has been read.
+	ctx = backupEventContext(ctx, &ComposeApp{Name: opts.App}, opts.Destination, opts.Stamp, "restore")
+	publishBackupBegin(ctx)
+	report, err = restoreBackup(ctx, installed, docker, restorer, install, opts, manifest, root)
+	if err != nil {
+		publishBackupError(ctx, err)
+		return report, err
+	}
+	publishBackupEnd(ctx)
+
+	return report, nil
+}
+
+// restoreBackup is the copy itself; RestoreBackup wraps it in what it says.
+func restoreBackup(ctx context.Context, installed *ComposeApp, docker backupDocker, restorer BackupRestorer, install RestoreInstaller, opts RestoreOptions, manifest BackupManifest, root string) (RestoreReport, error) {
+	report := RestoreReport{Restored: []BackupOperation{}, Missing: []BackupOperation{}, Skipped: []BackupEntry{}}
 	if manifest.App != opts.App {
 		return report, fmt.Errorf("the backup at %s is of `%s`, not `%s`", root, manifest.App, opts.App)
 	}
@@ -158,7 +175,7 @@ func RestoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 		return report, err
 	}
 
-	for _, operation := range local.Operations {
+	for i, operation := range local.Operations {
 		// The definition is not data. For an installed app the compose file it
 		// runs now stays; the backup's copy was only ever for an app that had to
 		// be installed first, and that has happened above by then.
@@ -171,6 +188,7 @@ func RestoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 			continue
 		}
 		delete(byDestination, operation.Destination)
+		publishBackupProgress(ctx, i, len(local.Operations), operation.Destination)
 
 		remote := path.Join(root, operation.Destination)
 		if operation.Directory {

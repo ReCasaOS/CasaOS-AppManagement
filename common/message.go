@@ -81,6 +81,27 @@ var (
 	}
 )
 
+// backup properties
+var (
+	PropertyTypeBackupDestination = message_bus.PropertyType{
+		Name:        "backup:destination",
+		Description: utils.Ptr("name of the destination a backup goes to or comes from"),
+		Example:     utils.Ptr("offsite"),
+	}
+	PropertyTypeBackupStamp = message_bus.PropertyType{
+		Name:        "backup:stamp",
+		Description: utils.Ptr("which run, as the run log names it"),
+		Example:     utils.Ptr("2026-09-13T02-29-56Z"),
+	}
+	// PropertyTypeBackupKind tells a backup from a restore: the same four events
+	// carry both, since a dashboard shows both the same way.
+	PropertyTypeBackupKind = message_bus.PropertyType{
+		Name:        "backup:kind",
+		Description: utils.Ptr("`backup` or `restore`"),
+		Example:     utils.Ptr("backup"),
+	}
+)
+
 // app update properties
 var (
 	// PropertyTypeAppUpdated is set only when an update actually replaced what the app
@@ -100,6 +121,7 @@ var EventTypes = []message_bus.EventType{
 	EventTypeAppInstallBegin, EventTypeAppInstallProgress, EventTypeAppInstallEnd, EventTypeAppInstallError,
 	EventTypeAppUninstallBegin, EventTypeAppUninstallEnd, EventTypeAppUninstallError,
 	EventTypeAppUpdateBegin, EventTypeAppUpdateEnd, EventTypeAppUpdateError,
+	EventTypeBackupBegin, EventTypeBackupProgress, EventTypeBackupEnd, EventTypeBackupError,
 	EventTypeAppApplyChangesBegin, EventTypeAppApplyChangesEnd, EventTypeAppApplyChangesError,
 	EventTypeAppStartBegin, EventTypeAppStartEnd, EventTypeAppStartError,
 	EventTypeAppStopBegin, EventTypeAppStopEnd, EventTypeAppStopError,
@@ -223,6 +245,48 @@ var (
 		SourceID: AppManagementServiceName,
 		Name:     "app:update-error",
 		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeMessage,
+		},
+	}
+
+	// A backup or a restore, from start to end. Progress is one event per
+	// operation rather than per byte: what a person watching wants to know is
+	// which folder it is on and how many are left, and rclone's own transfer
+	// statistics are a job away for anyone who wants bytes.
+	EventTypeBackupBegin = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "backup:begin",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName, PropertyTypeAppTitle, PropertyTypeAppIcon,
+			PropertyTypeBackupDestination, PropertyTypeBackupStamp, PropertyTypeBackupKind,
+		},
+	}
+
+	EventTypeBackupProgress = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "backup:progress",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName, PropertyTypeAppTitle, PropertyTypeAppIcon,
+			PropertyTypeBackupDestination, PropertyTypeBackupStamp, PropertyTypeBackupKind,
+			PropertyTypeAppProgress, PropertyTypeMessage,
+		},
+	}
+
+	EventTypeBackupEnd = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "backup:end",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName, PropertyTypeAppTitle, PropertyTypeAppIcon,
+			PropertyTypeBackupDestination, PropertyTypeBackupStamp, PropertyTypeBackupKind,
+		},
+	}
+
+	EventTypeBackupError = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "backup:error",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName, PropertyTypeAppTitle, PropertyTypeAppIcon,
+			PropertyTypeBackupDestination, PropertyTypeBackupStamp, PropertyTypeBackupKind,
 			PropertyTypeMessage,
 		},
 	}
