@@ -252,13 +252,7 @@ func (a *AppManagement) BackupRuns(ctx echo.Context) error {
 
 	out := make([]codegen.BackupRunRecord, 0, len(records))
 	for _, record := range records {
-		out = append(out, codegen.BackupRunRecord{
-			App: &record.App, Destination: &record.Destination, Stamp: &record.Stamp,
-			StartedAt: &record.StartedAt, FinishedAt: &record.FinishedAt,
-			Scheduled: &record.Scheduled, ContainersStopped: &record.ContainersStopped,
-			Copied: &record.Copied, SkippedCount: &record.SkippedCount,
-			Error: &record.Error,
-		})
+		out = append(out, backupRunOut(record))
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.BackupRunsOK{
@@ -385,4 +379,22 @@ func installFromBackup(ctx context.Context, name string, compose, env []byte) (*
 	}
 
 	return composeApp, nil
+}
+
+// backupRunOut is the record as the API shows it.
+//
+// Field by field, because the generated type is pointers and the service type
+// is not -- and a field forgotten here is a field the dashboard and the install
+// check never see. The restore flag was forgotten here first: the log had it,
+// the API did not, and the check waited two minutes for a run it had already
+// been handed. The test beside this compares the two encodings whole, so the
+// next field added to the record cannot be dropped here silently.
+func backupRunOut(record service.BackupRunRecord) codegen.BackupRunRecord {
+	return codegen.BackupRunRecord{
+		App: &record.App, Destination: &record.Destination, Stamp: &record.Stamp,
+		StartedAt: &record.StartedAt, FinishedAt: &record.FinishedAt,
+		Scheduled: &record.Scheduled, ContainersStopped: &record.ContainersStopped,
+		Copied: &record.Copied, SkippedCount: &record.SkippedCount,
+		Error: &record.Error, Restore: &record.Restore,
+	}
 }

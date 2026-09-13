@@ -1,6 +1,9 @@
 package v2
 
 import (
+	"encoding/json"
+	"github.com/ReCasaOS/CasaOS-AppManagement/service"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -40,5 +43,37 @@ func TestTheStampSortsAndSurvivesAFilesystem(t *testing.T) {
 		if strings.Contains(later, bad) {
 			t.Fatalf("%q contains %q", later, bad)
 		}
+	}
+}
+
+// The API's record and the service's record carry the same JSON tags, so the
+// two encodings of one run must be identical. A field added to the record and
+// forgotten in backupRunOut shows up here as a difference, which is how the
+// restore flag went missing from the API on its first release.
+func TestEveryFieldOfARunReachesTheAPI(t *testing.T) {
+	now := time.Date(2026, 9, 13, 3, 7, 6, 0, time.UTC)
+	record := service.BackupRunRecord{
+		App: "smoke", Destination: "offsite", Stamp: "2026-09-13T03-06-54Z",
+		StartedAt: now, FinishedAt: now.Add(3 * time.Second),
+		Scheduled: true, ContainersStopped: true, Copied: 2, SkippedCount: 1,
+		Error: "nope", Restore: true,
+	}
+
+	// keys, not bytes: the generated type lists its fields alphabetically
+	asMap := func(v interface{}) map[string]interface{} {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]interface{}{}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	want, got := asMap(record), asMap(backupRunOut(record))
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("a field was dropped on the way out -- service: %v -- api: %v", want, got)
 	}
 }
