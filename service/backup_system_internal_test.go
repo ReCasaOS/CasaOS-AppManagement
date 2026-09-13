@@ -142,3 +142,43 @@ func TestABackupOfAnAppIsNotPouredIntoTheBox(t *testing.T) {
 		t.Fatalf("want the refusal, got %v", err)
 	}
 }
+
+// The numbers in a backup are given out over the parts that were present when
+// it was taken. A box without a Samba config had its database folder as
+// binds/2; paired by number with this box's second path, that folder went where
+// the Samba config goes and the next one over the database. Each part goes back
+// to its own path, whatever number the copy landed under.
+func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *testing.T) {
+	logInTempDir(t)
+
+	// taken on a box with no Samba config: four parts, numbered 1..4
+	present := func(p string) bool { return p != "/etc/samba/smb.casa.conf" }
+	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(present), nil)
+	for i := range manifest.Operations {
+		manifest.Operations[i].Directory = !strings.HasSuffix(manifest.Operations[i].Source, ".conf")
+	}
+	raw, _ := stdjson.Marshal(manifest)
+	root := RootFor(SystemBackupName, restoreStamp)
+	restorer := &fakeRestorer{files: map[string][]byte{path.Join(root, ManifestFileName): raw}}
+
+	report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Restored) != 4 || len(report.Missing) != 0 {
+		t.Fatalf("four parts back, nothing missing: %+v", report)
+	}
+	for _, call := range restorer.restored {
+		// binds/2 in this backup is the database folder, and it must land there
+		if strings.HasSuffix(call.remote, "binds/2") && call.host != "/var/lib/casaos/db" {
+			t.Fatalf("binds/2 went to %s", call.host)
+		}
+		if call.host == "/etc/samba/smb.casa.conf" {
+			t.Fatalf("nothing was in the backup for the Samba config, so nothing may be written there: %+v", call)
+		}
+		if strings.HasSuffix(call.host, "rclone.conf") && call.kind != "file" {
+			t.Fatalf("a file comes back as a file: %+v", call)
+		}
+	}
+}

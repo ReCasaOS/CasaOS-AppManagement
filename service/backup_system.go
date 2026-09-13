@@ -206,21 +206,21 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 	ctx = backupEventContext(ctx, &ComposeApp{Name: SystemBackupName}, opts.Destination, opts.Stamp, "restore")
 	publishBackupBegin(ctx)
 
-	byDestination := map[string]BackupOperation{}
+	// Matched by the path each part belongs to, never by its number in the
+	// backup. The numbers are given out in order over the parts that were
+	// PRESENT when the backup was taken; a box without a Samba config had its
+	// database folder as binds/2, and a restore that paired binds/2 with this
+	// box's second path put that database folder where the Samba config goes
+	// and the next folder's contents over the database. The path is the
+	// identity; the number is where the copy happened to land.
+	byTarget := map[string]BackupOperation{}
 	for _, operation := range manifest.Operations {
-		byDestination[operation.Destination] = operation
+		byTarget[operation.Target] = operation
 	}
 
 	// The plan is built from the paths, not from what exists: a folder this box
 	// does not have yet is exactly what a restore to a fresh box puts there.
 	local := PlanBackup(SystemBackupName, SystemBackupInventory(func(string) bool { return true }), nil)
-	// what is a file and what is a folder is the backup's knowledge, since the
-	// path may not exist here yet
-	for i := range local.Operations {
-		if held, ok := byDestination[local.Operations[i].Destination]; ok {
-			local.Operations[i].Directory = held.Directory
-		}
-	}
 
 	rcloneTouched := false
 	err = func() error {
@@ -231,13 +231,17 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 		}
 
 		for i, operation := range local.Operations {
-			if _, held := byDestination[operation.Destination]; !held {
+			held, ok := byTarget[operation.Target]
+			if !ok {
 				continue
 			}
-			delete(byDestination, operation.Destination)
-			publishBackupProgress(ctx, i, len(local.Operations), operation.Destination)
+			delete(byTarget, operation.Target)
+			publishBackupProgress(ctx, i, len(local.Operations), held.Destination)
 
-			remote := path.Join(root, operation.Destination)
+			// where the copy landed, and what it was: the backup's knowledge, since
+			// the path may not exist here yet
+			remote := path.Join(root, held.Destination)
+			operation.Directory = held.Directory
 			if operation.Directory {
 				err = restorer.RestoreDirectory(ctx, opts.Destination, remote, operation.Source)
 			} else {
@@ -261,7 +265,7 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 	}
 
 	for _, operation := range manifest.Operations {
-		if _, left := byDestination[operation.Destination]; left {
+		if _, left := byTarget[operation.Target]; left {
 			report.Missing = append(report.Missing, operation)
 		}
 	}
