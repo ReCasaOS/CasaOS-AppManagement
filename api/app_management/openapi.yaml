@@ -848,6 +848,34 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /backup/system:
+    post:
+      summary: Back this box up
+      description: |
+        Not the apps: the box itself. Its users, its shares and their accounts,
+        its schedules, the destinations it sends backups to -- `/etc/casaos`,
+        `/etc/samba/smb.casa.conf`, `/var/lib/casaos/db`, `/var/lib/casaos/conf`
+        and rclone's configuration -- filed at the destination under the name
+        `casaos-system`, which the destination listing shows and a restore of that
+        name puts back. The services holding those files are stopped for the copy
+        by default, since sqlite files copied under a running writer are the same
+        bad backup a database in a container would be, and started again after.
+
+        Returns as soon as the copy has started; the outcome is written to the run
+        log under `casaos-system`.
+      operationId: backupSystem
+      tags:
+        - Backup methods
+      requestBody:
+        $ref: "#/components/requestBodies/RequestSystemBackup"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /backup/restore:
     post:
       summary: Put an app back from a backup
@@ -1411,6 +1439,14 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/BackupRequest"
+
+    RequestSystemBackup:
+      description: Where to put a backup of the box itself, and whether to stop its services first
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SystemBackupRequest"
 
     RequestRestore:
       description: Which backup to put back, and of which app
@@ -2476,6 +2512,18 @@ components:
           description: Its runs, newest first, as the run log names them.
           items:
             type: string
+
+    SystemBackupRequest:
+      required:
+        - destination
+      properties:
+        destination:
+          type: string
+          example: "offsite"
+        hold_still:
+          type: boolean
+          default: true
+          description: Stop the services that hold the box's files open for the length of the copy.
 
     RestoreRequest:
       required:

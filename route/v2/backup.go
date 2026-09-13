@@ -342,6 +342,27 @@ func (a *AppManagement) RestoreBackup(ctx echo.Context) error {
 		return backupBadRequest(ctx, service.ErrRestoreNeedsStamp)
 	}
 
+	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
+
+	// The box itself is not an app: no compose file to install, and the files
+	// come back under services that are stopped for it.
+	if opts.App == service.SystemBackupName {
+		go func() {
+			report, err := service.SystemRestoreOnDemand(backgroundCtx, rclone.NewClient(), service.Systemd(), service.SystemRestoreOptions{
+				Destination: opts.Destination, Stamp: opts.Stamp,
+			})
+			if err != nil {
+				logger.Error("restore of the box failed", zap.Error(err), zap.String("destination", opts.Destination), zap.String("stamp", opts.Stamp))
+				return
+			}
+			logger.Info("restore of the box finished", zap.Int("restored", len(report.Restored)), zap.Int("missing", len(report.Missing)))
+		}()
+
+		return ctx.JSON(http.StatusOK, codegen.BaseResponse{
+			Message: utils.Ptr(fmt.Sprintf("restoring this box from `%s` as of `%s`", opts.Destination, opts.Stamp)),
+		})
+	}
+
 	composeApps, err := service.MyService.Compose().List(ctx.Request().Context())
 	if err != nil {
 		return backupError(ctx, err)
@@ -350,7 +371,6 @@ func (a *AppManagement) RestoreBackup(ctx echo.Context) error {
 	// compose file the backup holds
 	installed := composeApps[opts.App]
 
-	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
 	go func() {
 		report, err := service.RestoreOnDemand(backgroundCtx, installed, service.MyService.Docker(), rclone.NewClient(), installFromBackup, opts)
 		if err != nil {
@@ -434,7 +454,7 @@ func (a *AppManagement) BackupDestinationRuns(ctx echo.Context, name codegen.Bac
 	if err != nil {
 		return backupError(ctx, err)
 	}
-	installed := map[string]bool{}
+	installed := map[string]bool{service.SystemBackupName: true}
 	for appName := range composeApps {
 		installed[appName] = true
 	}
@@ -451,5 +471,40 @@ func (a *AppManagement) BackupDestinationRuns(ctx echo.Context, name codegen.Bac
 
 	return ctx.JSON(http.StatusOK, codegen.BackupDestinationRunsOK{
 		Message: utils.Ptr("OK"), Data: &out,
+	})
+}
+
+// BackupSystem backs the box itself up, in the background.
+func (a *AppManagement) BackupSystem(ctx echo.Context) error {
+	var request codegen.SystemBackupRequest
+	if err := ctx.Bind(&request); err != nil {
+		return backupBadRequest(ctx, err)
+	}
+	if request.Destination == "" {
+		message := "a backup needs a destination"
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	holdStill := true
+	if request.HoldStill != nil {
+		holdStill = *request.HoldStill
+	}
+	stamp := time.Now().UTC().Format(stampLayout)
+	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
+
+	go func() {
+		manifest, err := service.SystemBackupOnDemand(backgroundCtx, rclone.NewClient(), service.Systemd(), service.SystemBackupOptions{
+			Destination: request.Destination, Stamp: stamp, HoldStill: holdStill,
+		})
+		if err != nil {
+			logger.Error("backup of the box failed", zap.Error(err), zap.String("destination", request.Destination), zap.String("stamp", stamp))
+			return
+		}
+		logger.Info("backup of the box finished", zap.String("destination", request.Destination), zap.String("stamp", stamp),
+			zap.Int("copied", len(manifest.Operations)), zap.Int("skipped", len(manifest.Skipped)))
+	}()
+
+	return ctx.JSON(http.StatusOK, codegen.BaseResponse{
+		Message: utils.Ptr(fmt.Sprintf("backing this box up to `%s` as `%s`", request.Destination, stamp)),
 	})
 }

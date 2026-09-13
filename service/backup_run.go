@@ -131,30 +131,31 @@ func runBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 		}
 	}
 
-	root := RootFor(app.Name, opts.Stamp)
+	return manifest, copyPlan(ctx, manifest, copier, opts.Destination, RootFor(app.Name, opts.Stamp))
+}
 
+// copyPlan carries out a manifest's operations, in order, then writes the
+// manifest at the root. Shared by an app's backup and the box's own.
+func copyPlan(ctx context.Context, manifest BackupManifest, copier BackupCopier, destinationName, root string) error {
 	for i, operation := range manifest.Operations {
 		publishBackupProgress(ctx, i, len(manifest.Operations)+1, operation.Destination)
 		destination := path.Join(root, operation.Destination)
 
 		var err error
 		if operation.Directory {
-			err = copier.CopyDirectory(ctx, operation.Source, opts.Destination, destination)
+			err = copier.CopyDirectory(ctx, operation.Source, destinationName, destination)
 		} else {
-			err = copier.CopyFile(ctx, operation.Source, opts.Destination, destination)
+			err = copier.CopyFile(ctx, operation.Source, destinationName, destination)
 		}
 
 		if err != nil {
-			return manifest, fmt.Errorf("copying %s: %w", operation.Source, err)
+			return fmt.Errorf("copying %s: %w", operation.Source, err)
 		}
 	}
 
 	publishBackupProgress(ctx, len(manifest.Operations), len(manifest.Operations)+1, ManifestFileName)
-	if err := writeManifest(ctx, manifest, copier, opts.Destination, root); err != nil {
-		return manifest, err
-	}
 
-	return manifest, nil
+	return writeManifest(ctx, manifest, copier, destinationName, root)
 }
 
 // writeManifest puts the manifest at the root of the backup.
