@@ -1,6 +1,7 @@
 package service
 
 import (
+	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -195,13 +196,18 @@ func (a *ComposeApp) BackupInventory() []BackupEntry {
 		composeFile := path.Clean(filepath.ToSlash(a.ComposeFiles[0]))
 		entries = append(entries, BackupEntry{Kind: BackupKindCompose, Path: composeFile})
 
-		// The `.env` beside it is not optional detail: an app whose compose file
-		// references ${...} is unusable without it, and it is the one file in a
-		// backup that holds secrets. EnvFile() already answers where it is.
-		entries = append(entries, BackupEntry{
-			Kind: BackupKindEnv,
-			Path: path.Clean(filepath.ToSlash(a.EnvFile())),
-		})
+		// The `.env` beside it is not optional detail when it exists: an app whose
+		// compose file references ${...} is unusable without it, and it is the one
+		// file in a backup that holds secrets. But most apps have none, and listing
+		// a file that is not there sent rclone after it: `object not found`, and the
+		// whole backup failed on the first install that ever ran one end to end.
+		envFile := a.EnvFile()
+		if _, err := os.Stat(envFile); err == nil {
+			entries = append(entries, BackupEntry{
+				Kind: BackupKindEnv,
+				Path: path.Clean(filepath.ToSlash(envFile)),
+			})
+		}
 	}
 
 	return append(entries, backupEntriesForServices(a.Services, a.composeDir())...)

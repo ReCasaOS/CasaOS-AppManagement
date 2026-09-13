@@ -1,6 +1,8 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -185,22 +187,51 @@ func TestTheNameDockerActuallyKnowsAVolumeBy(t *testing.T) {
 	}
 }
 
+// installedApp is an app on disk: its folder, its compose file and, when asked
+// for, the .env beside it. The inventory now looks, so the tests need something
+// to look at.
+func installedApp(t *testing.T, withEnv bool) (*ComposeApp, string) {
+	t.Helper()
+
+	dir := filepath.ToSlash(t.TempDir())
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("name: nextcloud\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if withEnv {
+		if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return &ComposeApp{
+		Name:         "nextcloud",
+		WorkingDir:   dir,
+		ComposeFiles: []string{dir + "/docker-compose.yml"},
+	}, dir
+}
+
+// An app with no .env -- which is most of them -- lists none. Listing one sent
+// rclone after a file that was not there, and the whole backup failed on it.
+func TestAnAppWithNoEnvListsNone(t *testing.T) {
+	app, dir := installedApp(t, false)
+
+	entries := app.BackupInventory()
+	if len(entries) != 1 || entries[0].Kind != BackupKindCompose || entries[0].Path != dir+"/docker-compose.yml" {
+		t.Fatalf("just the compose file: %+v", entries)
+	}
+}
+
 // The two files an app cannot be rebuilt without come first, and a relative bind
 // resolves against the project's working directory, which is what compose uses.
 func TestAnAppsInventoryStartsWithWhatItCannotBeRebuiltWithout(t *testing.T) {
-	app := &ComposeApp{
-		Name:         "nextcloud",
-		WorkingDir:   appDir,
-		ComposeFiles: []string{appDir + "/docker-compose.yml"},
-		Services: types.Services{
-			"app": types.ServiceConfig{Name: "app", Volumes: []types.ServiceVolumeConfig{
-				{Type: "bind", Source: "./config", Target: "/config"},
-				{Type: "volume", Source: "backend-storage", Target: "/data"},
-				{Type: "bind", Source: "/var/run/docker.sock", Target: "/var/run/docker.sock"},
-			}},
-		},
+	app, appDir := installedApp(t, true)
+	app.Services = types.Services{
+		"app": types.ServiceConfig{Name: "app", Volumes: []types.ServiceVolumeConfig{
+			{Type: "bind", Source: "./config", Target: "/config"},
+			{Type: "volume", Source: "backend-storage", Target: "/data"},
+			{Type: "bind", Source: "/var/run/docker.sock", Target: "/var/run/docker.sock"},
+		}},
 	}
-
 	entries := app.BackupInventory()
 	if len(entries) != 5 {
 		t.Fatalf("want 5 entries, got %d: %+v", len(entries), entries)

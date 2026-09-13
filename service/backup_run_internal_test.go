@@ -68,6 +68,10 @@ func appWithOneBindAndOneVolume(t *testing.T) (*ComposeApp, string) {
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("name: demo\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// most apps have no .env; this one does, so the copy counts below include it
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -256,5 +260,37 @@ func TestAVolumeTheDaemonCannotPlaceDoesNotStopTheRest(t *testing.T) {
 	// compose, .env, the bind, and the manifest -- the volume is absent
 	if len(copier.calls) != 4 {
 		t.Fatalf("got %d copies: %+v", len(copier.calls), copier.calls)
+	}
+}
+
+// The first backup ever run end to end, on a fresh install, failed on this:
+// the plan listed the app's .env, the app had none, and rclone was sent after
+// a file that was not there. An app without one backs up without one.
+func TestAnAppWithNoEnvBacksUpWithoutOne(t *testing.T) {
+	app, dir := appWithOneBindAndOneVolume(t)
+	if err := os.Remove(filepath.Join(dir, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	docker := &fakeBackupDocker{mountpoints: map[string]string{"demo_data": "/var/lib/docker/volumes/demo_data/_data"}}
+	copier := &fakeCopier{}
+
+	manifest, err := RunBackup(context.Background(), app, docker, copier, BackupOptions{
+		Destination: "offsite", Stamp: "2026-09-13T02-29-56Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, call := range copier.calls {
+		if strings.HasSuffix(call.source, "/.env") {
+			t.Fatalf("a file that does not exist was sent for copying: %+v", call)
+		}
+	}
+	// compose, the bind, the volume, then the manifest
+	if len(copier.calls) != 4 {
+		t.Fatalf("want 4 copies, got %d: %+v", len(copier.calls), copier.calls)
+	}
+	if len(manifest.Skipped) != 0 {
+		t.Fatalf("nothing was skipped either -- there was nothing to skip: %+v", manifest.Skipped)
 	}
 }
