@@ -37,6 +37,9 @@ type appStore struct {
 	url         string
 
 	lastAPPStoreSize int64
+	// source is the URL the last update fetched: the catalogue, or this
+	// distribution's copy of it when the catalogue did not answer.
+	source string
 }
 
 var (
@@ -80,18 +83,18 @@ func (s *appStore) UpdateCatalog() error {
 	{
 		// timeout 5s
 		http.DefaultClient.Timeout = 5 * time.Second
-		res, err := http.Head(s.url)
+		// the catalogue, or this distribution's copy of it when the catalogue
+		// does not answer (appstore_mirror.go)
+		source, res, err := pickCatalogueSource(s.url, http.Head)
 		if err != nil {
 			return err
 		}
-		if res.StatusCode != http.StatusOK {
-			return fmt.Errorf("failed to get appstore size, status code: %d", res.StatusCode)
-		}
 		if res.ContentLength == s.lastAPPStoreSize {
-			logger.Info("appstore size not changed", zap.String("url", s.url))
+			logger.Info("appstore size not changed", zap.String("url", source))
 			return nil
 		}
-		logger.Info("appstore size changed, update app store", zap.String("url", s.url))
+		logger.Info("appstore size changed, update app store", zap.String("url", source))
+		s.source = source
 
 		defer func() {
 			if isSuccessful {
@@ -112,7 +115,7 @@ func (s *appStore) UpdateCatalog() error {
 		}
 	}()
 
-	if err := downloadHelper.Download(s.url, tmpDir); err != nil {
+	if err := downloadHelper.Download(s.source, tmpDir); err != nil {
 		return err
 	}
 

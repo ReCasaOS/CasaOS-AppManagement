@@ -151,21 +151,23 @@ func (a *AppManagement) BackupComposeApp(ctx echo.Context, id codegen.ComposeApp
 	}
 
 	holdStill := holdStillFrom(request)
+	keep := keepFrom(request)
 	stamp := time.Now().UTC().Format(stampLayout)
 
 	// Detached from the request: the copy outlives it by design, and a caller that
 	// closes its connection must not cancel a backup half-written.
 	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
 
-	go runBackupInBackground(backgroundCtx, composeApp, request.Destination, stamp, holdStill)
+	go runBackupInBackground(backgroundCtx, composeApp, request.Destination, stamp, holdStill, keep)
 
 	return ctx.JSON(http.StatusOK, codegen.BaseResponse{
 		Message: utils.Ptr(fmt.Sprintf("backing `%s` up to `%s` as `%s`", id, request.Destination, stamp)),
 	})
 }
 
-func runBackupInBackground(ctx context.Context, composeApp *service.ComposeApp, destination, stamp string, holdStill bool) {
-	manifest, err := service.BackupOnDemand(ctx, composeApp, service.MyService.Docker(), rclone.NewClient(), service.BackupOptions{
+func runBackupInBackground(ctx context.Context, composeApp *service.ComposeApp, destination, stamp string, holdStill bool, keep int) {
+	client := rclone.NewClient()
+	manifest, err := service.BackupOnDemand(ctx, composeApp, service.MyService.Docker(), client, service.BackupOptions{
 		Destination: destination,
 		Stamp:       stamp,
 		HoldStill:   holdStill,
@@ -180,6 +182,10 @@ func runBackupInBackground(ctx context.Context, composeApp *service.ComposeApp, 
 	logger.Info("backup finished",
 		zap.String("app", composeApp.Name), zap.String("destination", destination), zap.String("stamp", stamp),
 		zap.Int("copied", len(manifest.Operations)), zap.Int("skipped", len(manifest.Skipped)))
+
+	// Only after a backup that landed: retention after a failure could drop a
+	// good backup in favour of nothing.
+	service.ApplyRetention(ctx, destination, composeApp.Name, keep, client)
 }
 
 // backupError answers rclone's failures.
@@ -206,6 +212,16 @@ func holdStillFrom(request codegen.BackupRequest) bool {
 	}
 
 	return *request.HoldStill
+}
+
+// keepFrom is the retention a request asks for, or zero for none: an absent
+// field keeps everything, and so does anything that is not a count.
+func keepFrom(request codegen.BackupRequest) int {
+	if request.Keep == nil || *request.Keep <= 0 {
+		return 0
+	}
+
+	return *request.Keep
 }
 
 // BackupSchedules lists the standing arrangements.

@@ -2556,6 +2556,14 @@ components:
           description: |-
             Stop the app's containers for the length of the copy. Leaving it running
             takes a copy that may not restore.
+        keep:
+          type: integer
+          minimum: 1
+          example: 3
+          description: |-
+            Once this backup has landed, keep only the last `keep` backups of this
+            app at this destination, this one included, and delete the rest. Absent
+            keeps everything. A schedule's retention is its own and separate.
 
     ContainerStats:
       description: What one container is using, sampled just now.

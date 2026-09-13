@@ -148,22 +148,36 @@ func runScheduled(ctx context.Context, now time.Time, schedule BackupSchedule, r
 }
 
 func applyRetention(ctx context.Context, schedule BackupSchedule, runner backupRunner) {
-	if schedule.Keep <= 0 {
+	ApplyRetention(ctx, schedule.Destination, schedule.App, schedule.Keep, runner)
+}
+
+// retentionRunner is the part of a runner retention needs: what is at the
+// destination, and deleting some of it.
+type retentionRunner interface {
+	Runs(destination, app string) ([]string, error)
+	Purge(ctx context.Context, destination, remotePath string) error
+}
+
+// ApplyRetention deletes the runs of `app` at `destination` beyond the last
+// `keep`. Zero or less keeps everything. Scheduled runs and runs somebody asked
+// for share the pool: a retention counts backups, not reasons.
+func ApplyRetention(ctx context.Context, destination, app string, keep int, runner retentionRunner) {
+	if keep <= 0 {
 		return
 	}
 
-	stamps, err := runner.Runs(schedule.Destination, schedule.App)
+	stamps, err := runner.Runs(destination, app)
 	if err != nil {
 		logger.Error("could not list what is already at the destination, so nothing was deleted",
-			zap.Error(err), zap.String("app", schedule.App))
+			zap.Error(err), zap.String("app", app))
 
 		return
 	}
 
-	for _, stamp := range RunsToPurge(stamps, schedule.Keep) {
-		if err := runner.Purge(ctx, schedule.Destination, path.Join(schedule.App, stamp)); err != nil {
+	for _, stamp := range RunsToPurge(stamps, keep) {
+		if err := runner.Purge(ctx, destination, path.Join(app, stamp)); err != nil {
 			logger.Error("could not delete an old backup",
-				zap.Error(err), zap.String("app", schedule.App), zap.String("run", stamp))
+				zap.Error(err), zap.String("app", app), zap.String("run", stamp))
 		}
 	}
 }
