@@ -1457,6 +1457,10 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 	// So we need to promise multiple WEBUI_PORT interpolate is a same value.
 	port, _ := port.GetAvailablePort("tcp")
 
+	// a quoted number where the specification wants an integer is a number to
+	// everyone but compose-go's schema; see compose_numeric_strings.go
+	yaml = coerceNumericStrings(yaml)
+
 	project, err := loader.Load(
 		types.ConfigDetails{
 			ConfigFiles: []types.ConfigFile{
