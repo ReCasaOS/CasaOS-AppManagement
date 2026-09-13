@@ -805,6 +805,37 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /backup/restore:
+    post:
+      summary: Put an app back from a backup
+      description: |
+        Returns as soon as the restore has started; it takes as long as it takes,
+        and the outcome is written to the run log, marked as a restore.
+
+        The app is stopped for the length of the copy and started again afterwards.
+        Its data folders and volumes are made to hold what the backup holds -- files
+        added since the backup was taken are removed, since a restore means "as it
+        was". Where things go is worked out from the app as it is installed now,
+        never from the paths the backup's manifest carries: a manifest is a file on
+        a remote that anyone with the credentials can edit. What the backup holds
+        and the app no longer declares is reported in the run, not written anywhere.
+
+        An app that is not installed is installed first, from the compose file (and
+        `.env`, when there was one) the backup holds; for an installed app the
+        compose file it runs now is kept and only its data is restored.
+      operationId: restoreBackup
+      tags:
+        - Backup methods
+      requestBody:
+        $ref: "#/components/requestBodies/RequestRestore"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /compose/{id}/containers/stats:
     get:
       summary: Sample the CPU and memory usage of an app's containers
@@ -1321,6 +1352,14 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/BackupRequest"
+
+    RequestRestore:
+      description: Which backup to put back, and of which app
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RestoreRequest"
 
     RequestContainerStatus:
       description: What to do to a single container
@@ -2295,6 +2334,9 @@ components:
           type: boolean
         containers_stopped:
           type: boolean
+        restore:
+          type: boolean
+          description: True for a run that put the app back from a backup rather than one that took a backup.
         copied:
           type: integer
         skipped_count:
@@ -2334,6 +2376,24 @@ components:
         total:
           type: integer
           format: int64
+
+    RestoreRequest:
+      required:
+        - destination
+        - app
+        - stamp
+      properties:
+        destination:
+          type: string
+          example: "offsite"
+        app:
+          type: string
+          description: The app to put back, which must be the app the backup is of.
+          example: "nextcloud"
+        stamp:
+          type: string
+          description: Which backup, as the run log names it.
+          example: "2026-09-13T02-29-56Z"
 
     BackupRequest:
       required:

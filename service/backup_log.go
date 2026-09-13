@@ -32,6 +32,10 @@ type BackupRunRecord struct {
 	SkippedCount      int  `json:"skipped_count"`
 	// Error is empty when the run succeeded.
 	Error string `json:"error,omitempty"`
+	// Restore marks a run that put the app back from a backup rather than one
+	// that took a backup. Same log, because a person looking for what happened
+	// to an app wants both in one place, newest first.
+	Restore bool `json:"restore,omitempty"`
 }
 
 // Succeeded reports whether this run finished.

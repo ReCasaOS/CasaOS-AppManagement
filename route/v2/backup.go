@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
@@ -298,4 +300,89 @@ func fromCodegenSchedule(item codegen.BackupSchedule) service.BackupSchedule {
 	}
 
 	return schedule
+}
+
+// RestoreBackup puts an app back from a backup, in the background.
+func (a *AppManagement) RestoreBackup(ctx echo.Context) error {
+	var request codegen.RestoreRequest
+	if err := ctx.Bind(&request); err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	opts := service.RestoreOptions{Destination: request.Destination, App: request.App, Stamp: request.Stamp}
+	switch {
+	case opts.Destination == "":
+		return backupBadRequest(ctx, service.ErrRestoreNeedsDestination)
+	case opts.App == "":
+		return backupBadRequest(ctx, service.ErrRestoreNeedsApp)
+	case opts.Stamp == "":
+		return backupBadRequest(ctx, service.ErrRestoreNeedsStamp)
+	}
+
+	composeApps, err := service.MyService.Compose().List(ctx.Request().Context())
+	if err != nil {
+		return backupError(ctx, err)
+	}
+	// nil when the app is not installed: the restore installs it first, from the
+	// compose file the backup holds
+	installed := composeApps[opts.App]
+
+	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
+	go func() {
+		report, err := service.RestoreOnDemand(backgroundCtx, installed, service.MyService.Docker(), rclone.NewClient(), installFromBackup, opts)
+		if err != nil {
+			logger.Error("restore failed",
+				zap.Error(err), zap.String("app", opts.App), zap.String("destination", opts.Destination), zap.String("stamp", opts.Stamp))
+			return
+		}
+
+		logger.Info("restore finished",
+			zap.String("app", opts.App), zap.String("destination", opts.Destination), zap.String("stamp", opts.Stamp),
+			zap.Int("restored", len(report.Restored)), zap.Int("missing", len(report.Missing)), zap.Bool("installed", report.Installed))
+	}()
+
+	return ctx.JSON(http.StatusOK, codegen.BaseResponse{
+		Message: utils.Ptr(fmt.Sprintf("restoring `%s` from `%s` as of `%s`", opts.App, opts.Destination, opts.Stamp)),
+	})
+}
+
+func backupBadRequest(ctx echo.Context, err error) error {
+	message := err.Error()
+
+	return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+}
+
+// installFromBackup puts an app that is not installed back from the compose file
+// its backup holds, and its .env when there was one, and waits until its
+// containers exist -- so that its named volumes exist and can be restored into.
+//
+// This is Install without the store lookup and without the goroutine: a restore
+// has to know the app is there before it starts copying into it.
+func installFromBackup(ctx context.Context, name string, compose, env []byte) (*service.ComposeApp, error) {
+	workingDirectory, err := service.MyService.Compose().PrepareWorkingDirectory(name)
+	if err != nil {
+		return nil, err
+	}
+
+	yamlFilePath := filepath.Join(workingDirectory, common.ComposeYAMLFileName)
+	if err := os.WriteFile(yamlFilePath, compose, 0o600); err != nil {
+		return nil, err
+	}
+	if env != nil {
+		if err := os.WriteFile(filepath.Join(workingDirectory, ".env"), env, 0o600); err != nil {
+			return nil, err
+		}
+	}
+
+	composeApp, err := service.LoadComposeAppFromConfigFile(name, yamlFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := composeApp.PullAndInstall(ctx); err != nil {
+		return nil, err
+	}
+
+	return composeApp, nil
 }
