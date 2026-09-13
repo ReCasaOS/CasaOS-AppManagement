@@ -96,7 +96,7 @@ func (ds *dockerService) PullLatestImage(ctx context.Context, imageName string) 
 			common.PropertyTypeMessage.Name:   message,
 		})
 
-		return false, fmt.Errorf(message)
+		return false, fmt.Errorf("%s", message)
 	}
 
 	imageInfo1, err := docker.Image(ctx, imageName)
