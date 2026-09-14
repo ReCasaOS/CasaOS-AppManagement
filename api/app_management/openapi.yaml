@@ -301,6 +301,75 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
   
+  /compose/updates:
+    get:
+      summary: What updating every app at once would do
+      description: |
+        The apps with an update on offer, and for each the images an update would
+        write: the catalogue's image where the catalogue moved one (`catalogue`),
+        or every image as it is where the last image check found a newer build
+        under a tag the app already names (`image`). Nothing is changed by asking.
+
+        With `check=true` the same sweep as `POST /image-updates` runs first, one
+        round trip per distinct image, so the plan is as fresh as the registries;
+        a registry that does not answer is not fatal.
+      operationId: composeAppUpdatePlan
+      tags:
+        - Compose methods
+      parameters:
+        - name: check
+          in: query
+          description: Ask every image's registry first.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          $ref: "#/components/responses/ComposeAppUpdatePlanOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+    post:
+      summary: Update the apps listed, one after another
+      description: |
+        The same update the button on each app runs, for every app listed, in the
+        order given, one at a time, on this box rather than from the browser: a tab
+        closed halfway does not stop it. Each app publishes the events an update
+        publishes. The run is answered as it starts; `GET /compose/updates/run`
+        says what became of each app.
+
+        One run at a time: a second list while one is going is refused with 409.
+      operationId: updateComposeApps
+      tags:
+        - Compose methods
+      requestBody:
+        $ref: "#/components/requestBodies/RequestComposeAppUpdates"
+      responses:
+        "202":
+          $ref: "#/components/responses/ComposeAppUpdateRunOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /compose/updates/run:
+    get:
+      summary: The update of every app in progress, or the last one
+      description: |
+        Each app of the run and what became of it: queued, updating, updated,
+        current (nothing to do, with the reason when there is one), or failed with
+        the error. `finished_at` is set once the last app is done. Kept in memory:
+        a restart of this service forgets the last run.
+      operationId: composeAppUpdateRun
+      tags:
+        - Compose methods
+      responses:
+        "200":
+          $ref: "#/components/responses/ComposeAppUpdateRunOK"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+
   /image-updates:
     post:
       summary: Check every installed app for a newer image
@@ -1386,6 +1455,13 @@ components:
         example: false
 
   requestBodies:
+    RequestComposeAppUpdates:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ComposeAppUpdateRequest"
+
     RequestComposeApp:
       description: Compose app YAML content
       required: true
@@ -1578,6 +1654,28 @@ components:
                     type: array
                     items:
                       $ref: "#/components/schemas/UpgradableAppInfo"
+    ComposeAppUpdatePlanOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ComposeAppUpdatePlan"
+
+    ComposeAppUpdateRunOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ComposeAppUpdateRun"
+
     ImageUpdateCheckOK:
       description: OK
       content:
@@ -2780,6 +2878,114 @@ components:
           type: integer
           format: int64
           example: 4509715660
+
+    ComposeAppUpdatePlan:
+      description: What updating every app at once would do.
+      required:
+        - apps
+      properties:
+        apps:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComposeAppUpdatePlanApp"
+
+    ComposeAppUpdatePlanApp:
+      required:
+        - id
+        - title
+        - icon
+        - kind
+        - services
+      properties:
+        id:
+          type: string
+          example: jellyfin
+        title:
+          type: string
+          example: Jellyfin
+        icon:
+          type: string
+          example: https://cdn.jsdelivr.net/gh/IceWhaleTech/CasaOS-AppStore@main/Apps/Jellyfin/icon.png
+        kind:
+          description: |
+            `catalogue` when the catalogue moves at least one image, which is then
+            listed with the image it moves to; `image` when the images stay named
+            as they are and the last image check found a newer build under one of
+            them, in which case every service is listed as it is.
+          type: string
+          enum:
+            - catalogue
+            - image
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComposeAppUpdatePlanService"
+
+    ComposeAppUpdatePlanService:
+      required:
+        - name
+        - from
+        - to
+      properties:
+        name:
+          type: string
+          example: jellyfin
+        from:
+          type: string
+          example: jellyfin/jellyfin:10.9.11
+        to:
+          type: string
+          example: jellyfin/jellyfin:10.10.3
+
+    ComposeAppUpdateRequest:
+      required:
+        - ids
+      properties:
+        ids:
+          description: The apps to update, in this order.
+          type: array
+          items:
+            type: string
+          example:
+            - jellyfin
+            - syncthing
+
+    ComposeAppUpdateRun:
+      description: An update of every app, in progress or done.
+      required:
+        - started_at
+        - apps
+      properties:
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        apps:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComposeAppUpdateRunApp"
+
+    ComposeAppUpdateRunApp:
+      required:
+        - id
+        - state
+      properties:
+        id:
+          type: string
+          example: jellyfin
+        state:
+          type: string
+          enum:
+            - queued
+            - updating
+            - updated
+            - current
+            - failed
+        message:
+          description: The reason, when the app stayed current for one, or the error.
+          type: string
 
     ImageUpdateCheckResult:
       description: What one check pass found.

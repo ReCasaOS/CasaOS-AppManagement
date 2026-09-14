@@ -436,9 +436,9 @@ func (a *AppManagement) UpgradableAppList(ctx echo.Context) error {
 			continue
 		}
 
-		status := codegen.Idle
+		status := codegen.UpgradableAppInfoStatusIdle
 		if service.MyService.AppStoreManagement().IsUpdating(composeApp.Name) {
-			status = codegen.Updating
+			status = codegen.UpgradableAppInfoStatusUpdating
 		}
 
 		// not change the main tag

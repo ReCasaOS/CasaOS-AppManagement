@@ -239,9 +239,35 @@ func (a *ComposeApp) SetTitle(title, lang string) {
 	}
 }
 
+// Update is what the update button does: the app is replaced in the background
+// and the request returns at once; the events of the update say the rest.
 func (a *ComposeApp) Update(ctx context.Context) error {
+	newComposeYAML, ctx, err := a.prepareUpdate(ctx)
+	if err != nil {
+		return err
+	}
+
+	go func() { _ = a.applyUpdate(ctx, newComposeYAML) }()
+
+	return nil
+}
+
+// UpdateNow is Update waited for: the run of every app at once does them one
+// after another (compose_update_all.go).
+func (a *ComposeApp) UpdateNow(ctx context.Context) error {
+	newComposeYAML, ctx, err := a.prepareUpdate(ctx)
+	if err != nil {
+		return err
+	}
+
+	return a.applyUpdate(ctx, newComposeYAML)
+}
+
+// prepareUpdate is the compose file the update writes, and the context its events
+// carry the app's name in.
+func (a *ComposeApp) prepareUpdate(ctx context.Context) ([]byte, context.Context, error) {
 	if len(a.ComposeFiles) <= 0 {
-		return ErrComposeFileNotFound
+		return nil, ctx, ErrComposeFileNotFound
 	}
 
 	if len(a.ComposeFiles) > 1 {
@@ -261,7 +287,7 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 	// from the menu of any of them.
 	storeInfo, err := a.StoreInfo(true)
 	if err != nil && !errors.Is(err, ErrComposeExtensionNameXCasaOSNotFound) {
-		return err
+		return nil, ctx, err
 	}
 
 	// nil means no catalogue entry, which is an answer rather than a failure
@@ -269,13 +295,13 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 
 	if storeInfo != nil && storeInfo.StoreAppID != nil && *storeInfo.StoreAppID != "" {
 		if storeComposeApp, err = MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID); err != nil {
-			return err
+			return nil, ctx, err
 		}
 	}
 
 	newComposeYAML, err := a.composeYAMLForUpdate(storeComposeApp)
 	if err != nil {
-		return err
+		return nil, ctx, err
 	}
 
 	// prepare for message bus events
@@ -287,32 +313,36 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 
 	common.SetProperties(ctx, eventProperties)
 
-	go func(ctx context.Context) {
-		go PublishEventWrapper(ctx, common.EventTypeAppUpdateBegin, nil)
+	return newComposeYAML, ctx, nil
+}
 
-		defer PublishEventWrapper(ctx, common.EventTypeAppUpdateEnd, nil)
+// applyUpdate replaces the app with the compose file given and says so on the
+// bus, begin to end, error included.
+func (a *ComposeApp) applyUpdate(ctx context.Context, newComposeYAML []byte) error {
+	go PublishEventWrapper(ctx, common.EventTypeAppUpdateBegin, nil)
 
-		MyService.AppStoreManagement().StartUpgrade(a.Name)
-		defer MyService.AppStoreManagement().FinishUpgrade(a.Name)
+	defer PublishEventWrapper(ctx, common.EventTypeAppUpdateEnd, nil)
 
-		if err := a.PullAndApply(ctx, newComposeYAML); err != nil {
-			go PublishEventWrapper(ctx, common.EventTypeAppUpdateError, map[string]string{
-				common.PropertyTypeMessage.Name: err.Error(),
-			})
+	MyService.AppStoreManagement().StartUpgrade(a.Name)
+	defer MyService.AppStoreManagement().FinishUpgrade(a.Name)
 
-			logger.Error("failed to update compose app", zap.Error(err), zap.String("name", a.Name))
-			return
-		}
+	if err := a.PullAndApply(ctx, newComposeYAML); err != nil {
+		go PublishEventWrapper(ctx, common.EventTypeAppUpdateError, map[string]string{
+			common.PropertyTypeMessage.Name: err.Error(),
+		})
 
-		// The update applied. app:update-end is published whether this succeeded or
-		// failed, so without this it says nothing at all and the dashboard has no
-		// success to report -- which is why a finished update used to pass in silence.
-		common.SetProperties(ctx, map[string]string{common.PropertyTypeAppUpdated.Name: "true"})
+		logger.Error("failed to update compose app", zap.Error(err), zap.String("name", a.Name))
+		return err
+	}
 
-		// the app is no longer the one the cached answers were about, and an
-		// `offered` left at true keeps badging an app that has just been updated
-		forgetImageUpdates(a.Name)
-	}(ctx)
+	// The update applied. app:update-end is published whether this succeeded or
+	// failed, so without this it says nothing at all and the dashboard has no
+	// success to report -- which is why a finished update used to pass in silence.
+	common.SetProperties(ctx, map[string]string{common.PropertyTypeAppUpdated.Name: "true"})
+
+	// the app is no longer the one the cached answers were about, and an
+	// `offered` left at true keeps badging an app that has just been updated
+	forgetImageUpdates(a.Name)
 
 	return nil
 }
