@@ -272,7 +272,7 @@ func (a *ComposeApp) prepareUpdate(ctx context.Context) ([]byte, context.Context
 	}
 
 	if len(a.ComposeFiles) > 1 {
-		logger.Info("warning: multiple compose files found, only the first one will be used", zap.String("compose files", strings.Join(a.ComposeFiles, ",")))
+		logger.Info("the app is made of several compose files: a save rewrites the first one, and every one of them still applies", zap.String("compose files", strings.Join(a.ComposeFiles, ",")))
 	}
 
 	// An app whose compose file carries no `x-casaos` at all, or one whose extension
@@ -815,7 +815,11 @@ func (a *ComposeApp) up(ctx context.Context, service composeCreateStarter, remov
 	// no OnExit: compose only reads it when Start.Attach is set, and we never attach
 	// (pkg/compose/up.go) -- CascadeStop here was decoration.
 	if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
-		return service.Start(ctx, a.Name, api.StartOptions{Wait: true})
+		// With the project, not only its name. Given none, compose rebuilds the project from
+		// the containers' labels, which carry no post_start or pre_start hook, so a container
+		// CasaOS created never ran its hooks. Every service has its containers here: they were
+		// just created.
+		return service.Start(ctx, a.Name, api.StartOptions{Project: (*codegen.ComposeApp)(a), Wait: true})
 	}, a.everyContainerSettled); err != nil {
 		logger.Error("failed to start original compose app", zap.Error(err), zap.String("name", a.Name))
 		return err
@@ -1039,7 +1043,11 @@ func (a *ComposeApp) PullAndInstall(ctx context.Context) error {
 	defer PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, nil)
 
 	if err := waitForApp(ctx, a.Name, func(ctx context.Context) error {
-		return service.Start(ctx, a.Name, api.StartOptions{Wait: true})
+		// With the project, not only its name. Given none, compose rebuilds the project from
+		// the containers' labels, which carry no post_start or pre_start hook, so a container
+		// CasaOS created never ran its hooks. Every service has its containers here: they were
+		// just created.
+		return service.Start(ctx, a.Name, api.StartOptions{Project: (*codegen.ComposeApp)(a), Wait: true})
 	}, a.everyContainerSettled); err != nil {
 		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
@@ -1157,7 +1165,7 @@ func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[
 	}
 
 	if len(a.ComposeFiles) > 1 {
-		logger.Info("warning: multiple compose files found, only the first one will be used", zap.String("compose files", strings.Join(a.ComposeFiles, ",")))
+		logger.Info("the app is made of several compose files: a save rewrites the first one, and every one of them still applies", zap.String("compose files", strings.Join(a.ComposeFiles, ",")))
 	}
 
 	// prepare for message bus events

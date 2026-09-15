@@ -13,17 +13,19 @@ import (
 // fakeCompose stands in for the two halves of compose's Up. Start records that it was
 // reached at all, which is the property under test.
 type fakeCompose struct {
-	createErr   error
-	startErr    error
-	startCalled bool
+	createErr    error
+	startErr     error
+	startCalled  bool
+	startOptions api.StartOptions
 }
 
 func (f *fakeCompose) Create(context.Context, *types.Project, api.CreateOptions) error {
 	return f.createErr
 }
 
-func (f *fakeCompose) Start(context.Context, string, api.StartOptions) error {
+func (f *fakeCompose) Start(_ context.Context, _ string, options api.StartOptions) error {
 	f.startCalled = true
+	f.startOptions = options
 	return f.startErr
 }
 
@@ -70,5 +72,26 @@ func TestUpStartsWhatItCreated(t *testing.T) {
 	}
 	if !compose.startCalled {
 		t.Fatal("a created app must then be started")
+	}
+}
+
+// compose rebuilds a project it is not given from the containers' labels, and labels carry no
+// post_start or pre_start hook: a container CasaOS created never ran them. The start is given
+// the app's own project, which is where the hooks are.
+func TestUpStartsWithTheProjectItsHooksComeFrom(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	setUpWaitTimeout(t, shortestUpWaitTimeout)
+
+	app := &ComposeApp{Name: "jarvis", Services: types.Services{
+		"web": {Name: "web", PostStart: []types.ServiceHook{{Command: types.ShellCommand{"touch", "/tmp/started"}}}},
+	}}
+	compose := &fakeCompose{}
+
+	if err := app.up(context.Background(), compose, false); err != nil {
+		t.Fatalf("an app that came up must not be an error: %v", err)
+	}
+	project := compose.startOptions.Project
+	if project == nil || len(project.Services["web"].PostStart) != 1 {
+		t.Fatal("the start must be given the app's project, which is where its hooks are")
 	}
 }
