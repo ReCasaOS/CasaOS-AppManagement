@@ -7,7 +7,7 @@ import (
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/compose-spec/compose-go/v2/types"
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/compose/v5/pkg/api"
 )
 
 // fakeCompose stands in for the two halves of compose's Up. Start records that it was

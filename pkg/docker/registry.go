@@ -4,6 +4,8 @@ credit: https://github.com/containrrr/watchtower
 package docker
 
 import (
+	"context"
+
 	"github.com/docker/docker/api/types/image"
 )
 
@@ -20,6 +22,6 @@ func GetPullOptions(imageName string) (image.PullOptions, error) {
 
 	return image.PullOptions{
 		RegistryAuth:  auth,
-		PrivilegeFunc: func() (string, error) { return "", nil },
+		PrivilegeFunc: func(context.Context) (string, error) { return "", nil },
 	}, nil
 }

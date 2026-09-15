@@ -1,7 +1,6 @@
 package model
 
 import (
-	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
@@ -67,9 +66,10 @@ func (p *PathArray) ServiceVolumeConfigList() []types.ServiceVolumeConfig {
 	return volumes
 }
 
-func (p *PathArray) ToSlice() []string {
-	return lo.Map(*p, func(p PathMap, i int) string {
-		return fmt.Sprintf("%s:%s", p.Path, p.ContainerPath)
+// ToSlice gives the mappings compose-go made of the "host:container" strings it took before v2.15
+func (p *PathArray) ToSlice() []types.DeviceMapping {
+	return lo.Map(*p, func(p PathMap, i int) types.DeviceMapping {
+		return types.DeviceMapping{Source: p.Path, Target: lo.Ternary(p.ContainerPath == "", p.Path, p.ContainerPath), Permissions: "rwm"}
 	})
 }
 

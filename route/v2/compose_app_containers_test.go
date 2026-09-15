@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	containertypes "github.com/moby/moby/api/types/container"
 	"github.com/samber/lo"
 	"gotest.tools/v3/assert"
 )
@@ -64,7 +65,7 @@ func TestComposeAppStatusReportsTheWorstContainer(t *testing.T) {
 			containers := map[string][]codegen.ContainerSummary{}
 			for service, states := range c.states {
 				containers[service] = lo.Map(states, func(state string, _ int) codegen.ContainerSummary {
-					return codegen.ContainerSummary{Service: service, State: state}
+					return codegen.ContainerSummary{Service: service, State: containertypes.ContainerState(state)}
 				})
 			}
 			assert.Equal(t, composeAppStatus(containers), c.want)

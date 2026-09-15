@@ -2726,12 +2726,12 @@ components:
     ContainerSummary:
       type: object
       description: |-
-        See [Go Doc](https://pkg.go.dev/github.com/docker/compose/v2@v2.14.2/pkg/api#ContainerSummary) for the schema structure of `ContainerSummary`.
+        See [Go Doc](https://pkg.go.dev/github.com/docker/compose/v5@v5.5.1/pkg/api#ContainerSummary) for the schema structure of `ContainerSummary`.
 
       x-go-type: api.ContainerSummary
       x-go-type-import:
         name: api
-        path: github.com/docker/compose/v2/pkg/api
+        path: github.com/docker/compose/v5/pkg/api
 
     EnvStoreInfo:
       required:

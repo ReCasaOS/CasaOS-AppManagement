@@ -6,7 +6,7 @@ import (
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/docker"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	client2 "github.com/docker/docker/client"
 	"go.uber.org/zap"
 )
@@ -27,8 +27,8 @@ import (
 // Containers the daemon cannot answer for are absent from the result rather than
 // present with zeroes: "not measured" and "using nothing" are different answers,
 // and zero is a lie the caller cannot see through.
-func (ds *dockerService) SampleContainerStats(ctx context.Context, ids []string) map[string]*types.StatsJSON {
-	out := map[string]*types.StatsJSON{}
+func (ds *dockerService) SampleContainerStats(ctx context.Context, ids []string) map[string]*container.StatsResponse {
+	out := map[string]*container.StatsResponse{}
 	if len(ids) == 0 {
 		return out
 	}

@@ -13,7 +13,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
 	"github.com/ReCasaOS/CasaOS-Common/utils/file"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/compose/v5/pkg/api"
 	"go.uber.org/zap"
 )
 
@@ -94,7 +94,7 @@ func (s *ComposeService) containerStates(ctx context.Context, projectName string
 
 	states := make([]string, 0, len(summaries))
 	for _, summary := range summaries {
-		states = append(states, summary.State)
+		states = append(states, string(summary.State))
 	}
 
 	return states, nil

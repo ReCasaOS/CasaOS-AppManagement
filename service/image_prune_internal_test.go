@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 )
@@ -44,10 +43,10 @@ func (d *fakeImageDaemon) ImageList(_ context.Context, options image.ListOptions
 	return nil, nil
 }
 
-func (d *fakeImageDaemon) ImagesPrune(_ context.Context, pruneFilter filters.Args) (types.ImagesPruneReport, error) {
+func (d *fakeImageDaemon) ImagesPrune(_ context.Context, pruneFilter filters.Args) (image.PruneReport, error) {
 	d.pruned = pruneFilter
 
-	return types.ImagesPruneReport{}, nil
+	return image.PruneReport{}, nil
 }
 
 // Deleting the image of every stopped app is the one thing these two must never do, and

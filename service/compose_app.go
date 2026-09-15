@@ -30,10 +30,11 @@ import (
 	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
-	composeCmd "github.com/docker/compose/v2/cmd/compose"
+	composeCmd "github.com/docker/compose/v5/cmd/compose"
 
-	"github.com/docker/compose/v2/cmd/formatter"
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/compose/v5/cmd/formatter"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/docker/compose/v5/pkg/compose"
 	"github.com/go-resty/resty/v2"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
@@ -752,7 +753,7 @@ func (a *ComposeApp) everyContainerSettled(ctx context.Context) bool {
 
 			switch container.State {
 			case "running":
-				if strings.EqualFold(container.Health, "unhealthy") {
+				if strings.EqualFold(string(container.Health), "unhealthy") {
 					return false
 				}
 			case "exited":
@@ -771,7 +772,7 @@ func (a *ComposeApp) everyContainerSettled(ctx context.Context) bool {
 	return seen
 }
 
-func (a *ComposeApp) Up(ctx context.Context, service api.Service) error {
+func (a *ComposeApp) Up(ctx context.Context, service api.Compose) error {
 	return a.up(ctx, service, false)
 }
 
@@ -780,7 +781,7 @@ func (a *ComposeApp) Up(ctx context.Context, service api.Service) error {
 // over from it would keep running under no compose file at all. It stays off elsewhere,
 // where an unknown container of this project is an adopted one, not a leftover.
 // composeCreateStarter is the two halves of compose's Up, which is all `up` needs of
-// api.Service -- and narrow enough that the order it calls them in can be driven by a
+// api.Compose -- and narrow enough that the order it calls them in can be driven by a
 // test, which is the whole point of keeping them apart.
 type composeCreateStarter interface {
 	Create(ctx context.Context, project *types.Project, options api.CreateOptions) error
@@ -822,7 +823,7 @@ func (a *ComposeApp) up(ctx context.Context, service composeCreateStarter, remov
 	return nil
 }
 
-func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Service) error {
+func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Compose) error {
 	// prepare source path for volumes if not exist
 	for name, app := range a.Services {
 		for _, volume := range app.Volumes {
@@ -841,9 +842,9 @@ func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Service
 		}
 
 		// check if each required device exists
-		deviceMapFiltered := []string{}
+		deviceMapFiltered := []types.DeviceMapping{}
 		for _, deviceMap := range app.Devices {
-			devicePath := strings.SplitN(deviceMap, ":", 2)[0]
+			devicePath := deviceMap.Source
 			if file.CheckNotExist(devicePath) {
 				logger.Info("device not found", zap.String("device", devicePath))
 				continue
@@ -967,7 +968,7 @@ func keepNewDefinition(err error) bool {
 	return err == nil || errors.Is(err, errUpNotConfirmed)
 }
 
-func (a *ComposeApp) Create(ctx context.Context, options api.CreateOptions, service api.Service) error {
+func (a *ComposeApp) Create(ctx context.Context, options api.CreateOptions, service api.Compose) error {
 	a.injectEnvVariableToComposeApp()
 	return service.Create(ctx, (*codegen.ComposeApp)(a), api.CreateOptions{})
 }
@@ -1008,9 +1009,9 @@ func (a *ComposeApp) PullAndInstall(ctx context.Context) error {
 			}
 
 			// check if each required device exists
-			deviceMapFiltered := []string{}
+			deviceMapFiltered := []types.DeviceMapping{}
 			for _, deviceMap := range app.Devices {
-				devicePath := strings.SplitN(deviceMap, ":", 2)[0]
+				devicePath := deviceMap.Source
 				if file.CheckNotExist(devicePath) {
 					logger.Info("device not found", zap.String("device", devicePath))
 					continue
@@ -1458,10 +1459,18 @@ func LoadComposeAppFromConfigFile(appID string, configFile string) (*ComposeApp,
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 
+	// compose v5 loads through a Compose backend. Loading never reaches the daemon, so the
+	// backend gets no Docker CLI, as ToProject got none with v2.
+	backend, err := compose.NewComposeService(nil)
+	if err != nil {
+		return nil, err
+	}
+
 	// load project
 	project, _, err := options.ToProject(
 		context.Background(),
 		nil,
+		backend,
 		nil,
 		cli.WithWorkingDirectory(options.ProjectDir), // this has to be the first option, otherwise it will assume the dir where this program is running is the working directory.
 
@@ -1529,7 +1538,7 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 	// everyone but compose-go's schema; see compose_numeric_strings.go
 	yaml = coerceNumericStrings(yaml)
 
-	project, err := loader.Load(
+	project, err := loader.LoadWithContext(context.Background(),
 		types.ConfigDetails{
 			ConfigFiles: []types.ConfigFile{
 				{

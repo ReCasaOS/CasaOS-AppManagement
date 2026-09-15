@@ -255,7 +255,7 @@ func TestSettingsRoundTripKeepsDotEnvReferenceInVolumes(t *testing.T) {
 	get, err := service.GenerateYAMLFromComposeApp(*editing)
 	assert.NilError(t, err)
 	for _, want := range []string{"source: ${DATA}\n", "source: ${DATA}/sub\n", "source: $DATA\n", "target: /data/sub", "read_only: true",
-		"target: /data/long", "source: ./config\n", "create_host_path: true"} {
+		"target: /data/long", "source: ./config\n", "bind: {}"} { // create_host_path: true, left implicit by compose-go (v2.15)
 		assert.Assert(t, strings.Contains(string(get), want), "%s missing in\n%s", want, get)
 	}
 	assert.Equal(t, strings.Count(string(get), "type: bind"), 5, string(get))
@@ -328,7 +328,7 @@ func TestEditingLoadNamesTheFieldThatCannotKeepDotEnv(t *testing.T) {
 	assert.NilError(t, err)
 	get, err := service.GenerateYAMLFromComposeApp(*editing)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(get), "- ${ENVF}\n"), string(get))
+	assert.Assert(t, strings.Contains(string(get), "- path: ${ENVF}\n"), string(get))
 	assert.Assert(t, !strings.Contains(string(get), "A:"), string(get)) // not merged into environment
 	saved, err := service.ComposeAppFromSettingsYAML(get, keep)
 	assert.NilError(t, err)

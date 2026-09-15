@@ -792,13 +792,13 @@ func composeAppStatus(containerLists map[string][]codegen.ContainerSummary) stri
 
 	for _, containers := range containerLists {
 		for _, container := range containers {
-			rank, known := containerStateSeverity[container.State]
+			rank, known := containerStateSeverity[string(container.State)]
 			if !known {
 				rank = len(containerStateSeverity)
 			}
 
 			if rank > worstRank {
-				worst, worstRank = container.State, rank
+				worst, worstRank = string(container.State), rank
 			}
 		}
 	}

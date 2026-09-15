@@ -10,6 +10,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/moby/moby/api/types/container"
 )
 
 // A Docker that can be told to fail on a particular container, which is the only
@@ -57,7 +58,7 @@ func lists(states ...[2]string) map[string][]codegen.ContainerSummary {
 	out := map[string][]codegen.ContainerSummary{}
 	for i, s := range states {
 		service := string(rune('a' + i))
-		out[service] = []codegen.ContainerSummary{{ID: s[0], State: s[1]}}
+		out[service] = []codegen.ContainerSummary{{ID: s[0], State: container.ContainerState(s[1])}}
 	}
 
 	return out

@@ -17,9 +17,10 @@ import (
 
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
-	"github.com/docker/compose/v2/pkg/api"
-	"github.com/docker/compose/v2/pkg/compose"
-	"github.com/docker/docker/client"
+	"github.com/docker/compose/v5/cmd/display"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/docker/compose/v5/pkg/compose"
+	"github.com/moby/moby/client"
 
 	"go.uber.org/zap"
 )
@@ -220,7 +221,7 @@ func baseInterpolationMap() map[string]string {
 	}
 }
 
-func apiService() (api.Service, client.APIClient, error) {
+func apiService() (api.Compose, client.APIClient, error) {
 	dockerCli, err := command.NewDockerCli()
 	if err != nil {
 		return nil, nil, err
@@ -230,10 +231,17 @@ func apiService() (api.Service, client.APIClient, error) {
 		return nil, nil, err
 	}
 
-	return compose.NewComposeService(dockerCli), dockerCli.Client(), nil
+	// compose v5 reports progress only to an event processor, and ignores it by default;
+	// v2 wrote it to stderr, plain when stderr is not a terminal, as under systemd.
+	service, err := compose.NewComposeService(dockerCli, compose.WithEventProcessor(display.Plain(dockerCli.Err())))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return service, dockerCli.Client(), nil
 }
 
-func ApiService() (api.Service, client.APIClient, error) {
+func ApiService() (api.Compose, client.APIClient, error) {
 	return apiService()
 }
 

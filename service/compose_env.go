@@ -164,6 +164,11 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 		cli.WithEnv(env),
 		cli.WithName(appID),
 		cli.WithLoadOptions(func(o *loader.Options) {
+			if o.Interpolate == nil {
+				// compose-go (v2.15) first applies load options to bare Options only to find the
+				// config files; the load itself applies them again with Interpolate set
+				return
+			}
 			o.SkipValidation = true
 			keepPathRefs(o)
 			keepRefCasts(o)

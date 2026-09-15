@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
@@ -23,7 +22,7 @@ func danglingOnly() filters.Args {
 // filter is the safety story, and it is worth nothing if only the helper is tested.
 type imageDaemon interface {
 	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
-	ImagesPrune(ctx context.Context, pruneFilter filters.Args) (types.ImagesPruneReport, error)
+	ImagesPrune(ctx context.Context, pruneFilter filters.Args) (image.PruneReport, error)
 }
 
 // DanglingImages reports what PruneDanglingImages would free, without freeing it.

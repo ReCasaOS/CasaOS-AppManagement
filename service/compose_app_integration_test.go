@@ -12,7 +12,7 @@ import (
 
 	appdocker "github.com/ReCasaOS/CasaOS-AppManagement/pkg/docker"
 	"github.com/ReCasaOS/CasaOS-AppManagement/service"
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/compose/v5/pkg/api"
 )
 
 func TestComposeAppLifecycle(t *testing.T) {
@@ -157,7 +157,7 @@ func assertComposeServiceState(t *testing.T, ctx context.Context, composeApp *se
 	if len(serviceContainers) != 1 {
 		t.Fatalf("service has %d containers, want 1", len(serviceContainers))
 	}
-	if serviceContainers[0].State != want {
+	if string(serviceContainers[0].State) != want {
 		t.Fatalf("container state = %q, want %q", serviceContainers[0].State, want)
 	}
 }

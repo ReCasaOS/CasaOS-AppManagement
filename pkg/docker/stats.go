@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 )
 
@@ -22,7 +22,7 @@ import (
 // Zero when the deltas make no sense -- the first frame of a stream carries an
 // empty previous sample, and a container that stopped between samples goes
 // backwards.
-func CPUPercent(s *types.StatsJSON) float64 {
+func CPUPercent(s *container.StatsResponse) float64 {
 	if s == nil {
 		return 0
 	}
@@ -55,7 +55,7 @@ func CPUPercent(s *types.StatsJSON) float64 {
 //
 // The limit is the host's whole memory when the container declares none, which
 // is Docker's own answer and is what makes the percentage meaningful.
-func MemoryUsage(s *types.StatsJSON) (used uint64, limit uint64) {
+func MemoryUsage(s *container.StatsResponse) (used uint64, limit uint64) {
 	if s == nil {
 		return 0, 0
 	}
@@ -80,7 +80,7 @@ func MemoryUsage(s *types.StatsJSON) (used uint64, limit uint64) {
 // not enough: the one-shot endpoint returns an empty previous sample, so CPU
 // cannot be computed from it at all. The daemon emits roughly once a second, so
 // this call lasts about that long and the caller's context is what bounds it.
-func SampleContainerStats(ctx context.Context, cli *client.Client, id string) (*types.StatsJSON, error) {
+func SampleContainerStats(ctx context.Context, cli *client.Client, id string) (*container.StatsResponse, error) {
 	response, err := cli.ContainerStats(ctx, id, true)
 	if err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func SampleContainerStats(ctx context.Context, cli *client.Client, id string) (*
 
 	decoder := json.NewDecoder(response.Body)
 
-	var stats types.StatsJSON
+	var stats container.StatsResponse
 	for frames := 0; frames < 2; frames++ {
 		if err := decoder.Decode(&stats); err != nil {
 			if frames > 0 && err == io.EOF {

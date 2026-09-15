@@ -4,11 +4,11 @@ import (
 	"math"
 	"testing"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 )
 
-func sample(total, preTotal, system, preSystem uint64, cpus uint32) *types.StatsJSON {
-	s := &types.StatsJSON{}
+func sample(total, preTotal, system, preSystem uint64, cpus uint32) *container.StatsResponse {
+	s := &container.StatsResponse{}
 	s.CPUStats.CPUUsage.TotalUsage = total
 	s.CPUStats.SystemUsage = system
 	s.CPUStats.OnlineCPUs = cpus
@@ -20,7 +20,7 @@ func sample(total, preTotal, system, preSystem uint64, cpus uint32) *types.Stats
 func TestCPUPercent(t *testing.T) {
 	cases := []struct {
 		name  string
-		stats *types.StatsJSON
+		stats *container.StatsResponse
 		want  float64
 	}{
 		{
@@ -77,7 +77,7 @@ func TestCPUPercentFallsBackToThePerCoreList(t *testing.T) {
 // The raw `usage` counts the page cache, so a container that has merely read a
 // large file reads as though it were holding it.
 func TestMemoryUsageDoesNotCountThePageCache(t *testing.T) {
-	v2 := &types.StatsJSON{}
+	v2 := &container.StatsResponse{}
 	v2.MemoryStats.Usage = 900
 	v2.MemoryStats.Limit = 2000
 	v2.MemoryStats.Stats = map[string]uint64{"inactive_file": 400}
@@ -86,7 +86,7 @@ func TestMemoryUsageDoesNotCountThePageCache(t *testing.T) {
 		t.Fatalf("cgroup v2: want 500/2000, got %d/%d", used, limit)
 	}
 
-	v1 := &types.StatsJSON{}
+	v1 := &container.StatsResponse{}
 	v1.MemoryStats.Usage = 900
 	v1.MemoryStats.Limit = 2000
 	v1.MemoryStats.Stats = map[string]uint64{"total_inactive_file": 100, "cache": 700}
@@ -96,7 +96,7 @@ func TestMemoryUsageDoesNotCountThePageCache(t *testing.T) {
 	}
 
 	// Windows reports neither key, and its usage is already the working set
-	windows := &types.StatsJSON{}
+	windows := &container.StatsResponse{}
 	windows.MemoryStats.Usage = 900
 	windows.MemoryStats.Limit = 2000
 
@@ -105,7 +105,7 @@ func TestMemoryUsageDoesNotCountThePageCache(t *testing.T) {
 	}
 
 	// a cache larger than the usage is nonsense, and must not wrap around uint64
-	broken := &types.StatsJSON{}
+	broken := &container.StatsResponse{}
 	broken.MemoryStats.Usage = 100
 	broken.MemoryStats.Limit = 2000
 	broken.MemoryStats.Stats = map[string]uint64{"inactive_file": 400}

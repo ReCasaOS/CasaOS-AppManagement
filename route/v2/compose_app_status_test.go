@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	containertypes "github.com/moby/moby/api/types/container"
 	"gotest.tools/v3/assert"
 )
 
@@ -15,7 +16,7 @@ func TestComposeAppStatusIsTheWorstOfEveryContainer(t *testing.T) {
 		out := map[string][]codegen.ContainerSummary{}
 		for service, list := range byService {
 			for _, state := range list {
-				out[service] = append(out[service], codegen.ContainerSummary{State: state})
+				out[service] = append(out[service], codegen.ContainerSummary{State: containertypes.ContainerState(state)})
 			}
 		}
 		return out

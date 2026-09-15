@@ -38,7 +38,7 @@ import (
 	client2 "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/compose/v5/pkg/api"
 )
 
 var (
@@ -68,7 +68,7 @@ type DockerService interface {
 	RecreateContainer(ctx context.Context, id string, pull bool, force bool) error
 	RemoveContainer(name string, update bool) error
 	RestartContainer(id string) error
-	SampleContainerStats(ctx context.Context, ids []string) map[string]*types.StatsJSON
+	SampleContainerStats(ctx context.Context, ids []string) map[string]*container.StatsResponse
 	VolumeMountpoints(ctx context.Context, names []string) map[string]string
 	VolumeUsage(ctx context.Context) map[string]docker.VolumeSpace
 	RemoveVolume(ctx context.Context, name string) error
@@ -77,7 +77,7 @@ type DockerService interface {
 	StopContainer(id string) error
 
 	// network
-	GetNetworkList() []types.NetworkResource
+	GetNetworkList() []network.Summary
 
 	// docker server
 	GetServerInfo() (system.Info, error)
@@ -357,14 +357,14 @@ func (ds *dockerService) GetContainerAppList(name, image, state *string) (*[]mod
 	return &casaOSApps, &localApps
 }
 
-func (ds *dockerService) CreateContainerShellSession(container, row, col string) (types.HijackedResponse, error) {
+func (ds *dockerService) CreateContainerShellSession(containerID, row, col string) (types.HijackedResponse, error) {
 	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
 	if err != nil {
 		return types.HijackedResponse{}, err
 	}
 
 	ctx := context.Background()
-	ir, err := cli.ContainerExecCreate(ctx, container, types.ExecConfig{
+	ir, err := cli.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -376,7 +376,7 @@ func (ds *dockerService) CreateContainerShellSession(container, row, col string)
 		return types.HijackedResponse{}, err
 	}
 
-	return cli.ContainerExecAttach(ctx, ir.ID, types.ExecStartCheck{Detach: false, Tty: true})
+	return cli.ContainerExecAttach(ctx, ir.ID, container.ExecAttachOptions{Detach: false, Tty: true})
 }
 
 // 正式内容
@@ -877,10 +877,10 @@ func (ds *dockerService) RenameContainer(name, id string) (err error) {
 }
 
 // 获取网络列表
-func (ds *dockerService) GetNetworkList() []types.NetworkResource {
+func (ds *dockerService) GetNetworkList() []network.Summary {
 	cli, _ := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
 	defer cli.Close()
-	networks, _ := cli.NetworkList(context.Background(), types.NetworkListOptions{})
+	networks, _ := cli.NetworkList(context.Background(), network.ListOptions{})
 	return networks
 }
 

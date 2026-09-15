@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
-	"github.com/docker/compose/v2/pkg/api"
+	"github.com/docker/compose/v5/pkg/api"
 )
 
 func publishers(mappings ...[3]interface{}) api.PortPublishers {
