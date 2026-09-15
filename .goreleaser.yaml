@@ -10,10 +10,6 @@ before:
 builds:
   - id: casaos-app-management-amd64
     binary: build/sysroot/usr/bin/casaos-app-management
-    hooks:
-      post:
-        - cmd: upx --best --lzma -v --no-progress "{{ .Path }}"
-          output: true
     env:
       - CC=x86_64-linux-gnu-gcc
     ldflags:
@@ -50,10 +46,6 @@ builds:
       - arm64
   - id: casaos-app-management-arm-7
     binary: build/sysroot/usr/bin/casaos-app-management
-    hooks:
-      post:
-        - cmd: upx --best --lzma -v --no-progress "{{ .Path }}"
-          output: true
     env:
       - CC=arm-linux-gnueabihf-gcc
     ldflags:
@@ -93,10 +85,6 @@ builds:
   - id: casaos-app-management-appfile2compose-amd64
     binary: build/sysroot/usr/bin/appfile2compose
     main: ./cmd/appfile2compose
-    hooks:
-      post:
-        - cmd: upx --best --lzma -v --no-progress "{{ .Path }}"
-          output: true
     env:
       - CC=x86_64-linux-gnu-gcc
     ldflags:
@@ -131,10 +119,6 @@ builds:
   - id: casaos-app-management-appfile2compose-arm-7
     binary: build/sysroot/usr/bin/appfile2compose
     main: ./cmd/appfile2compose
-    hooks:
-      post:
-        - cmd: upx --best --lzma -v --no-progress "{{ .Path }}"
-          output: true
     env:
       - CC=arm-linux-gnueabihf-gcc
     ldflags:
@@ -170,9 +154,6 @@ builds:
       - riscv64
   - id: casaos-app-management-migration-tool-amd64
     binary: build/sysroot/usr/bin/casaos-app-management-migration-tool
-    hooks:
-      post:
-        - upx --best --lzma -v --no-progress "{{ .Path }}"
     main: ./cmd/migration-tool
     env:
       - CC=x86_64-linux-gnu-gcc
@@ -192,9 +173,6 @@ builds:
       - amd64
   - id: casaos-app-management-migration-tool-arm64
     binary: build/sysroot/usr/bin/casaos-app-management-migration-tool
-    # hooks:
-    #   post:
-    #     - upx --best --lzma -v --no-progress "{{ .Path }}"
     main: ./cmd/migration-tool
     env:
       - CC=aarch64-linux-gnu-gcc
@@ -214,9 +192,6 @@ builds:
       - arm64
   - id: casaos-app-management-migration-tool-arm-7
     binary: build/sysroot/usr/bin/casaos-app-management-migration-tool
-    hooks:
-      post:
-        - upx --best --lzma -v --no-progress "{{ .Path }}"
     main: ./cmd/migration-tool
     env:
       - CC=arm-linux-gnueabihf-gcc
@@ -257,9 +232,6 @@ builds:
       - riscv64
   - id: casaos-app-management-validator-amd64
     binary: build/sysroot/usr/bin/casaos-app-management-validator
-    hooks:
-      post:
-        - upx --best --lzma -v --no-progress "{{ .Path }}"
     main: ./cmd/validator
     env:
       - CC=x86_64-linux-gnu-gcc
