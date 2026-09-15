@@ -9,7 +9,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 )
 
-const iceWhale = "https://github.com/IceWhaleTech/_appstore/archive/refs/heads/main.zip"
+const iceWhale = "https://cdn.jsdelivr.net/gh/IceWhaleTech/CasaOS-AppStore@gh-pages/store/main.zip"
 
 func answering(code int, size int64) func(string) (*http.Response, error) {
 	return func(string) (*http.Response, error) {
@@ -51,6 +51,21 @@ func TestACatalogueWithNoCopyFailsAsItAlwaysDid(t *testing.T) {
 	down := func(string) (*http.Response, error) { return nil, errors.New("no route to host") }
 	if _, _, err := pickCatalogueSource("https://example.org/store.zip", down); err == nil || !strings.Contains(err.Error(), "no route") {
 		t.Fatalf("want the original error, got %v", err)
+	}
+}
+
+func TestTheOldStoreURLHasTheSameCopy(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	head := func(url string) (*http.Response, error) {
+		if strings.Contains(url, "IceWhaleTech") {
+			return &http.Response{StatusCode: http.StatusNotFound}, nil
+		}
+
+		return &http.Response{StatusCode: http.StatusOK, ContentLength: 1}, nil
+	}
+	source, _, err := pickCatalogueSource("https://github.com/IceWhaleTech/_appstore/archive/refs/heads/main.zip", head)
+	if err != nil || source != mirrorZip {
+		t.Fatalf("a box that still names the old repository gets the copy too: %q %v", source, err)
 	}
 }
 

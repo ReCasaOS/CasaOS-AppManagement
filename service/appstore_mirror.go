@@ -10,18 +10,28 @@ import (
 
 // The catalogue's mirror.
 //
-// The App Store is IceWhale's catalogue, fetched as a zip of a GitHub repository
-// that nobody maintains any more. The day that repository goes away, every box
-// keeps the copy it already has and never sees an update again, and a fresh
-// install gets the seed the installer ships and nothing after. This
-// distribution keeps a copy of that repository, refreshed every night; when the
+// The App Store is IceWhale's catalogue, fetched as a zip: since February 2025
+// the artifact IceWhaleTech/CasaOS-AppStore builds on its gh-pages branch,
+// served through jsdelivr, and before that a zip of the IceWhaleTech/_appstore
+// repository, which a box installed then and upgraded since may still name in
+// its configuration. The day the source goes away, every box keeps the copy it
+// already has and never sees an update again, and a fresh install gets the seed
+// the installer ships and nothing after. This distribution keeps a copy of the
+// artifact, refreshed every night (github.com/ReCasaOS/_appstore); when the
 // original stops answering, the copy is fetched instead. The configured URL is
 // not changed, on disk or in the dashboard: the original is still the source,
 // and it is tried first on every update.
 
+// mirrorZip is this distribution's copy of the catalogue: the same bytes as
+// IceWhale's store/main.zip, taken every night.
+const mirrorZip = "https://raw.githubusercontent.com/ReCasaOS/_appstore/main/store/main.zip"
+
 // catalogueMirrors maps a catalogue's URL to this distribution's copy of it.
 var catalogueMirrors = map[string]string{
-	"https://github.com/IceWhaleTech/_appstore/archive/refs/heads/main.zip": "https://github.com/ReCasaOS/_appstore/archive/refs/heads/main.zip",
+	// the URL every configuration written since February 2025 carries
+	"https://cdn.jsdelivr.net/gh/IceWhaleTech/CasaOS-AppStore@gh-pages/store/main.zip": mirrorZip,
+	// the URL a box installed before that, and upgraded, still carries
+	"https://github.com/IceWhaleTech/_appstore/archive/refs/heads/main.zip": mirrorZip,
 }
 
 // pickCatalogueSource asks the catalogue's URL whether it answers, and its
