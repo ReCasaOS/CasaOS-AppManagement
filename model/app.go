@@ -88,6 +88,8 @@ type MyAppList struct {
 	AppStoreID     uint   `json:"appstore_id"`
 	IsUncontrolled bool   `json:"is_uncontrolled"`
 	ComposeProject string `json:"compose_project,omitempty"`
+	// the compose files that project was started from, as its containers record them
+	ComposeConfigFiles string `json:"-"`
 }
 
 type Ports struct {

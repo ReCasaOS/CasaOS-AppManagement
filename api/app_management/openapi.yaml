@@ -3071,6 +3071,13 @@ components:
             (`com.docker.compose.project`).
           type: string
           example: immich
+        compose_load_error:
+          description: |
+            Why the compose project named in `compose_project` is missing from the compose list,
+            absent when the container belongs to no project or its project loaded. These are the
+            loader's own words, which name the file and the field, so the owner knows what to change.
+          type: string
+          example: "open /data/compose/1/docker-compose.yml: no such file or directory"
         hostname:
           type: string
           example: ""

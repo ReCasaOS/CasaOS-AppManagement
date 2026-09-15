@@ -82,6 +82,7 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 		return *item
 	})
 
+	composeLoadErrors := composeLoadErrorCache{}
 	containerAppGridItems := lo.FilterMap(*containers, func(app model.MyAppList, i int) (codegen.WebAppGridItem, bool) {
 		if lo.ContainsBy(composeAppContainers, func(container codegen.ContainerSummary) bool { return container.ID == app.ID }) {
 			// already exists as compose app, skipping...
@@ -116,6 +117,9 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 		if err != nil {
 			logger.Error("failed to adapt web app grid item", zap.Error(err), zap.String("app", app.Name))
 			return codegen.WebAppGridItem{}, false
+		}
+		if app.ComposeProject != "" {
+			item.ComposeLoadError = composeLoadErrors.of(app.ComposeProject, app.ComposeConfigFiles)
 		}
 		return *item, true
 	})
@@ -272,4 +276,24 @@ func WebAppGridItemAdapterContainer(container *model.MyAppList) (*codegen.WebApp
 	}
 
 	return item, nil
+}
+
+// composeLoadErrorCache answers, once per project for one grid, why the compose list did not
+// claim a stack. The list drops a project whose files do not load with nothing but a log line,
+// so its containers reach the grid one by one, and the reason is what tells the owner what to
+// change.
+type composeLoadErrorCache map[string]*string
+
+func (c composeLoadErrorCache) of(project, configFiles string) *string {
+	if reason, ok := c[project]; ok {
+		return reason
+	}
+
+	var reason *string
+	if _, err := service.LoadComposeAppFromConfigFile(project, configFiles); err != nil {
+		reason = lo.ToPtr(err.Error())
+	}
+	c[project] = reason
+
+	return reason
 }

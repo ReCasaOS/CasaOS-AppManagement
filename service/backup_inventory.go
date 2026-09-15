@@ -196,6 +196,17 @@ func (a *ComposeApp) BackupInventory() []BackupEntry {
 		composeFile := path.Clean(filepath.ToSlash(a.ComposeFiles[0]))
 		entries = append(entries, BackupEntry{Kind: BackupKindCompose, Path: composeFile})
 
+		// A stack started from several files (an override beside the main one, `-f a -f b`)
+		// is copied with its first file only, the one an app that has to be installed again
+		// is installed from. Said here rather than dropped in silence.
+		for _, extra := range a.ComposeFiles[1:] {
+			entries = append(entries, BackupEntry{
+				Kind: BackupKindCompose,
+				Path: path.Clean(filepath.ToSlash(extra)),
+				Skip: "only the first compose file of an app is kept, and an app that has to be installed again is installed from it alone",
+			})
+		}
+
 		// The `.env` beside it is not optional detail when it exists: an app whose
 		// compose file references ${...} is unusable without it, and it is the one
 		// file in a backup that holds secrets. But most apps have none, and listing

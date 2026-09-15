@@ -365,7 +365,8 @@ func verdict(ctx context.Context, cli dockerDaemon, composeApp *ComposeApp, cont
 		}
 	}
 
-	for _, name := range sortedServiceNames(composeApp.Services) {
+	// a service built on this box has no registry to fall behind (pulledServiceNames)
+	for _, name := range pulledServiceNames(composeApp.Services) {
 		image := composeApp.Services[name].Image
 		if image == "" {
 			continue
@@ -436,7 +437,7 @@ func distinctImages(composeApps map[string]*ComposeApp) []string {
 	images := []string{}
 
 	for _, composeApp := range composeApps {
-		for _, name := range sortedServiceNames(composeApp.Services) {
+		for _, name := range pulledServiceNames(composeApp.Services) {
 			image := composeApp.Services[name].Image
 			if image == "" {
 				continue

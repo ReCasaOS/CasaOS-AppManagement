@@ -575,10 +575,9 @@ func (a *ComposeApp) Containers(ctx context.Context) (map[string][]api.Container
 }
 
 func (a *ComposeApp) Pull(ctx context.Context) error {
-	// pull
-	serviceNum := len(a.Services)
+	serviceNames := pulledServiceNames(a.Services)
+	serviceNum := len(serviceNames)
 
-	serviceNames := sortedServiceNames(a.Services)
 	for i, name := range serviceNames {
 		app := a.Services[name]
 		if err := func() error {
@@ -606,6 +605,20 @@ func (a *ComposeApp) Pull(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// pulledServiceNames is every service a pull fetches an image for, sorted. A service with a
+// build section is left out: CasaOS never builds, its container runs the image built on this
+// box, and a pull under the same name would replace that build with whatever a registry holds
+// (compose's own `pull --ignore-buildable` leaves them out the same way).
+func pulledServiceNames(services types.Services) []string {
+	names := []string{}
+	for _, name := range sortedServiceNames(services) {
+		if services[name].Build == nil {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func (a *ComposeApp) injectEnvVariableToComposeApp() {
@@ -918,7 +931,9 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 		}
 	}
 
-	newComposeApp, err := LoadComposeAppFromConfigFile(a.Name, currentComposeFile)
+	// every file the app is made of, not only the one just written: an override beside it is
+	// part of what docker runs
+	newComposeApp, err := LoadComposeAppFromConfigFile(a.Name, strings.Join(a.ComposeFiles, ","))
 	if err != nil {
 		return err
 	}
@@ -1125,12 +1140,13 @@ func (a *ComposeApp) ApplyEnv(ctx context.Context, env []byte) error {
 }
 
 func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[]byte) error {
-	// compare new ComposeApp with current ComposeApp
-	if getNameFrom(newComposeYAML) != a.Name {
+	if composeYAMLNamesAnotherApp(newComposeYAML, a.Name) {
 		return ErrComposeAppNotMatch
 	}
 
-	newComposeApp, err := NewComposeAppFromYAML(newComposeYAML, true, true)
+	// in the app's own folder: parsed in a temporary one, a relative `env_file: .env` was looked
+	// for there, and every save of an app that has one failed, its settings and its .env alike
+	newComposeApp, err := newComposeAppFromYAML(newComposeYAML, true, true, nil, a.WorkingDir)
 	if err != nil {
 		return err
 	}
@@ -1416,8 +1432,24 @@ func (a *ComposeApp) HealthCheck() (bool, error) {
 }
 
 func LoadComposeAppFromConfigFile(appID string, configFile string) (*ComposeApp, error) {
+	// Every file compose recorded, named explicitly. configFile is one path, or the
+	// comma-separated list a stack's containers carry when it was started from several (an
+	// override beside the main file, `-f a.yml -f b.yml`). Left to look for a default name in
+	// the directory, compose refused a file called anything else and took a comma-joined list
+	// for one directory name, and such a stack vanished from the compose list.
+	configFiles := []string{}
+	for _, f := range strings.Split(configFile, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			configFiles = append(configFiles, f)
+		}
+	}
+	if len(configFiles) == 0 {
+		return nil, ErrComposeFileNotFound
+	}
+
 	options := composeCmd.ProjectOptions{
-		ProjectDir:  filepath.Dir(configFile),
+		ConfigPaths: configFiles,
+		ProjectDir:  filepath.Dir(configFiles[0]),
 		ProjectName: appID,
 	}
 
@@ -1471,17 +1503,23 @@ func removeRuntime(a *ComposeApp) {
 }
 
 func NewComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool) (*ComposeApp, error) {
-	return newComposeAppFromYAML(yaml, skipInterpolation, skipValidation, nil)
+	return newComposeAppFromYAML(yaml, skipInterpolation, skipValidation, nil, "")
 }
 
 // keep is non-nil for the settings pipeline (ComposeAppFromSettingsYAML): the output is compose
 // text again, see substituteEscaping. nil resolves everything as before.
-func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, keep map[string]struct{}) (*ComposeApp, error) {
-	tmpWorkingDir, err := os.MkdirTemp("", "casaos-compose-app-*")
-	if err != nil {
-		return nil, err
+func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, keep map[string]struct{}, workingDir string) (*ComposeApp, error) {
+	// workingDir is where the relative paths of the text resolve (env_file, a build context, a
+	// ./ volume): the app's own folder for an installed app's file, a temporary folder for text
+	// that has no folder yet.
+	if workingDir == "" {
+		tmpWorkingDir, err := os.MkdirTemp("", "casaos-compose-app-*")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(tmpWorkingDir)
+		workingDir = tmpWorkingDir
 	}
-	defer os.RemoveAll(tmpWorkingDir)
 
 	// the WEBUI_PORT interpolate will tiger twice. In `pulished` and `port-map`.
 	// So we need to promise multiple WEBUI_PORT interpolate is a same value.
@@ -1502,7 +1540,7 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 
 			// need to set a working dir because loader/normalize.go from github.com/compose-spec/compose-go makes
 			// wrong assumption that the working dir is the same as the dir where this program is launched.
-			WorkingDir: tmpWorkingDir,
+			WorkingDir: workingDir,
 		},
 		func(o *loader.Options) {
 			o.SkipInterpolation = skipInterpolation
@@ -1581,6 +1619,15 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 	}
 
 	return composeApp, nil
+}
+
+// composeYAMLNamesAnotherApp says whether compose text declares a project name other than
+// name. Text that declares none is named by its stack, as compose does: a stack started by
+// hand rarely has `name:`, and the .env save re-applies the app's own file, which used to be
+// refused as another app's.
+func composeYAMLNamesAnotherApp(composeYAML []byte, name string) bool {
+	declared := getNameFrom(composeYAML)
+	return declared != "" && declared != name
 }
 
 func getNameFrom(composeYAML []byte) string {
