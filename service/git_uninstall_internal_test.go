@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
@@ -84,4 +85,27 @@ func TestAnUninstalledGitAppIsForgottenWithItsImages(t *testing.T) {
 	_, err = loadGitApp("jarvis")
 	assert.ErrorIs(t, err, ErrGitAppNotFound)
 	assert.Assert(t, !pathExists(gitAppFile("jarvis", ".key")))
+}
+
+// A git state that cannot be read may be an adopted app's, whose folder is its owner's: the
+// uninstall deletes nothing then, and keeps the state for the owner to look at. Any other
+// app's folder goes as before.
+func TestAnUnreadableGitStateKeepsEveryFolder(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	gitAppsIn(t)
+	withFakeGitDocker(t)
+	ctx := context.Background()
+
+	adopted := t.TempDir()
+	assert.NilError(t, os.MkdirAll(gitAppsDir, 0o700))
+	assert.NilError(t, os.WriteFile(gitAppFile("jarvis", ".json"), []byte("{torn"), 0o600))
+	(&ComposeApp{Name: "jarvis", WorkingDir: adopted}).removeUninstalledFolders(ctx, true)
+	_, err := os.Stat(adopted)
+	assert.NilError(t, err, "the folder is kept")
+	assert.Assert(t, pathExists(gitAppFile("jarvis", ".json")), "and so is the state")
+
+	other := t.TempDir()
+	(&ComposeApp{Name: "nextcloud", WorkingDir: other}).removeUninstalledFolders(ctx, false)
+	_, err = os.Stat(other)
+	assert.Assert(t, os.IsNotExist(err), "any other app's folder goes as before")
 }

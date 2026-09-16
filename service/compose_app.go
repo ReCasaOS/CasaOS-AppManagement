@@ -1116,8 +1116,25 @@ func (a *ComposeApp) Uninstall(ctx context.Context, deleteConfigFolder bool) err
 		return err
 	}
 
-	// nil for an app not deployed from git
-	gitState, _ := loadGitApp(a.Name)
+	a.removeUninstalledFolders(ctx, deleteConfigFolder)
+
+	return nil
+}
+
+// removeUninstalledFolders deletes what an uninstall deletes, once the containers are gone,
+// and forgets a git app. A git state that cannot be read may be an adopted app's, whose
+// folder is its owner's: nothing is deleted then, and the state stays.
+func (a *ComposeApp) removeUninstalledFolders(ctx context.Context, deleteConfigFolder bool) {
+	gitState, err := loadGitApp(a.Name)
+	if err != nil && !errors.Is(err, ErrGitAppNotFound) {
+		logger.Error("the git state of an uninstalled app cannot be read, so its folders are kept", zap.Error(err), zap.String("app", a.Name))
+
+		go PublishEventWrapper(ctx, common.EventTypeImageRemoveError, map[string]string{
+			common.PropertyTypeMessage.Name: err.Error(),
+		})
+
+		return
+	}
 
 	for _, path := range a.uninstalledFolders(gitState, deleteConfigFolder) {
 		if err := file.RMDir(path); err != nil {
@@ -1132,8 +1149,6 @@ func (a *ComposeApp) Uninstall(ctx context.Context, deleteConfigFolder bool) err
 	if gitState != nil {
 		forgetUninstalledGitApp(ctx, gitState)
 	}
-
-	return nil
 }
 
 // uninstalledFolders is what an uninstall deletes: the app's folder and, with
