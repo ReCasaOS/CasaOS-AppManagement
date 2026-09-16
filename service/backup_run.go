@@ -103,6 +103,7 @@ func runBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 	manifest := PlanBackup(app.Name, inventory, mountpoints)
 	manifest.MarkBindFiles(isRegularFile)
 	manifest.ContainersStopped = opts.HoldStill
+	manifest.Git = gitBackupOrigin(app.Name)
 
 	if opts.HoldStill {
 		end, err := Begin(app.Name, "backup")

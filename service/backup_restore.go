@@ -134,7 +134,13 @@ func restoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 			return report, err
 		}
 
-		app, err = install(ctx, opts.App, compose, env)
+		// an app deployed from git comes back from its repository, not from a copy of its
+		// compose file
+		if manifest.Git != nil {
+			app, err = restoreGitApp(ctx, opts.App, *manifest.Git, env)
+		} else {
+			app, err = install(ctx, opts.App, compose, env)
+		}
 		if err != nil {
 			return report, fmt.Errorf("could not install `%s` from its backup: %w", opts.App, err)
 		}

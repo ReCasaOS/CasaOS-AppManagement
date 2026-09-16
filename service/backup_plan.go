@@ -49,6 +49,16 @@ type BackupManifest struct {
 	// copied. A backup taken from a running database may not restore, and the only
 	// thing worse than knowing that is not knowing it.
 	ContainersStopped bool `json:"containers_stopped"`
+	// Git is where the code of an app deployed from its repository comes from. Optional, so
+	// the format version stays: an older reader ignores it.
+	Git *BackupGit `json:"git,omitempty"`
+}
+
+// BackupGit is a git app's origin as a backup records it. Never a key or a token.
+type BackupGit struct {
+	Remote string `json:"remote"`
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
 }
 
 // BackupFormatVersion is bumped when the layout changes in a way a reader must
