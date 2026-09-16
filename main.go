@@ -88,6 +88,11 @@ func main() {
 		// middle of its own copy.
 		service.RecoverHeldApps(service.MyService.Docker())
 
+		// A deployment or a check of a git app the last process did not live to finish is
+		// recorded as interrupted, and what its build left is removed. Once, here, for the
+		// same reason as above: an operation running now would be taken for one to undo.
+		service.RecoverGitApps(ctx)
+
 		config.RemoveRuntimeIfNoNvidiaGPUFlag = *removeRuntimeIfNoNvidiaGPUFlag
 	}
 
@@ -142,6 +147,14 @@ func main() {
 			if _, err := service.CheckImageUpdates(ctx); err != nil {
 				logger.Error("error when checking for image updates", zap.Error(err))
 			}
+		}); err != nil {
+			panic(err)
+		}
+
+		// Apps deployed from git: where each branch is now, and what the automatic rebuild
+		// may deploy. One ls-remote per app, which any forge answers in a second.
+		if _, err := crontab.AddFunc("@every 5m", func() {
+			service.CheckGitApps(ctx)
 		}); err != nil {
 			panic(err)
 		}
