@@ -89,9 +89,9 @@ func deployHolding(ctx context.Context, name, commit string, env *string, trigge
 
 	if err := gitDeployPreconditions(ctx, st, target, env, revert); err != nil {
 		if trigger == gitTriggerAutomatic {
-			// nothing changes but the reason, and the commit is not tried again
-			st.attempt(target)
-			finishGitDeploy(ctx, st, gitHistoryEntry{Commit: target, At: time.Now().UTC(), Outcome: gitOutcomeFailed, Reason: err.Error()})
+			// nothing changes but the reason, which the dashboard is told, and the commit is
+			// not tried again
+			failGitDeploy(common.WithProperties(ctx, map[string]string{common.PropertyTypeAppName.Name: st.App}), st, target, "", nil, gitOutcomeFailed, err)
 		}
 
 		return nil, err
@@ -152,6 +152,13 @@ func gitDeployPreconditions(ctx context.Context, st *gitApp, target string, env 
 		}
 	}
 
+	if st.Deployed != nil && !revert && target == st.Deployed.Commit {
+		// a build tags the running version's own images: a rollback would find the new ones
+		return GitRequestError(fmt.Sprintf("%s is already deployed: there is nothing new to build", target[:12]))
+	}
+	if st.Deployed != nil && revert && info.Head != st.Deployed.Commit {
+		return GitRequestError(fmt.Sprintf("%s is on %s, not on the deployed %s: a revert would drop the commits made there", st.Dir, info.Head[:12], st.Deployed.Commit[:12]))
+	}
 	if revert && !gitRevertable(ctx, st, *st.historyEntry(target)) {
 		return GitRequestError(fmt.Sprintf("%s cannot be reverted to: it is the running version, it never ran, or its images are gone", target[:12]))
 	}
@@ -182,6 +189,8 @@ func runGitDeploy(ctx context.Context, st *gitApp, target string, revert bool, t
 		if err := saveGitApp(st); err != nil {
 			logger.Error("the deployment could not be written down", zap.Error(err), zap.String("app", st.App))
 		}
+		// once the state says deploying: the dashboard reads the app again when it hears this
+		go PublishEventWrapper(ctx, common.EventTypeAppGitBuildEnd, nil)
 	}
 
 	subject, _ := git.Subject(ctx, st.Dir, target)
@@ -190,10 +199,13 @@ func runGitDeploy(ctx context.Context, st *gitApp, target string, revert bool, t
 	if revert {
 		move = git.ResetKeep
 	}
-	err = move(ctx, st.Dir, target)
-	if err == nil {
-		err = gitDocker.Retag(ctx, st.App, st.Dir, target)
+	if err := move(ctx, st.Dir, target); err != nil {
+		// nothing moved: the folder and the running version are as they were
+		failGitDeploy(ctx, st, target, subject, images, gitOutcomeFailed, err)
+		return
 	}
+
+	err = gitDocker.Retag(ctx, st.App, st.Dir, target)
 	if err == nil {
 		err = gitDocker.Start(ctx, st.App, st.Dir)
 	}
@@ -233,6 +245,9 @@ func fetchAndBuild(ctx context.Context, st *gitApp, target string, previous *git
 			err = fmt.Errorf("%s does not descend from the deployed %s", target[:12], previous.Commit[:12])
 		}
 	}
+	if err == nil && previous != nil {
+		err = gitFolderContainedIn(ctx, st.Dir, previous.Commit, target)
+	}
 	if err != nil {
 		failGitDeploy(ctx, st, target, "", nil, gitOutcomeFailed, err)
 		return nil, err
@@ -249,41 +264,58 @@ func fetchAndBuild(ctx context.Context, st *gitApp, target string, previous *git
 	return images, nil
 }
 
+// gitFolderContainedIn refuses a folder holding commits target does not contain, made there
+// by hand: a rollback moves the folder back to deployed, and would drop them.
+func gitFolderContainedIn(ctx context.Context, dir, deployed, target string) error {
+	info, err := git.Describe(ctx, dir)
+	if err != nil || info.Head == deployed {
+		return err
+	}
+
+	contained, err := git.IsAncestor(ctx, dir, info.Head, target)
+	if err == nil && !contained {
+		err = fmt.Errorf("%s is on %s, which %s does not contain: push the commits made there, or move the folder back to %s", dir, info.Head[:12], target[:12], deployed[:12])
+	}
+
+	return err
+}
+
 // buildGitCommit builds commit in a worktree of its own, with the build's output going to
-// the app's build log and to the bus.
+// the app's build log and to the bus. The log is closed, its last lines sent, before it
+// returns: the caller announces how the build ended once that is written down.
 func buildGitCommit(ctx context.Context, st *gitApp, commit string, auth git.Auth) (map[string]string, error) {
 	file, err := os.OpenFile(gitAppFile(st.App, ".build.log"), os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	out := &gitBuildLog{ctx: ctx, file: file}
-	defer out.Close()
 
-	go PublishEventWrapper(ctx, common.EventTypeAppGitBuildBegin, nil)
+	// before any line of the build: the dashboard clears its log when it hears this
+	PublishEventWrapper(ctx, common.EventTypeAppGitBuildBegin, nil)
 
 	images, err := func() (map[string]string, error) {
 		worktree := filepath.Join(gitAppsDir, "work", st.App+"-"+commit[:12])
-		if err := git.AddWorktree(ctx, st.Dir, commit, worktree, auth); err != nil {
-			return nil, err
-		}
+		// removed even when adding it failed half-way, as a submodule that cannot be fetched
+		// leaves it: the next attempt of this commit needs the path free
 		defer func() {
 			if err := git.RemoveWorktree(context.Background(), st.Dir, worktree); err != nil {
 				logger.Error("a build's worktree could not be removed", zap.Error(err), zap.String("path", worktree))
 			}
 		}()
+		if err := git.AddWorktree(ctx, st.Dir, commit, worktree, auth); err != nil {
+			return nil, err
+		}
 
 		return gitDocker.Build(ctx, st.App, worktree, filepath.Join(st.Dir, ".env"), commit, out)
 	}()
 	if err != nil {
 		fmt.Fprintf(out, "\nthe build of %s failed: %v\n", commit[:12], err)
-		go PublishEventWrapper(ctx, common.EventTypeAppGitBuildError, map[string]string{common.PropertyTypeMessage.Name: err.Error()})
-
-		return nil, err
+	}
+	if closeErr := out.Close(); closeErr != nil {
+		logger.Error("the build log could not be closed", zap.Error(closeErr), zap.String("app", st.App))
 	}
 
-	go PublishEventWrapper(ctx, common.EventTypeAppGitBuildEnd, nil)
-
-	return images, nil
+	return images, err
 }
 
 // rollBackGitDeploy puts the previous version back after target did not start: its
@@ -326,9 +358,12 @@ func failGitDeploy(ctx context.Context, st *gitApp, target, subject string, imag
 		Commit: target, Subject: subject, At: time.Now().UTC(), Outcome: outcome, Reason: cause.Error(), Images: images,
 	})
 
-	if outcome != gitOutcomeBuildFailed {
-		go PublishEventWrapper(ctx, common.EventTypeAppGitDeployError, map[string]string{common.PropertyTypeMessage.Name: cause.Error()})
+	// after the state is written down: the dashboard reads the app again when it hears this
+	event := common.EventTypeAppGitDeployError
+	if outcome == gitOutcomeBuildFailed {
+		event = common.EventTypeAppGitBuildError
 	}
+	go PublishEventWrapper(ctx, event, map[string]string{common.PropertyTypeMessage.Name: cause.Error()})
 }
 
 // finishGitDeploy records how a deployment ended, clears the operation, and removes the

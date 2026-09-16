@@ -324,6 +324,70 @@ func TestADeploymentRefusesWhatWouldBreakTheApp(t *testing.T) {
 	assert.DeepEqual(t, fake.Calls(), []string{})
 }
 
+// A rebuild of what runs would tag the running version's images anew, and leave a rollback
+// nothing to go back to.
+func TestTheDeployedCommitIsNotBuiltAgain(t *testing.T) {
+	fake, _, _ := deployedTestApp(t, false)
+
+	_, err := DeployGitApp(context.Background(), "jarvis", "", nil)
+	assertBadRequest(t, err, "already deployed")
+	assert.DeepEqual(t, fake.Calls(), []string{})
+}
+
+// Commits made in the folder by hand are never rolled back over: the deployment stops
+// before building, and the folder keeps them.
+func TestAFolderWithCommitsOfItsOwnIsLeftAsItIs(t *testing.T) {
+	fake, work, first := deployedTestApp(t, false)
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	mine := gitShell(t, st.Dir, "echo mine > notes.txt && git add notes.txt && git commit -qm mine && git rev-parse HEAD")
+	second := pushTestCommit(t, work, "index.html", "v2")
+
+	st = deployTestApp(t)
+
+	assert.DeepEqual(t, fake.Calls(), []string{})
+	assert.Equal(t, st.History[0].Commit, second)
+	assert.Equal(t, st.History[0].Outcome, gitOutcomeFailed)
+	assert.Assert(t, strings.Contains(st.History[0].Reason, "push the commits made there"), st.History[0].Reason)
+	assert.Equal(t, st.Deployed.Commit, first)
+	assert.Equal(t, folderHead(t, st.Dir), mine)
+	notes, err := os.ReadFile(filepath.Join(st.Dir, "notes.txt"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(notes), "mine\n")
+}
+
+// A move git refuses leaves the running version as it was: there is nothing to roll back.
+func TestAMoveGitRefusesChangesNothing(t *testing.T) {
+	fake, work, first := deployedTestApp(t, false)
+	second := pushTestCommit(t, work, "index.html", "v2")
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	// an untracked file where the new commit puts a tracked one: the fast-forward stops
+	assert.NilError(t, os.WriteFile(filepath.Join(st.Dir, "index.html"), []byte("mine"), 0o644))
+
+	st = deployTestApp(t)
+
+	assert.DeepEqual(t, fake.Calls(), []string{"build " + second[:12]})
+	assert.Equal(t, st.History[0].Outcome, gitOutcomeFailed)
+	assert.Equal(t, st.Deployed.Commit, first)
+	assert.Equal(t, folderHead(t, st.Dir), first)
+	mine, err := os.ReadFile(filepath.Join(st.Dir, "index.html"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(mine), "mine")
+}
+
+func TestARevertOverCommitsOfTheFolderIsRefused(t *testing.T) {
+	fake, work, first := deployedTestApp(t, false)
+	pushTestCommit(t, work, "index.html", "v2")
+	st := deployTestApp(t)
+	gitShell(t, st.Dir, "echo mine > notes.txt && git add notes.txt && git commit -qm mine")
+	fake.calls = nil
+
+	_, err := DeployGitApp(context.Background(), "jarvis", first, nil)
+	assertBadRequest(t, err, "a revert would drop the commits made there")
+	assert.DeepEqual(t, fake.Calls(), []string{})
+}
+
 func TestATrackedEnvIsNeverWritten(t *testing.T) {
 	_, work := clonedTestApp(t)
 	pushTestCommit(t, work, ".env", "GREETING=tracked\n")
