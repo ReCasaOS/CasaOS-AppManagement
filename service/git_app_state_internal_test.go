@@ -114,6 +114,25 @@ func TestAttemptedCommitsAreBoundedAndUnique(t *testing.T) {
 	assert.Equal(t, st.Attempted[gitAttemptedLength-1], strings.Repeat("y", 40))
 }
 
+// A commit can be in the history more than once. The entry that answers for it is the newest
+// of a version that ran, the one a revert goes back to; failing that, the newest.
+func TestTheHistoryEntryOfACommitIsTheNewestThatRan(t *testing.T) {
+	st := &gitApp{History: []gitHistoryEntry{
+		{Commit: "a", Outcome: gitOutcomeRolledBack},
+		{Commit: "b", Outcome: gitOutcomeFailed},
+		{Commit: "a", Outcome: gitOutcomeDeployed},
+		{Commit: "c", Outcome: gitOutcomeInterrupted},
+		{Commit: "c", Outcome: gitOutcomeAdopted},
+		{Commit: "a", Outcome: gitOutcomeAdopted},
+		{Commit: "b", Outcome: gitOutcomeBuildFailed},
+	}}
+
+	assert.Assert(t, st.historyEntry("a") == &st.History[2])
+	assert.Assert(t, st.historyEntry("c") == &st.History[4])
+	assert.Assert(t, st.historyEntry("b") == &st.History[1], "no version of b ran")
+	assert.Assert(t, st.historyEntry("d") == nil)
+}
+
 func TestAGitURLIsOneGitCanBeGivenSafely(t *testing.T) {
 	for raw, kind := range map[string]string{
 		"https://github.com/owner/jarvis.git":      "http",

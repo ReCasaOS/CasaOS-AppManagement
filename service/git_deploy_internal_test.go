@@ -486,6 +486,30 @@ func TestARevertOverCommitsOfTheFolderIsRefused(t *testing.T) {
 	assert.DeepEqual(t, fake.Calls(), []string{})
 }
 
+// A revert that failed leaves an entry for its commit newer than the one of the version that
+// ran: the history still offers that version, and a revert to it is accepted.
+func TestAVersionARevertFailedToReachCanStillBeRevertedTo(t *testing.T) {
+	fake, work, first := deployedTestApp(t, false)
+	second := pushTestCommit(t, work, "index.html", "v2")
+	deployTestApp(t)
+	fake.startErrs = []error{errors.New("container exited with code 1")}
+	_, err := DeployGitApp(context.Background(), "jarvis", first, nil)
+	assert.NilError(t, err)
+	st := waitForGitApp(t, "jarvis")
+	for i, want := range []string{first + " rolled_back", second + " deployed", first + " deployed"} {
+		assert.Equal(t, st.History[i].Commit+" "+st.History[i].Outcome, want)
+	}
+	assert.Equal(t, newGitAppView(context.Background(), st).History[2].Revertable, true)
+	fake.calls = nil
+
+	_, err = DeployGitApp(context.Background(), "jarvis", first, nil)
+	assert.NilError(t, err)
+	st = waitForGitApp(t, "jarvis")
+
+	assert.DeepEqual(t, fake.Calls(), []string{"retag " + first[:12], "start " + first[:12]})
+	assert.Equal(t, st.Deployed.Commit, first)
+}
+
 func TestATrackedEnvIsNeverWritten(t *testing.T) {
 	_, work := clonedTestApp(t)
 	pushTestCommit(t, work, ".env", "GREETING=tracked\n")

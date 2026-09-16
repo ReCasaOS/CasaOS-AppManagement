@@ -382,13 +382,23 @@ func (st *gitApp) attempt(commit string) {
 	}
 }
 
-// historyEntry is the entry for commit, or nil.
+// historyEntry is the newest entry for commit of a version that ran, deployed or adopted, which
+// is what a revert goes back to; failing that the newest entry for commit, or nil. A revert that
+// failed leaves a newer entry for its commit than the one the history offers to revert to.
 func (st *gitApp) historyEntry(commit string) *gitHistoryEntry {
+	var newest *gitHistoryEntry
 	for i := range st.History {
-		if st.History[i].Commit == commit {
-			return &st.History[i]
+		entry := &st.History[i]
+		if entry.Commit != commit {
+			continue
+		}
+		if entry.Outcome == gitOutcomeDeployed || entry.Outcome == gitOutcomeAdopted {
+			return entry
+		}
+		if newest == nil {
+			newest = entry
 		}
 	}
 
-	return nil
+	return newest
 }
