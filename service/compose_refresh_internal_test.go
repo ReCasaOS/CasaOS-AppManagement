@@ -122,6 +122,33 @@ func TestComposeYAMLForUpdateTakesTheCatalogueImagesWhenThereIsAnEntry(t *testin
 	assert.Assert(t, strings.Contains(string(out), "image: acme/a:2"), string(out))
 }
 
+// A git app's compose file is its repository's: an update writes it back byte for byte, or git
+// sees it modified and every later deployment refuses. Any other app gets what it got before.
+func TestComposeYAMLForUpdateWritesAGitAppsFileBackAsItIs(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	gitAppsIn(t)
+
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, "compose.yaml")
+	const compose = "# jarvis, as its repository has it\nservices:\n  web:\n    ports:\n      - \"8080:80\" # the dashboard\n    image: nginx:1\n"
+	assert.NilError(t, os.WriteFile(composeFile, []byte(compose), 0o644))
+
+	a, err := LoadComposeAppFromConfigFile("jarvis", composeFile)
+	assert.NilError(t, err)
+
+	refreshed, err := a.refreshedComposeYAML()
+	assert.NilError(t, err)
+	assert.Assert(t, string(refreshed) != compose, "an update rewrites this file for an app that is not a git app")
+	out, err := a.composeYAMLForUpdate(nil)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, out, refreshed)
+
+	assert.NilError(t, saveGitApp(&gitApp{App: "jarvis", Origin: gitOriginCreated, Dir: dir}))
+	out, err = a.composeYAMLForUpdate(nil)
+	assert.NilError(t, err)
+	assert.Equal(t, string(out), compose)
+}
+
 // The dashboard badges an app from what the image check found, so the update button
 // has to agree with the badge. Before this, an imported app was never updatable at
 // all, and a store app whose tag had not moved read as up to date even when its image

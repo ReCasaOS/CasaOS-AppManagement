@@ -380,7 +380,16 @@ func (a *ComposeApp) applyUpdate(ctx context.Context, newComposeYAML []byte) err
 // it finds no store entry). Keying on the flag left imported apps exactly as frozen as
 // before and took the catalogue away from pinned apps, which are the only ones that
 // have one.
+//
+// A git app's compose file is a tracked file of its repository, and CasaOS never writes
+// one: the update writes back the bytes already there, and is the pull and the up that
+// follow. Marshalled again, the file would read as modified to git, and every later
+// deployment would refuse.
 func (a *ComposeApp) composeYAMLForUpdate(storeComposeApp *ComposeApp) ([]byte, error) {
+	if _, err := loadGitApp(a.Name); err == nil {
+		return os.ReadFile(a.ComposeFiles[0])
+	}
+
 	if storeComposeApp == nil {
 		return a.refreshedComposeYAML()
 	}
