@@ -120,14 +120,45 @@ func TestAGitURLIsOneGitCanBeGivenSafely(t *testing.T) {
 		"http://gitea.local:3000/owner/jarvis.git": "http",
 		"git@github.com:owner/jarvis.git":          "ssh",
 		"ssh://git@gitea.local:2222/owner/j.git":   "ssh",
+		"ssh://git@[::1]:2222/owner/j.git":         "ssh",
+		"https://[2001:db8::1]/owner/j.git":        "http",
 		"file:///opt/jarvis.git":                   "file",
 		"https://owner:hunter2@github.com/j.git":   "",
 		"--upload-pack=touch /tmp/pwned":           "",
 		"ext::sh -c touch% /tmp/pwned":             "",
+		"ext::id":                                  "",
+		"ext::sh${IFS}-c${IFS}id":                  "",
+		"fd::0":                                    "",
 		"ftp://example.com/jarvis.git":             "",
 		"":                                         "",
 	} {
 		assert.Equal(t, gitURLKind(raw), kind, raw)
 	}
 	assert.Equal(t, redactGitURL("https://owner:hunter2@github.com/j.git"), "https://owner@github.com/j.git")
+}
+
+func TestABranchIsANameGitCannotReadAsSomethingElse(t *testing.T) {
+	for branch, valid := range map[string]bool{
+		"":                   true,
+		"main":               true,
+		"feature/voice-wake": true,
+		"release-1.2":        true,
+		"-upload-pack":       false,
+		"main..dev":          false,
+		"@":                  false,
+		"@{upstream}":        false,
+		"main@{-1}":          false,
+		"main~1":             false,
+		"main^":              false,
+		"a b":                false,
+		"a:b":                false,
+		"a?b":                false,
+		"a*b":                false,
+		"a[b":                false,
+		"a\\b":               false,
+		"a\x1bb":             false,
+		"a\x7fb":             false,
+	} {
+		assert.Equal(t, validGitBranch(branch), valid, "%q", branch)
+	}
 }

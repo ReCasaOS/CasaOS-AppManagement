@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
 	"github.com/samber/lo"
@@ -117,11 +118,15 @@ type gitHistoryEntry struct {
 
 var scpLikeGitURL = regexp.MustCompile(`^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:\S+$`)
 
+// gitTransportHelper is git's `<transport>::<address>`: whatever follows, git hands the
+// address to a remote helper (ext runs a command, fd reads a file descriptor).
+var gitTransportHelper = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*::`)
+
 // gitURLKind is `http`, `ssh` or `file` for a URL git may be given, and empty for anything
 // else: another transport, an option in disguise, or a password written in the URL, which
 // belongs in a token.
 func gitURLKind(raw string) string {
-	if raw == "" || strings.HasPrefix(raw, "-") || strings.ContainsAny(raw, " \t\r\n") {
+	if raw == "" || strings.HasPrefix(raw, "-") || strings.ContainsAny(raw, " \t\r\n") || gitTransportHelper.MatchString(raw) {
 		return ""
 	}
 
@@ -167,8 +172,11 @@ func redactGitURL(raw string) string {
 	return u.String()
 }
 
+// validGitBranch is a name git reads as a branch name: not an option, not a revision
+// expression (`..`, `@`, `@{`, `~`, `^`), and no character a ref name forbids.
 func validGitBranch(branch string) bool {
-	return !strings.HasPrefix(branch, "-") && !strings.Contains(branch, "..") && !strings.ContainsAny(branch, " \t\r\n~^:?*[\\")
+	return !strings.HasPrefix(branch, "-") && branch != "@" && !strings.Contains(branch, "..") && !strings.Contains(branch, "@{") &&
+		!strings.ContainsAny(branch, " ~^:?*[\\") && !strings.ContainsFunc(branch, unicode.IsControl)
 }
 
 // gitAppFile is one of an app's files: .json, .key, .key.pub, .token, .known_hosts or
