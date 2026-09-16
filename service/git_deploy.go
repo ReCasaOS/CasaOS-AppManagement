@@ -96,6 +96,10 @@ func deployHolding(ctx context.Context, name, commit string, env *string, trigge
 
 		return nil, err
 	}
+	// the deployed commit gets past the preconditions only as a repair: its version deployed
+	// again, which is no revert
+	redeploy := st.Deployed != nil && target == st.Deployed.Commit
+	revert = revert && !redeploy
 
 	if env != nil {
 		if err := (&ComposeApp{WorkingDir: st.Dir}).WriteEnvFile([]byte(*env)); err != nil {
@@ -104,8 +108,11 @@ func deployHolding(ctx context.Context, name, commit string, env *string, trigge
 	}
 
 	kind := gitOperationBuild
-	if revert {
+	switch {
+	case revert:
 		kind = gitOperationRevert
+	case redeploy && gitDocker.ImagesExist(ctx, st.Deployed.Images):
+		kind = gitOperationDeploy
 	}
 	st.Operation = &gitOperation{Kind: kind, Commit: target, StartedAt: time.Now().UTC()}
 	if err := saveGitApp(st); err != nil {
@@ -134,6 +141,8 @@ func gitDeployPreconditions(ctx context.Context, st *gitApp, target string, env 
 	switch {
 	case err != nil:
 		return GitRequestError(fmt.Sprintf("%s is not a git work tree any more: %v", st.Dir, err))
+	case info.Head == "":
+		return GitRequestError(fmt.Sprintf("%s holds no commit any more", st.Dir))
 	case info.Branch != st.Branch:
 		return GitRequestError(fmt.Sprintf("%s is not on the branch %s", st.Dir, st.Branch))
 	case !info.TrackedFilesClean:
@@ -152,6 +161,16 @@ func gitDeployPreconditions(ctx context.Context, st *gitApp, target string, env 
 		}
 	}
 
+	if st.Deployed != nil && target == st.Deployed.Commit && (st.Blocked || info.Head != target) {
+		// a repair: the version that runs, deployed again over a rollback that failed or a
+		// folder an interrupted revert moved, puts the folder back on its commit, which must
+		// contain whatever the folder is on
+		if err := gitFolderContainedIn(ctx, st.Dir, target, target); err != nil {
+			return GitRequestError(err.Error())
+		}
+
+		return nil
+	}
 	if st.Deployed != nil && !revert && target == st.Deployed.Commit {
 		// a build tags the running version's own images: a rollback would find the new ones
 		return GitRequestError(fmt.Sprintf("%s is already deployed: there is nothing new to build", target[:12]))
@@ -170,6 +189,9 @@ func gitDeployPreconditions(ctx context.Context, st *gitApp, target string, env 
 func runGitDeploy(ctx context.Context, st *gitApp, target string, revert bool, trigger gitTrigger) {
 	ctx = common.WithProperties(ctx, map[string]string{common.PropertyTypeAppName.Name: st.App})
 	previous := st.Deployed
+	// the deployed commit again, never a revert: an app repaired, or restored at the version its
+	// state names
+	redeploy := previous != nil && target == previous.Commit
 
 	auth, err := gitAuth(st)
 	if err != nil {
@@ -178,9 +200,14 @@ func runGitDeploy(ctx context.Context, st *gitApp, target string, revert bool, t
 	}
 
 	var images map[string]string
-	if revert {
+	switch {
+	case revert:
 		images = st.historyEntry(target).Images
-	} else {
+	case redeploy && gitDocker.ImagesExist(ctx, previous.Images):
+		// nothing to build: what that version ran is still there
+		images = previous.Images
+	default:
+		// for a redeployment, only once its images are gone: a build tags them anew
 		if images, err = fetchAndBuild(ctx, st, target, previous, auth); err != nil {
 			return
 		}
@@ -196,7 +223,7 @@ func runGitDeploy(ctx context.Context, st *gitApp, target string, revert bool, t
 	subject, _ := git.Subject(ctx, st.Dir, target)
 
 	move := git.FastForward
-	if revert {
+	if revert || redeploy {
 		move = git.ResetKeep
 	}
 	if err := move(ctx, st.Dir, target); err != nil {
@@ -216,8 +243,9 @@ func runGitDeploy(ctx context.Context, st *gitApp, target string, revert bool, t
 
 	st.Deployed = &gitDeployment{Commit: target, Subject: subject, At: time.Now().UTC(), Images: images}
 	st.Blocked = false
-	if trigger == gitTriggerManual {
-		// a revert pauses the automatic rebuild, or the next check would undo it
+	if trigger == gitTriggerManual && !redeploy {
+		// a revert pauses the automatic rebuild, or the next check would undo it; the version
+		// that runs, deployed again, leaves the switch as it was
 		st.AutoPaused = revert
 	}
 	st.EnvTracked, _ = git.IsTracked(ctx, st.Dir, ".env")

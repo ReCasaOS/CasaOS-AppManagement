@@ -334,6 +334,104 @@ func TestTheDeployedCommitIsNotBuiltAgain(t *testing.T) {
 	assert.DeepEqual(t, fake.Calls(), []string{})
 }
 
+// A rollback that failed blocks the app. Once the broken commit is off the branch, "Fetch and
+// rebuild" finds the deployed commit there and deploys that version again, from its images.
+func TestABlockedAppIsRepairedFromTheImagesOfItsDeployedVersion(t *testing.T) {
+	fake, work, first := deployedTestApp(t, false)
+	pushTestCommit(t, work, "index.html", "v2")
+	fake.startErrs = []error{errors.New("container exited with code 1"), errors.New("port 8080 is already allocated")}
+	st := deployTestApp(t)
+	assert.Equal(t, st.Blocked, true)
+	gitShell(t, work, "git push -q -f origin "+first+":main")
+	st.AutoPaused = true
+	assert.NilError(t, saveGitApp(st))
+	fake.calls = nil
+
+	st = deployTestApp(t)
+
+	assert.DeepEqual(t, fake.Calls(), []string{"retag " + first[:12], "start " + first[:12]})
+	assert.Equal(t, st.Blocked, false)
+	assert.Equal(t, st.AutoPaused, true, "a repair leaves the automatic rebuild as it was")
+	assert.Equal(t, st.Deployed.Commit, first)
+	assert.Equal(t, gitAppStateOf(st), "idle")
+}
+
+// A revert AppManagement did not live to finish leaves the folder on the older commit and the
+// newer version deployed: asked for again, the deployed commit is deployed from its images, and
+// the folder is put back on it.
+func TestAFolderAnInterruptedRevertMovedIsPutBackOnTheDeployedCommit(t *testing.T) {
+	fake, work, first := deployedTestApp(t, false)
+	second := pushTestCommit(t, work, "index.html", "v2")
+	st := deployTestApp(t)
+	gitShell(t, st.Dir, "git reset -q --keep "+first)
+	fake.calls = nil
+
+	st = deployTestApp(t)
+
+	assert.DeepEqual(t, fake.Calls(), []string{"retag " + second[:12], "start " + second[:12]})
+	assert.Equal(t, folderHead(t, st.Dir), second)
+	assert.Equal(t, st.Deployed.Commit, second)
+
+	// the deployed commit given as such is the same repair, not a revert that pauses anything
+	gitShell(t, st.Dir, "git reset -q --keep "+first)
+	fake.calls = nil
+
+	_, err := DeployGitApp(context.Background(), "jarvis", second, nil)
+	assert.NilError(t, err)
+	st = waitForGitApp(t, "jarvis")
+
+	assert.DeepEqual(t, fake.Calls(), []string{"retag " + second[:12], "start " + second[:12]})
+	assert.Equal(t, folderHead(t, st.Dir), second)
+	assert.Equal(t, st.AutoPaused, false)
+}
+
+// With the deployed version's images gone, a repair has nothing to start from: it builds that
+// version, whose images nothing runs any more.
+func TestARepairWhoseImagesAreGoneBuildsThem(t *testing.T) {
+	fake, work, first := deployedTestApp(t, false)
+	second := pushTestCommit(t, work, "index.html", "v2")
+	st := deployTestApp(t)
+	gitShell(t, st.Dir, "git reset -q --keep "+first)
+	fake.missing["jarvis-web:git-"+second[:12]] = true
+	fake.calls = nil
+
+	st = deployTestApp(t)
+
+	assert.DeepEqual(t, fake.Calls(), []string{"build " + second[:12], "retag " + second[:12], "start " + second[:12]})
+	assert.Equal(t, folderHead(t, st.Dir), second)
+	assert.Equal(t, st.Deployed.Commit, second)
+}
+
+// A repair puts the folder back on the deployed commit: the commits made there, which that
+// commit does not contain, would be dropped, and it is refused.
+func TestARepairOverCommitsOfTheFolderIsRefused(t *testing.T) {
+	fake, _, _ := deployedTestApp(t, false)
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	mine := gitShell(t, st.Dir, "echo mine > notes.txt && git add notes.txt && git commit -qm mine && git rev-parse HEAD")
+
+	_, err = DeployGitApp(context.Background(), "jarvis", "", nil)
+
+	assertBadRequest(t, err, "push the commits made there")
+	assert.DeepEqual(t, fake.Calls(), []string{})
+	assert.Equal(t, folderHead(t, st.Dir), mine)
+}
+
+// A folder with no commit any more, as `git init` leaves one, is refused before anything reads
+// the commit it is on.
+func TestADeploymentOfAFolderWithNoCommitSaysWhy(t *testing.T) {
+	fake, _, first := deployedTestApp(t, false)
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	gitShell(t, st.Dir, "git update-ref -d refs/heads/main && git read-tree --empty")
+
+	for _, commit := range []string{first, ""} {
+		_, err = DeployGitApp(context.Background(), "jarvis", commit, nil)
+		assertBadRequest(t, err, "no commit")
+	}
+	assert.DeepEqual(t, fake.Calls(), []string{})
+}
+
 // Commits made in the folder by hand are never rolled back over: the deployment stops
 // before building, and the folder keeps them.
 func TestAFolderWithCommitsOfItsOwnIsLeftAsItIs(t *testing.T) {

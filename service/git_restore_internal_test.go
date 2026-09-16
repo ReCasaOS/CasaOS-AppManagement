@@ -85,6 +85,19 @@ func TestAGitAppIsInstalledFromItsBackupAtTheBackedUpCommit(t *testing.T) {
 	assert.Equal(t, string(env), "GREETING=hello\n")
 }
 
+// A restore of the version the app's state already names starts it from the images that
+// version kept, and builds nothing.
+func TestARestoreOfTheDeployedCommitStartsItFromItsImages(t *testing.T) {
+	fake, _, first := deployedTestApp(t, false)
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+
+	_, err = installGitAppFromBackup(context.Background(), "jarvis", BackupGit{Remote: st.Remote, Branch: st.Branch, Commit: first}, nil)
+	assert.NilError(t, err)
+
+	assert.DeepEqual(t, fake.Calls(), []string{"retag " + first[:12], "start " + first[:12]})
+}
+
 // A backup holds no key and no token: a repository the restore cannot reach leaves the app
 // registered with what it needs, and the restore says what to do.
 func TestARestoreThatCannotReachTheRepositoryAsksForAccess(t *testing.T) {
