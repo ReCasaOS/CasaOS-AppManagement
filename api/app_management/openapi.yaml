@@ -3020,11 +3020,44 @@ components:
             type: string
           example:
             plex: image never pulled on this host
+    GitAppState:
+      description: |
+        `building` and `deploying` while a deployment runs. Otherwise `failed` when automatic
+        actions are blocked or the last deployment failed; `build_failed`, `rolled_back` or
+        `interrupted` when that is how the last deployment ended; `unreachable` when the last
+        check could not reach the repository; `idle` otherwise.
+
+        One of `idle`, `building`, `deploying`, `build_failed`, `rolled_back`, `failed`,
+        `unreachable`, `interrupted`. Not declared as an enum: oapi-codegen v1.12.4 renames the
+        constants of existing enums when one is added.
+      type: string
+      example: idle
+
+    GitAppGrid:
+      description: |
+        What the app card shows of a git app. A git app with no container, never deployed or
+        left without one by a failed first deployment, is in the grid all the same, with an
+        empty `status`.
+      required:
+        - new_commits
+        - state
+        - deployed
+      properties:
+        new_commits:
+          type: boolean
+        state:
+          $ref: "#/components/schemas/GitAppState"
+        deployed:
+          type: boolean
+          description: False until a deployment has succeeded.
+
     WebAppGridItem:
       description: (internal use ONLY)
       required:
         - app_type
       properties:
+        git:
+          $ref: "#/components/schemas/GitAppGrid"
         update_available:
           description: |
             Whether something newer than what this app runs is available.

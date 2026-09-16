@@ -126,6 +126,8 @@ var EventTypes = []message_bus.EventType{
 	EventTypeAppStartBegin, EventTypeAppStartEnd, EventTypeAppStartError,
 	EventTypeAppStopBegin, EventTypeAppStopEnd, EventTypeAppStopError,
 	EventTypeAppRestartBegin, EventTypeAppRestartEnd, EventTypeAppRestartError,
+	EventTypeAppGitBuildBegin, EventTypeAppGitBuildProgress, EventTypeAppGitBuildEnd, EventTypeAppGitBuildError,
+	EventTypeAppGitDeployEnd, EventTypeAppGitDeployError,
 
 	// image
 	EventTypeImagePullBegin, EventTypeImagePullProgress, EventTypeImagePullEnd, EventTypeImagePullError,
@@ -380,6 +382,61 @@ var (
 	EventTypeAppRestartError = message_bus.EventType{
 		SourceID: AppManagementServiceName,
 		Name:     "app:restart-error",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeMessage,
+		},
+	}
+)
+
+// event types for apps deployed from their git repository. A build says what it is doing
+// line by line in progress events; a deployment says only how it ended.
+var (
+	EventTypeAppGitBuildBegin = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:git-build-begin",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+		},
+	}
+
+	EventTypeAppGitBuildProgress = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:git-build-progress",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeMessage,
+		},
+	}
+
+	EventTypeAppGitBuildEnd = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:git-build-end",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+		},
+	}
+
+	EventTypeAppGitBuildError = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:git-build-error",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeMessage,
+		},
+	}
+
+	EventTypeAppGitDeployEnd = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:git-deploy-end",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+		},
+	}
+
+	EventTypeAppGitDeployError = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:git-deploy-error",
 		PropertyTypeList: []message_bus.PropertyType{
 			PropertyTypeAppName,
 			PropertyTypeMessage,

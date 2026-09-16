@@ -67,6 +67,7 @@ func TestWebAppGridItemAdapter(t *testing.T) {
 	assert.DeepEqual(t, *gridItem.Title, storeInfo.Title)
 	assert.Equal(t, *gridItem.AuthorType, codegen.ByCasaos)
 	assert.Equal(t, *gridItem.IsUncontrolled, false)
+	assert.Assert(t, gridItem.Git == nil, "an app that is not deployed from git has no git badge")
 }
 
 // An adopted container is offered operations that are not compose-aware, so the grid

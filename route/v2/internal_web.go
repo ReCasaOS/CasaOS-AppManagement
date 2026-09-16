@@ -127,6 +127,7 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 	// merge v1 and v2 apps
 	var appGridItems []codegen.WebAppGridItem
 	appGridItems = append(appGridItems, v2AppGridItems...)
+	appGridItems = append(appGridItems, service.GitAppsWithoutContainers(lo.Keys(composeAppsWithStoreInfo))...)
 	appGridItems = append(appGridItems, v1AppGridItems...)
 	appGridItems = append(appGridItems, containerAppGridItems...)
 
@@ -167,6 +168,9 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 		// until something has checked, which the dashboard renders as no badge
 		// rather than as an app known to be current.
 		UpdateAvailable: service.ImageUpdateAvailable(composeApp.Name),
+
+		// from the git app's state file alone, absent for any other app
+		Git: service.GitAppGrid(composeApp.Name),
 	}
 
 	composeAppStoreInfo := composeAppWithStoreInfo.StoreInfo
