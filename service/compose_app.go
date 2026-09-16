@@ -800,10 +800,10 @@ func (a *ComposeApp) Up(ctx context.Context, service api.Compose) error {
 	return a.up(ctx, service, false)
 }
 
-// up starts the app. removeOrphans is for the rollback path only: the definition being
-// replaced may have declared a service the restored one does not, and a container left
-// over from it would keep running under no compose file at all. It stays off elsewhere,
-// where an unknown container of this project is an adopted one, not a leftover.
+// up starts the app. removeOrphans is for the rollback path and a git app's start only: the
+// definition being replaced may have declared a service the restored one does not, and a
+// container left over from it would keep running under no compose file at all. It stays off
+// elsewhere, where an unknown container of this project is an adopted one, not a leftover.
 // composeCreateStarter is the two halves of compose's Up, which is all `up` needs of
 // api.Compose -- and narrow enough that the order it calls them in can be driven by a
 // test, which is the whole point of keeping them apart.
@@ -852,6 +852,13 @@ func (a *ComposeApp) up(ctx context.Context, service composeCreateStarter, remov
 }
 
 func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Compose) error {
+	return a.upWithCheckRequire(ctx, service, false)
+}
+
+// upWithCheckRequire is UpWithCheckRequire, removing the project's orphans when asked. Only a
+// git app's runtime asks: its repository's compose files are the whole app, so a container of a
+// service they no longer name is what a switch or a rollback left of the version it replaced.
+func (a *ComposeApp) upWithCheckRequire(ctx context.Context, service api.Compose, removeOrphans bool) error {
 	// prepare source path for volumes if not exist
 	for name, app := range a.Services {
 		for _, volume := range app.Volumes {
@@ -883,7 +890,7 @@ func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Compose
 		a.Services[name] = app
 	}
 
-	if err := a.Up(ctx, service); err != nil {
+	if err := a.up(ctx, service, removeOrphans); err != nil {
 		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
 		})

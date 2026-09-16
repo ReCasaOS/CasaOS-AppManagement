@@ -326,8 +326,10 @@ func (composeGitRuntime) Start(ctx context.Context, app, dir string) error {
 
 	// A wait that only ran out of time goes on to the judgement below, like a start that
 	// confirmed: keepNewDefinition keeps such a definition for every other apply, and a
-	// deployment is judged by its built services instead.
-	if err := composeApp.UpWithCheckRequire(ctx, backend); err != nil && !errors.Is(err, errUpNotConfirmed) {
+	// deployment is judged by its built services instead. Orphans go: a service the version
+	// started no longer has, or the one a rolled back version added, would keep its container
+	// running, and its ports.
+	if err := composeApp.upWithCheckRequire(ctx, backend, true); err != nil && !errors.Is(err, errUpNotConfirmed) {
 		return err
 	}
 
