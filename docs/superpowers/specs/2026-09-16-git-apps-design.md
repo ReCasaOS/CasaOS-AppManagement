@@ -90,8 +90,9 @@ until it is on a branch with a remote.
 - The last three deployments: commit, date, outcome (adopted, deployed, build failed, rolled back,
   failed, interrupted), and "Revert to this version" when that version's images still exist.
 
-For a git app, the Settings and Compose tabs show a notice that points to the repository instead
-of an editor: an edit there would modify tracked files and block every later fetch. The `.env` tab
+For a git app, and for an adoptable one, the Settings and Compose tabs show a notice that points
+to the repository instead of an editor: an edit there would modify tracked files and block every
+later fetch. The `.env` tab
 works as today, except when the repository tracks `.env`, where it is read-only with the same
 notice. Containers, logs, terminal and backups are unchanged.
 
@@ -271,15 +272,17 @@ Declared in `api/app_management/openapi.yaml`, generated with oapi-codegen like 
 | `POST /v2/app_management/git` | Register an app: name, URL, branch, access mode. Generates the key in key mode. Does not clone. |
 | `GET /v2/app_management/git/{app}` | The state, the public key, and once cloned the compose summary and the `.env` template. Also answers for an adoptable app. |
 | `PUT /v2/app_management/git/{app}` | Branch, automatic rebuild, access mode, token (accepted, never returned). Adopts an adoptable app. |
-| `POST /v2/app_management/git/{app}/check` | Check the remote, and adopt an adoptable app. For a registered app that is not cloned yet: clone it and validate its compose files. |
-| `POST /v2/app_management/git/{app}/deploy` | Body `{commit?, env?}`. No commit: the remote's latest. A commit from the history: a revert. `env` is accepted only before the first deployment, and never when `.env` is tracked. |
-| `DELETE /v2/app_management/git/{app}` | Cancel a registered app that was never deployed: its clone, state and secrets go. |
+| `POST /v2/app_management/git/{app}/check` | Start a check in the background and answer 202; the client polls `GET` until `operation` is null. Adopts an adoptable app. For a registered app that is not cloned yet: clone it and validate its compose files. |
+| `POST /v2/app_management/git/{app}/deploy` | Body `{commit?, env?}`, answers 202. Adopts an adoptable app. No commit: the remote's latest. A commit from the history: a revert. `env` is accepted until the first successful deployment, and never when `.env` is tracked. |
+| `DELETE /v2/app_management/git/{app}` | Remove a registered app while no deployment has succeeded: the containers and networks a failed first deployment left, the clone of a created app, the state and the secrets. |
 
 The design review presented five routes; the sixth, `DELETE`, exists so that a creation abandoned
 before its first deployment leaves nothing behind.
 
 `WebAppGridItem` gains `git: {new_commits: boolean, state: idle | building | deploying |
-build_failed | rolled_back | failed | unreachable | interrupted}` for the card. The six event types
+build_failed | rolled_back | failed | unreachable | interrupted, deployed: boolean}` for the card.
+A registered git app with no container, never deployed or left without one by a failed first
+deployment, still appears in the grid, so the owner can reach its Repository tab and delete it. The six event types
 `app:git-build-begin`, `app:git-build-progress`, `app:git-build-end`, `app:git-build-error`,
 `app:git-deploy-end` and `app:git-deploy-error` join `common.EventTypes` with the `app:name`
 property; the progress event also carries `message`, the log lines.
@@ -359,3 +362,24 @@ installs it like any missing dependency.
 - Zero-downtime switching.
 - Following tags or several branches of one repository.
 - Managing Docker's build cache.
+
+## Clarifications made while planning
+
+Writing the implementation plans surfaced these points; they are binding for all three plans.
+
+1. `POST /git/{app}/deploy` adopts an adoptable app, like `PUT` and `check`.
+2. An adoptable folder in detached HEAD answers `branch: ""`, one without a remote answers
+   `remote: ""`, and `PUT`, `check` and `deploy` on it answer 400 with the reason.
+3. A registered git app with no container appears in the grid as
+   `{app_type: "v2app", name, title: {en_us: name}, status: "", git: {..., deployed: false}}`.
+   Its card offers the Repository tab and deletion only.
+4. `DELETE /git/{app}` is allowed while `deployed` is null, whatever the history, and answers 409
+   once a deployment has succeeded or while an operation runs.
+5. `compose.services[].sensitive` holds only these values: `privileged`, `network_mode_host`,
+   `pid_host`, `cap_add`, `devices`, `docker_socket`.
+6. `check` runs in the background. A clone without a compose file ends with the clone removed,
+   `check.error` holding the message, and `compose_example` holding a sample compose file;
+   `compose_example` is null otherwise. An automatic deployment a check triggers starts once the
+   check's operation has ended, in the background too.
+7. `new_commits` is false while `deployed` is null.
+8. In `PUT`, `"token": ""` is invalid; switching `access` to `none` or `key` forgets a saved token.
