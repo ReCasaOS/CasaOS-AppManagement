@@ -284,15 +284,23 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
 
 	if err := composeApp.Apply(backgroundCtx, buf); err != nil {
-		message := err.Error()
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
-			Message: &message,
-		})
+		return conflictOrServerError(ctx, err)
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateSettingsOK{
 		Message: utils.Ptr("compose app is being applied with changes asynchroniously"),
 	})
+}
+
+// conflictOrServerError answers an operation that did not start: 409 naming the operation
+// that holds the app, 500 for anything else.
+func conflictOrServerError(ctx echo.Context, err error) error {
+	message := err.Error()
+	if errors.As(err, new(service.ErrAppBusy)) {
+		return ctx.JSON(http.StatusConflict, codegen.ResponseConflict{Message: &message})
+	}
+
+	return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 }
 
 // installedComposeApp resolves id to an installed app, or writes the error response and returns nil.
@@ -359,8 +367,7 @@ func (a *AppManagement) ApplyComposeAppEnv(ctx echo.Context, id codegen.ComposeA
 	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
 
 	if err := composeApp.ApplyEnv(backgroundCtx, body); err != nil {
-		message := err.Error()
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+		return conflictOrServerError(ctx, err)
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateSettingsOK{
@@ -445,7 +452,7 @@ func (a *AppManagement) InstallComposeApp(ctx echo.Context, params codegen.Insta
 			return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 		}
 
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+		return conflictOrServerError(ctx, err)
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppInstallOK{
@@ -483,8 +490,7 @@ func (a *AppManagement) UninstallComposeApp(ctx echo.Context, id codegen.Compose
 
 	if err := service.MyService.Compose().Uninstall(backgroundCtx, composeApp, deleteConfigFolder); err != nil {
 		logger.Error("failed to uninstall compose app", zap.Error(err), zap.String("appID", id))
-		message := err.Error()
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+		return conflictOrServerError(ctx, err)
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppUninstallOK{
@@ -554,8 +560,7 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 
 	if err := composeApp.Update(backgroundCtx); err != nil {
 		logger.Error("failed to update compose app", zap.Error(err), zap.String("appID", id))
-		message := err.Error()
-		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+		return conflictOrServerError(ctx, err)
 	}
 
 	message := fmt.Sprintf("compose app `%s` is being updated asynchronously", id)

@@ -105,6 +105,12 @@ func runBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 	manifest.ContainersStopped = opts.HoldStill
 
 	if opts.HoldStill {
+		end, err := Begin(app.Name, "backup")
+		if err != nil {
+			return manifest, err
+		}
+		defer end()
+
 		listContainers := opts.Containers
 		if listContainers == nil {
 			listContainers = func(ctx context.Context) (map[string][]codegen.ContainerSummary, error) {

@@ -48,6 +48,18 @@ func (s *ComposeService) IsInstalling(appName string) bool {
 }
 
 func (s *ComposeService) Install(ctx context.Context, composeApp *ComposeApp) error {
+	end, err := Begin(composeApp.Name, "install")
+	if err != nil {
+		return err
+	}
+	// released here on every early return, and by the install itself once it runs
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			end()
+		}
+	}()
+
 	// set store_app_id (by convention is the same as app name at install time if it does not exist)
 	_, isStoreApp := composeApp.SetStoreAppID(composeApp.Name)
 	if !isStoreApp {
@@ -95,7 +107,10 @@ func (s *ComposeService) Install(ctx context.Context, composeApp *ComposeApp) er
 
 	common.SetProperties(ctx, eventProperties)
 
+	handedOff = true
 	go func(ctx context.Context) {
+		defer end()
+
 		s.installationInProgress.Store(composeApp.Name, true)
 		defer func() {
 			s.installationInProgress.Delete(composeApp.Name)
@@ -118,6 +133,12 @@ func (s *ComposeService) Install(ctx context.Context, composeApp *ComposeApp) er
 }
 
 func (s *ComposeService) Uninstall(ctx context.Context, composeApp *ComposeApp, deleteConfigFolder bool) error {
+	// released by the uninstall itself once it runs
+	end, err := Begin(composeApp.Name, "uninstall")
+	if err != nil {
+		return err
+	}
+
 	// prepare for message bus events
 	eventProperties := map[string]string{common.PropertyTypeAppName.Name: composeApp.Name}
 
@@ -134,6 +155,8 @@ func (s *ComposeService) Uninstall(ctx context.Context, composeApp *ComposeApp, 
 	forgetImageUpdates(composeApp.Name)
 
 	go func(ctx context.Context) {
+		defer end()
+
 		go PublishEventWrapper(ctx, common.EventTypeAppUninstallBegin, nil)
 
 		defer PublishEventWrapper(ctx, common.EventTypeAppUninstallEnd, nil)

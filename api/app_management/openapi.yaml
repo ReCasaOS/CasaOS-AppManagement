@@ -530,6 +530,8 @@ paths:
           $ref: "#/components/responses/ComposeAppInstallOK"
         "400":
           $ref: "#/components/responses/ComposeAppBadRequest"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -585,6 +587,8 @@ paths:
           $ref: "#/components/responses/ComposeAppBadRequest"
         "404":
           $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -603,6 +607,8 @@ paths:
           $ref: "#/components/responses/ComposeAppUpdateOK"
         "404":
           $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
     delete:
@@ -620,6 +626,8 @@ paths:
           $ref: "#/components/responses/ComposeAppUninstallOK"
         "404":
           $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -679,6 +687,8 @@ paths:
           $ref: "#/components/responses/ResponseBadRequest"
         "404":
           $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 

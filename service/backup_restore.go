@@ -113,6 +113,13 @@ func restoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 	if manifest.App != opts.App {
 		return report, fmt.Errorf("the backup at %s is of `%s`, not `%s`", root, manifest.App, opts.App)
 	}
+
+	end, err := Begin(opts.App, "restore")
+	if err != nil {
+		return report, err
+	}
+	defer end()
+
 	report.Skipped = append(report.Skipped, manifest.Skipped...)
 
 	byDestination := map[string]BackupOperation{}

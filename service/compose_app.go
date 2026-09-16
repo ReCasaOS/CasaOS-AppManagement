@@ -243,12 +243,21 @@ func (a *ComposeApp) SetTitle(title, lang string) {
 // Update is what the update button does: the app is replaced in the background
 // and the request returns at once; the events of the update say the rest.
 func (a *ComposeApp) Update(ctx context.Context) error {
-	newComposeYAML, ctx, err := a.prepareUpdate(ctx)
+	end, err := Begin(a.Name, "update")
 	if err != nil {
 		return err
 	}
 
-	go func() { _ = a.applyUpdate(ctx, newComposeYAML) }()
+	newComposeYAML, ctx, err := a.prepareUpdate(ctx)
+	if err != nil {
+		end()
+		return err
+	}
+
+	go func() {
+		defer end()
+		_ = a.applyUpdate(ctx, newComposeYAML)
+	}()
 
 	return nil
 }
@@ -256,6 +265,12 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 // UpdateNow is Update waited for: the run of every app at once does them one
 // after another (compose_update_all.go).
 func (a *ComposeApp) UpdateNow(ctx context.Context) error {
+	end, err := Begin(a.Name, "update")
+	if err != nil {
+		return err
+	}
+	defer end()
+
 	newComposeYAML, ctx, err := a.prepareUpdate(ctx)
 	if err != nil {
 		return err
@@ -1178,7 +1193,14 @@ func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[
 
 	common.SetProperties(ctx, eventProperties)
 
+	end, err := Begin(a.Name, "save")
+	if err != nil {
+		return err
+	}
+
 	go func(ctx context.Context) {
+		defer end()
+
 		go PublishEventWrapper(ctx, common.EventTypeAppApplyChangesBegin, nil)
 
 		defer PublishEventWrapper(ctx, common.EventTypeAppApplyChangesEnd, nil)
