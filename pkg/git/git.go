@@ -144,6 +144,9 @@ func run(ctx context.Context, timeout time.Duration, dir string, auth Auth, args
 	}
 
 	cmd := exec.CommandContext(ctx, "git", append(full, args...)...)
+	// the timeout kills git, but an ssh or a git-remote-https it started can keep the output
+	// pipes open, and Run would wait for them
+	cmd.WaitDelay = 5 * time.Second
 	// GIT_OPTIONAL_LOCKS=0: a status asked for while a deployment moves the same work tree
 	// must not hold the index lock the fast-forward needs
 	cmd.Env = append(append(os.Environ(), env...), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0")
