@@ -312,6 +312,18 @@ func DeleteGitApp(ctx context.Context, name string) error {
 	return forgetGitApp(name)
 }
 
+// forgetUninstalledGitApp removes what CasaOS kept of a git app that was uninstalled: the
+// git- tags of its versions, its state and its secrets.
+func forgetUninstalledGitApp(ctx context.Context, st *gitApp) {
+	if images := gitImagesOf(st); len(images) > 0 {
+		gitDocker.RemoveImages(ctx, images)
+	}
+
+	if err := forgetGitApp(st.App); err != nil {
+		logger.Error("the state of an uninstalled git app could not be removed", zap.Error(err), zap.String("app", st.App))
+	}
+}
+
 // gitImagesOf is every git- tag the app's remembered versions name, sorted.
 func gitImagesOf(st *gitApp) []string {
 	images := []string{}

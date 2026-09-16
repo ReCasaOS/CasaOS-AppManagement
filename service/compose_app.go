@@ -1116,32 +1116,62 @@ func (a *ComposeApp) Uninstall(ctx context.Context, deleteConfigFolder bool) err
 		return err
 	}
 
-	if err := file.RMDir(a.WorkingDir); err != nil {
-		go PublishEventWrapper(ctx, common.EventTypeImageRemoveError, map[string]string{
-			common.PropertyTypeMessage.Name: err.Error(),
-		})
+	// nil for an app not deployed from git
+	gitState, _ := loadGitApp(a.Name)
+
+	for _, path := range a.uninstalledFolders(gitState, deleteConfigFolder) {
+		if err := file.RMDir(path); err != nil {
+			logger.Error("failed to remove compose app folder", zap.Error(err), zap.String("path", path))
+
+			go PublishEventWrapper(ctx, common.EventTypeImageRemoveError, map[string]string{
+				common.PropertyTypeMessage.Name: err.Error(),
+			})
+		}
 	}
 
+	if gitState != nil {
+		forgetUninstalledGitApp(ctx, gitState)
+	}
+
+	return nil
+}
+
+// uninstalledFolders is what an uninstall deletes: the app's folder and, with
+// deleteConfigFolder, the folders its volumes name after it. A git app's folder is its
+// repository: a created app's goes with the config folder only, and an adopted app's is
+// its owner's and never goes.
+func (a *ComposeApp) uninstalledFolders(gitState *gitApp, deleteConfigFolder bool) []string {
+	keep := func(path string) bool {
+		switch {
+		case gitState == nil:
+			return false
+		case gitState.Origin == gitOriginAdopted:
+			return path == gitState.Dir || strings.HasPrefix(path, gitState.Dir+"/") || strings.HasPrefix(gitState.Dir, path+"/")
+		}
+
+		return path == gitState.Dir && !deleteConfigFolder
+	}
+
+	folders := []string{}
+	if !keep(a.WorkingDir) {
+		folders = append(folders, a.WorkingDir)
+	}
 	if !deleteConfigFolder {
-		return nil
+		return folders
 	}
 
-	for _, app := range a.Services {
-		for _, volume := range app.Volumes {
-			if strings.Contains(volume.Source, a.Name) {
-				path := filepath.Join(strings.Split(volume.Source, a.Name)[0], a.Name)
-				if err := file.RMDir(path); err != nil {
-					logger.Error("failed to remove compose app config folder", zap.Error(err), zap.String("path", path))
-
-					go PublishEventWrapper(ctx, common.EventTypeImageRemoveError, map[string]string{
-						common.PropertyTypeMessage.Name: err.Error(),
-					})
-				}
+	for _, name := range sortedServiceNames(a.Services) {
+		for _, volume := range a.Services[name].Volumes {
+			if !strings.Contains(volume.Source, a.Name) {
+				continue
+			}
+			if path := filepath.Join(strings.Split(volume.Source, a.Name)[0], a.Name); !keep(path) {
+				folders = append(folders, path)
 			}
 		}
 	}
 
-	return nil
+	return lo.Uniq(folders)
 }
 
 func (a *ComposeApp) Apply(ctx context.Context, newComposeYAML []byte) error {
