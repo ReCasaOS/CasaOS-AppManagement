@@ -104,3 +104,42 @@ func TestARestoreThatCannotReachTheRepositoryAsksForAccess(t *testing.T) {
 	_, err = installGitAppFromBackup(context.Background(), "private", BackupGit{Remote: "https://127.0.0.1:1/owner/private.git", Branch: "main", Commit: commit}, nil)
 	assert.ErrorContains(t, err, "give `private` a token")
 }
+
+// A manifest is a file anyone with the destination's credentials can edit: what it says of
+// the code is checked before git is given it, and nothing is registered.
+func TestARestoreRefusesAnOriginGitCannotBeGiven(t *testing.T) {
+	gitAppsIn(t)
+	withFakeGitDocker(t)
+	ctx := context.Background()
+	commit := strings.Repeat("a", 40)
+
+	for origin, message := range map[BackupGit]string{
+		{Remote: "https://127.0.0.1:1/owner/demo.git", Branch: "main", Commit: "4f5f60c"}:     "not a full commit hash",
+		{Remote: "ext::id", Branch: "main", Commit: commit}:                                   "not a URL CasaOS can clone",
+		{Remote: "https://127.0.0.1:1/owner/demo.git", Branch: "@{upstream}", Commit: commit}: "not a branch name",
+	} {
+		_, err := installGitAppFromBackup(ctx, "jarvis", origin, nil)
+		assert.ErrorContains(t, err, message)
+	}
+	_, err := loadGitApp("jarvis")
+	assert.ErrorIs(t, err, ErrGitAppNotFound, "nothing is registered")
+}
+
+// A repository that tracks .env restores its own: the backed-up one is not written over it.
+func TestARestoreNeverWritesATrackedEnv(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	gitAppsIn(t)
+	withFakeGitDocker(t)
+	url, work := newTestRemote(t)
+	commit := pushTestCommit(t, work, ".env", "GREETING=tracked\n")
+
+	_, err := installGitAppFromBackup(context.Background(), "jarvis", BackupGit{Remote: url, Branch: "main", Commit: commit}, []byte("GREETING=edited\n"))
+	assert.NilError(t, err)
+
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	env, err := os.ReadFile(filepath.Join(st.Dir, ".env"))
+	assert.NilError(t, err)
+	assert.Equal(t, string(env), "GREETING=tracked\n")
+	assert.Equal(t, st.Deployed.Commit, commit)
+}

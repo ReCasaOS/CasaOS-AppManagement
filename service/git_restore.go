@@ -35,6 +35,16 @@ var restoreGitApp = installGitAppFromBackup
 // the backup's .env, then built and started, while the restore holds it. A repository that
 // cannot be reached leaves the app registered with the access it needs.
 func installGitAppFromBackup(ctx context.Context, name string, origin BackupGit, env []byte) (*ComposeApp, error) {
+	// a manifest is a file anyone with the destination's credentials can edit
+	switch {
+	case !gitCommitPattern.MatchString(origin.Commit):
+		return nil, fmt.Errorf("the backup's commit `%s` is not a full commit hash", origin.Commit)
+	case gitURLKind(origin.Remote) == "":
+		return nil, fmt.Errorf("the backup's remote `%s` is not a URL CasaOS can clone", redactGitURL(origin.Remote))
+	case !validGitBranch(origin.Branch):
+		return nil, fmt.Errorf("the backup's branch `%s` is not a branch name", origin.Branch)
+	}
+
 	st, err := loadGitApp(name)
 	if errors.Is(err, ErrGitAppNotFound) {
 		st = &gitApp{
@@ -71,7 +81,8 @@ func installGitAppFromBackup(ctx context.Context, name string, origin BackupGit,
 	if err := git.ResetKeep(ctx, st.Dir, origin.Commit); err != nil {
 		return nil, err
 	}
-	if len(env) > 0 {
+	// a repository that tracks .env restores its own, and CasaOS never writes a tracked file
+	if tracked, _ := git.IsTracked(ctx, st.Dir, ".env"); len(env) > 0 && !tracked {
 		if err := (&ComposeApp{WorkingDir: st.Dir}).WriteEnvFile(env); err != nil {
 			return nil, err
 		}
