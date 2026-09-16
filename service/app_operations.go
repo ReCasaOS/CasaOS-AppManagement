@@ -48,3 +48,14 @@ func Begin(app, kind string) (end func(), err error) {
 		})
 	}, nil
 }
+
+// handOver renames what holds app when an operation passes its hold to one it starts, so
+// that a refusal names what really runs.
+func handOver(app, kind string) {
+	appOperations.Lock()
+	defer appOperations.Unlock()
+
+	if _, ok := appOperations.running[app]; ok {
+		appOperations.running[app] = kind
+	}
+}

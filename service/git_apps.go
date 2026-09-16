@@ -329,7 +329,8 @@ func gitImagesOf(st *gitApp) []string {
 
 // CheckGitApp is "Check now". An adoptable app is adopted here, so that a folder that
 // cannot be adopted is refused with its reason; the check itself runs in the background,
-// and the app is returned as the check starts.
+// then whatever the automatic rebuild may deploy, and the app is returned as the check
+// starts.
 func CheckGitApp(ctx context.Context, name string) (*GitAppView, error) {
 	st, end, err := beginGitCheck(ctx, name)
 	if err != nil {
@@ -340,8 +341,9 @@ func CheckGitApp(ctx context.Context, name string) (*GitAppView, error) {
 	view := newGitAppView(ctx, st)
 
 	go func() {
-		defer end()
-		checkGitApp(context.Background(), st, true)
+		ctx := context.Background()
+		checkGitApp(ctx, st, true)
+		deployGitAppAutomatically(ctx, name, end)
 	}()
 
 	return view, nil

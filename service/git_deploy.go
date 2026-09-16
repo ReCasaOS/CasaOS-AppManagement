@@ -1,0 +1,430 @@
+package service
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"github.com/samber/lo"
+	"go.uber.org/zap"
+)
+
+// A deployment of a git app: the target commit is built beside the running version,
+// switched in, judged, and rolled back when it does not start. The running app is not
+// touched until the build has succeeded.
+
+type gitTrigger int
+
+const (
+	gitTriggerManual gitTrigger = iota
+	gitTriggerAutomatic
+)
+
+// gitBuildLogCap is how much of the last build's log is kept.
+const gitBuildLogCap = 1 << 20
+
+var gitCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// DeployGitApp deploys commit, or the remote's latest when commit is empty, in the
+// background. A commit of the history is a revert. env is written as .env first.
+func DeployGitApp(ctx context.Context, name, commit string, env *string) (*GitAppView, error) {
+	return startGitDeploy(ctx, name, commit, env, gitTriggerManual)
+}
+
+// startGitDeploy checks what must hold, records the operation and starts the deployment,
+// and returns the app as the deployment starts. The guard is released when it ends.
+func startGitDeploy(ctx context.Context, name, commit string, env *string, trigger gitTrigger) (*GitAppView, error) {
+	if commit != "" && !gitCommitPattern.MatchString(commit) {
+		return nil, GitRequestError(fmt.Sprintf("`%s` is not a full commit hash", commit))
+	}
+
+	end, err := Begin(name, gitOperationDeploy)
+	if err != nil {
+		return nil, err
+	}
+
+	return deployHolding(ctx, name, commit, env, trigger, end)
+}
+
+// deployHolding is startGitDeploy for a caller that holds the app already: end is released
+// when the deployment ends, or before returning when it does not start.
+func deployHolding(ctx context.Context, name, commit string, env *string, trigger gitTrigger, end func()) (*GitAppView, error) {
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			end()
+		}
+	}()
+
+	st, err := findGitApp(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if st.Origin == gitOriginAdoptable {
+		if err := adoptGitApp(ctx, st); err != nil {
+			return nil, err
+		}
+	}
+
+	revert := commit != "" && st.historyEntry(commit) != nil
+	target := commit
+	if target == "" {
+		auth, err := gitAuth(st)
+		if err != nil {
+			return nil, err
+		}
+		if target, err = git.LsRemote(ctx, st.Remote, st.Branch, auth); err != nil {
+			return nil, GitRequestError(fmt.Sprintf("the repository cannot be reached: %v", err))
+		}
+	}
+
+	if err := gitDeployPreconditions(ctx, st, target, env, revert); err != nil {
+		if trigger == gitTriggerAutomatic {
+			// nothing changes but the reason, and the commit is not tried again
+			st.attempt(target)
+			finishGitDeploy(ctx, st, gitHistoryEntry{Commit: target, At: time.Now().UTC(), Outcome: gitOutcomeFailed, Reason: err.Error()})
+		}
+
+		return nil, err
+	}
+
+	if env != nil {
+		if err := (&ComposeApp{WorkingDir: st.Dir}).WriteEnvFile([]byte(*env)); err != nil {
+			return nil, err
+		}
+	}
+
+	kind := gitOperationBuild
+	if revert {
+		kind = gitOperationRevert
+	}
+	st.Operation = &gitOperation{Kind: kind, Commit: target, StartedAt: time.Now().UTC()}
+	if err := saveGitApp(st); err != nil {
+		return nil, err
+	}
+
+	// read before the deployment runs: it changes st from here on
+	view := newGitAppView(ctx, st)
+
+	handedOff = true
+	go func() {
+		defer end()
+		runGitDeploy(context.Background(), st, target, revert, trigger)
+	}()
+
+	return view, nil
+}
+
+// gitDeployPreconditions is what must hold before anything is touched.
+func gitDeployPreconditions(ctx context.Context, st *gitApp, target string, env *string, revert bool) error {
+	if !st.Cloned {
+		return GitRequestError(fmt.Sprintf("%s is not cloned yet: check it first", st.App))
+	}
+
+	info, err := git.Describe(ctx, st.Dir)
+	switch {
+	case err != nil:
+		return GitRequestError(fmt.Sprintf("%s is not a git work tree any more: %v", st.Dir, err))
+	case info.Branch != st.Branch:
+		return GitRequestError(fmt.Sprintf("%s is not on the branch %s", st.Dir, st.Branch))
+	case !info.TrackedFilesClean:
+		return GitRequestError(fmt.Sprintf("tracked files were modified in %s: commit or discard those changes first", st.Dir))
+	}
+
+	if env != nil {
+		if st.Deployed != nil {
+			return GitRequestError(".env is written with the first deployment only; change it from the app's .env settings")
+		}
+		if tracked, _ := git.IsTracked(ctx, st.Dir, ".env"); tracked {
+			return GitRequestError("the repository tracks .env, and CasaOS never writes a tracked file")
+		}
+		if _, err := ParseEnvFile([]byte(*env)); err != nil {
+			return GitRequestError(err.Error())
+		}
+	}
+
+	if revert && !gitRevertable(ctx, st, *st.historyEntry(target)) {
+		return GitRequestError(fmt.Sprintf("%s cannot be reverted to: it is the running version, it never ran, or its images are gone", target[:12]))
+	}
+
+	return nil
+}
+
+// runGitDeploy carries the deployment out and records how it ended.
+func runGitDeploy(ctx context.Context, st *gitApp, target string, revert bool, trigger gitTrigger) {
+	ctx = common.WithProperties(ctx, map[string]string{common.PropertyTypeAppName.Name: st.App})
+	previous := st.Deployed
+
+	auth, err := gitAuth(st)
+	if err != nil {
+		failGitDeploy(ctx, st, target, "", nil, gitOutcomeFailed, err)
+		return
+	}
+
+	var images map[string]string
+	if revert {
+		images = st.historyEntry(target).Images
+	} else {
+		if images, err = fetchAndBuild(ctx, st, target, previous, auth); err != nil {
+			return
+		}
+
+		st.Operation.Kind = gitOperationDeploy
+		if err := saveGitApp(st); err != nil {
+			logger.Error("the deployment could not be written down", zap.Error(err), zap.String("app", st.App))
+		}
+	}
+
+	subject, _ := git.Subject(ctx, st.Dir, target)
+
+	move := git.FastForward
+	if revert {
+		move = git.ResetKeep
+	}
+	err = move(ctx, st.Dir, target)
+	if err == nil {
+		err = gitDocker.Retag(ctx, st.App, st.Dir, target)
+	}
+	if err == nil {
+		err = gitDocker.Start(ctx, st.App, st.Dir)
+	}
+	if err != nil {
+		rollBackGitDeploy(ctx, st, target, subject, images, previous, err)
+		return
+	}
+
+	st.Deployed = &gitDeployment{Commit: target, Subject: subject, At: time.Now().UTC(), Images: images}
+	st.Blocked = false
+	if trigger == gitTriggerManual {
+		// a revert pauses the automatic rebuild, or the next check would undo it
+		st.AutoPaused = revert
+	}
+	st.EnvTracked, _ = git.IsTracked(ctx, st.Dir, ".env")
+	finishGitDeploy(ctx, st, gitHistoryEntry{Commit: target, Subject: subject, At: st.Deployed.At, Outcome: gitOutcomeDeployed, Images: images})
+
+	go PublishEventWrapper(ctx, common.EventTypeAppGitDeployEnd, nil)
+}
+
+// fetchAndBuild fetches the branch, checks target is on it and descends from what runs,
+// and builds it. A failure is recorded here.
+func fetchAndBuild(ctx context.Context, st *gitApp, target string, previous *gitDeployment, auth git.Auth) (map[string]string, error) {
+	head, err := git.Fetch(ctx, st.Dir, st.Remote, st.Branch, auth)
+	if err != nil {
+		failGitDeploy(ctx, st, target, "", nil, gitOutcomeFailed, err)
+		return nil, err
+	}
+
+	onBranch, err := git.IsAncestor(ctx, st.Dir, target, head)
+	if err == nil && !onBranch {
+		err = fmt.Errorf("%s is not on the branch %s", target[:12], st.Branch)
+	}
+	if err == nil && previous != nil {
+		var descends bool
+		if descends, err = git.IsAncestor(ctx, st.Dir, previous.Commit, target); err == nil && !descends {
+			err = fmt.Errorf("%s does not descend from the deployed %s", target[:12], previous.Commit[:12])
+		}
+	}
+	if err != nil {
+		failGitDeploy(ctx, st, target, "", nil, gitOutcomeFailed, err)
+		return nil, err
+	}
+
+	subject, _ := git.Subject(ctx, st.Dir, target)
+
+	images, err := buildGitCommit(ctx, st, target, auth)
+	if err != nil {
+		failGitDeploy(ctx, st, target, subject, nil, gitOutcomeBuildFailed, err)
+		return nil, err
+	}
+
+	return images, nil
+}
+
+// buildGitCommit builds commit in a worktree of its own, with the build's output going to
+// the app's build log and to the bus.
+func buildGitCommit(ctx context.Context, st *gitApp, commit string, auth git.Auth) (map[string]string, error) {
+	file, err := os.OpenFile(gitAppFile(st.App, ".build.log"), os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	out := &gitBuildLog{ctx: ctx, file: file}
+	defer out.Close()
+
+	go PublishEventWrapper(ctx, common.EventTypeAppGitBuildBegin, nil)
+
+	images, err := func() (map[string]string, error) {
+		worktree := filepath.Join(gitAppsDir, "work", st.App+"-"+commit[:12])
+		if err := git.AddWorktree(ctx, st.Dir, commit, worktree, auth); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err := git.RemoveWorktree(context.Background(), st.Dir, worktree); err != nil {
+				logger.Error("a build's worktree could not be removed", zap.Error(err), zap.String("path", worktree))
+			}
+		}()
+
+		return gitDocker.Build(ctx, st.App, worktree, filepath.Join(st.Dir, ".env"), commit, out)
+	}()
+	if err != nil {
+		fmt.Fprintf(out, "\nthe build of %s failed: %v\n", commit[:12], err)
+		go PublishEventWrapper(ctx, common.EventTypeAppGitBuildError, map[string]string{common.PropertyTypeMessage.Name: err.Error()})
+
+		return nil, err
+	}
+
+	go PublishEventWrapper(ctx, common.EventTypeAppGitBuildEnd, nil)
+
+	return images, nil
+}
+
+// rollBackGitDeploy puts the previous version back after target did not start: its
+// commit, its images, and a start. A created app's first version has nothing before it
+// and stays stopped with its log.
+func rollBackGitDeploy(ctx context.Context, st *gitApp, target, subject string, images map[string]string, previous *gitDeployment, cause error) {
+	if previous == nil {
+		if err := gitDocker.Stop(ctx, st.App); err != nil {
+			logger.Error("a first version that did not start could not be stopped", zap.Error(err), zap.String("app", st.App))
+		}
+		failGitDeploy(ctx, st, target, subject, images, gitOutcomeFailed, cause)
+
+		return
+	}
+
+	err := git.ResetKeep(ctx, st.Dir, previous.Commit)
+	if err == nil {
+		err = gitDocker.Retag(ctx, st.App, st.Dir, previous.Commit)
+	}
+	if err == nil {
+		err = gitDocker.Start(ctx, st.App, st.Dir)
+	}
+
+	if err != nil {
+		st.Blocked = true
+		failGitDeploy(ctx, st, target, subject, images, gitOutcomeFailed,
+			fmt.Errorf("%w; the rollback to %s failed too: %v", cause, previous.Commit[:12], err))
+
+		return
+	}
+
+	st.Blocked = false
+	failGitDeploy(ctx, st, target, subject, images, gitOutcomeRolledBack, cause)
+}
+
+// failGitDeploy records a deployment that did not end with target running, and says so.
+func failGitDeploy(ctx context.Context, st *gitApp, target, subject string, images map[string]string, outcome string, cause error) {
+	st.attempt(target)
+	finishGitDeploy(ctx, st, gitHistoryEntry{
+		Commit: target, Subject: subject, At: time.Now().UTC(), Outcome: outcome, Reason: cause.Error(), Images: images,
+	})
+
+	if outcome != gitOutcomeBuildFailed {
+		go PublishEventWrapper(ctx, common.EventTypeAppGitDeployError, map[string]string{common.PropertyTypeMessage.Name: cause.Error()})
+	}
+}
+
+// finishGitDeploy records how a deployment ended, clears the operation, and removes the
+// images no remembered version names any more.
+func finishGitDeploy(ctx context.Context, st *gitApp, entry gitHistoryEntry) {
+	st.Operation = nil
+	if removable := st.record(entry); len(removable) > 0 {
+		gitDocker.RemoveImages(ctx, removable)
+	}
+
+	if err := saveGitApp(st); err != nil {
+		logger.Error("the end of a deployment could not be written down", zap.Error(err), zap.String("app", st.App))
+	}
+}
+
+// deployGitAppAutomatically starts the deployment of what the check holding the app saw,
+// when the app's automatic rebuild may act on it. The check's hold passes to the
+// deployment under the deployment's name, so nothing starts in between and what is refused
+// meanwhile is told a deployment runs; end is released either way.
+func deployGitAppAutomatically(ctx context.Context, name string, end func()) {
+	st, err := loadGitApp(name)
+	if err != nil || !st.AutoDeploy || st.AutoPaused || st.Blocked || st.Deployed == nil || st.Check == nil || st.Check.Error != "" ||
+		st.Check.RemoteCommit == "" || st.Check.RemoteCommit == st.Deployed.Commit || lo.Contains(st.Attempted, st.Check.RemoteCommit) {
+		end()
+		return
+	}
+
+	handOver(name, gitOperationDeploy)
+	if _, err := deployHolding(ctx, name, st.Check.RemoteCommit, nil, gitTriggerAutomatic, end); err != nil {
+		logger.Info("no automatic deployment", zap.String("app", name), zap.Error(err))
+	}
+}
+
+// gitBuildLog is a build's output: written to the app's build log, whose last megabyte is
+// kept, and sent to the bus a batch of lines at most every second.
+type gitBuildLog struct {
+	mu       sync.Mutex
+	ctx      context.Context
+	file     *os.File
+	written  int64
+	pending  bytes.Buffer
+	lastSent time.Time
+}
+
+func (l *gitBuildLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// a log that cannot be written is not a build that failed
+	if n, err := l.file.Write(p); err == nil {
+		l.written += int64(n)
+	}
+	if l.written > 2*gitBuildLogCap {
+		l.keepTail()
+	}
+
+	l.pending.Write(p)
+	if time.Since(l.lastSent) >= time.Second {
+		l.send(false)
+	}
+
+	return len(p), nil
+}
+
+// keepTail cuts the log down to its last megabyte.
+func (l *gitBuildLog) keepTail() {
+	tail := make([]byte, gitBuildLogCap)
+	n, _ := l.file.ReadAt(tail, l.written-gitBuildLogCap)
+	if err := l.file.Truncate(0); err != nil {
+		return
+	}
+	n, _ = l.file.WriteAt(tail[:n], 0)
+	l.written = int64(n)
+	_, _ = l.file.Seek(l.written, 0)
+}
+
+// send publishes the complete lines written since the last time, or everything at the end.
+func (l *gitBuildLog) send(everything bool) {
+	text := l.pending.String()
+	if !everything {
+		text = text[:strings.LastIndexByte(text, '\n')+1]
+	}
+	if text == "" {
+		return
+	}
+
+	l.pending.Next(len(text))
+	l.lastSent = time.Now()
+	PublishEventWrapper(l.ctx, common.EventTypeAppGitBuildProgress, map[string]string{common.PropertyTypeMessage.Name: text})
+}
+
+func (l *gitBuildLog) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.send(true)
+
+	return l.file.Close()
+}
