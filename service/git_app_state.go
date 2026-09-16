@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
+	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/samber/lo"
 	"golang.org/x/crypto/ssh"
 )
@@ -186,6 +187,11 @@ func gitAppFile(app, suffix string) string {
 }
 
 func loadGitApp(app string) (*gitApp, error) {
+	// a name from a request: anything but a compose project name is no app, and never a path
+	if app == "" || app != loader.NormalizeProjectName(app) {
+		return nil, ErrGitAppNotFound
+	}
+
 	buf, err := os.ReadFile(gitAppFile(app, ".json"))
 	if os.IsNotExist(err) {
 		return nil, ErrGitAppNotFound

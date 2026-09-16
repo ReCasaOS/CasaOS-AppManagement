@@ -32,6 +32,10 @@ tags:
     description: |-
       methods for managing container app images
 
+  - name: Git methods
+    description: |-
+      methods for apps deployed from their git repository
+
   - name: Internal methods
     description: |-
       methods for internal use ONLY
@@ -96,6 +100,7 @@ x-tagGroups:
       - Compose methods
       - Container methods
       - Image methods
+      - Git methods
 
   - name: Schemas
     tags:
@@ -1255,7 +1260,159 @@ paths:
         "200":
           $ref: "#/components/responses/GetWebAppGridOK"
 
-  # the endpoint is newer version of POST /appstore for the demand of @ETWang1991 
+  /git:
+    post:
+      summary: Register an app deployed from its git repository
+      description: |
+        Registers the app; nothing is cloned until `POST /git/{app}/check`. With `access: key` a
+        deploy key is generated and its public half returned, to be added to the repository as a
+        read-only key. With `access: token` the token is kept on this machine and never returned.
+
+        400 for a name that is not a compose project name, a URL CasaOS cannot clone (HTTPS, SSH
+        or file, without a password), or an access the URL cannot carry. 409 for a name used by
+        an app, a compose project or another git app.
+      operationId: createGitApp
+      tags:
+        - Git methods
+      requestBody:
+        $ref: "#/components/requestBodies/RequestGitAppCreate"
+      responses:
+        "200":
+          $ref: "#/components/responses/GitAppOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /git/{app}:
+    get:
+      summary: A git app, or a compose app whose folder is a git work tree
+      description: |
+        The state, the public key, and once cloned the compose summary and the `.env` template.
+        A compose app whose folder is the top of a git work tree answers with `origin: adoptable`;
+        the first `PUT`, `check` or `deploy` adopts it. 404 for any other app.
+      operationId: getGitApp
+      tags:
+        - Git methods
+      parameters:
+        - $ref: "#/components/parameters/GitAppName"
+      responses:
+        "200":
+          $ref: "#/components/responses/GitAppOK"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    put:
+      summary: Change the branch, the automatic rebuild or the access of a git app
+      description: |
+        Every field is optional. The branch changes until the app is cloned. Turning
+        `auto_deploy` on clears `auto_paused`. A token is accepted and never returned; an empty
+        one is refused, and switching `access` to `none` or `key` forgets the one kept. Adopts an
+        adoptable app: 400 when its folder is in detached HEAD or has no remote.
+      operationId: updateGitApp
+      tags:
+        - Git methods
+      parameters:
+        - $ref: "#/components/parameters/GitAppName"
+      requestBody:
+        $ref: "#/components/requestBodies/RequestGitAppUpdate"
+      responses:
+        "200":
+          $ref: "#/components/responses/GitAppOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    delete:
+      summary: Remove a git app no deployment has succeeded for
+      description: |
+        Allowed while `deployed` is null, whatever the history: the containers, networks and
+        images a failed first deployment left, the clone of a created app, the state and the
+        secrets go. 409 once a deployment has succeeded (uninstall the app instead) or while an
+        operation runs.
+      operationId: deleteGitApp
+      tags:
+        - Git methods
+      parameters:
+        - $ref: "#/components/parameters/GitAppName"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /git/{app}/check:
+    post:
+      summary: Check the repository now
+      description: |
+        Starts a check in the background and answers 202 with `operation.kind` `check`; poll
+        `GET /git/{app}` until `operation` is null. The check asks the remote where the branch
+        is; for a registered app not cloned yet it clones it and validates its compose files. A
+        clone without a compose file is removed, `check.error` says so and `compose_example`
+        holds a compose file to add. When the automatic rebuild may act on a new commit, its
+        deployment starts once the check has ended. Adopts an adoptable app: 400 when its folder
+        is in detached HEAD or has no remote.
+      operationId: checkGitApp
+      tags:
+        - Git methods
+      parameters:
+        - $ref: "#/components/parameters/GitAppName"
+      responses:
+        "202":
+          $ref: "#/components/responses/GitAppOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /git/{app}/deploy:
+    post:
+      summary: Deploy a git app
+      description: |
+        Starts the deployment in the background and answers 202 with the operation running. No
+        commit: the remote's latest. A commit of the history: a revert, which pauses the
+        automatic rebuild. `env` is written as `.env` first, while no deployment has succeeded
+        and never when the repository tracks `.env`. 400 when a precondition fails, the message
+        saying which: the folder not on its branch, tracked files modified, the commit already
+        deployed, a revert to a version whose images are gone or over commits made in the folder.
+        Adopts an adoptable app.
+      operationId: deployGitApp
+      tags:
+        - Git methods
+      parameters:
+        - $ref: "#/components/parameters/GitAppName"
+      requestBody:
+        $ref: "#/components/requestBodies/RequestGitAppDeploy"
+      responses:
+        "202":
+          $ref: "#/components/responses/GitAppOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  # the endpoint is newer version of POST /appstore for the demand of @ETWang1991
   # the old api is dependent by CasaOS. So we can't remove it.
   # a good idea is /v3/app-management/appstore. But it is hard to implement in ZimaOS
   # So I had to add the endpoint here.
@@ -1379,6 +1536,15 @@ components:
         type: string
         example: "offsite"
 
+    GitAppName:
+      name: app
+      description: Name of a git app, which is its compose project name
+      in: path
+      required: true
+      schema:
+        type: string
+        example: jarvis
+
     ComposeContainerID:
       name: containerId
       description: ID of a container belonging to the compose app
@@ -1465,6 +1631,27 @@ components:
         example: false
 
   requestBodies:
+    RequestGitAppCreate:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GitAppCreateRequest"
+
+    RequestGitAppUpdate:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GitAppUpdateRequest"
+
+    RequestGitAppDeploy:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GitAppDeployRequest"
+
     RequestComposeAppUpdates:
       required: true
       content:
@@ -1664,6 +1851,17 @@ components:
                     type: array
                     items:
                       $ref: "#/components/schemas/UpgradableAppInfo"
+    GitAppOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/GitApp"
+
     ComposeAppUpdatePlanOK:
       description: OK
       content:
@@ -3020,6 +3218,315 @@ components:
             type: string
           example:
             plex: image never pulled on this host
+    GitAccess:
+      description: |
+        How the repository is reached: `none` for a public one, `key` for a deploy key CasaOS
+        generates (SSH URLs), `token` for a personal access token (HTTPS URLs).
+
+        One of `none`, `key`, `token`. Not declared as an enum, for the reason given on
+        `GitAppState`.
+      type: string
+      example: key
+
+    GitApp:
+      description: |
+        An app deployed from its git repository (`created` or `adopted`), or a compose app
+        whose folder is a git work tree and that can be adopted (`adoptable`).
+      required:
+        - app
+        - origin
+        - dir
+        - remote
+        - branch
+        - access
+        - token_set
+        - auto_deploy
+        - auto_paused
+        - blocked
+        - env_tracked
+        - cloned
+        - head
+        - deployed
+        - check
+        - new_commits
+        - state
+        - operation
+        - history
+        - compose
+        - compose_example
+        - env_template
+        - build_log
+      properties:
+        app:
+          type: string
+          example: jarvis
+        origin:
+          type: string
+          description: One of `created`, `adopted`, `adoptable`.
+          example: created
+        dir:
+          type: string
+          example: /DATA/AppData/jarvis
+        remote:
+          type: string
+          description: Empty for a folder with no remote, which cannot be adopted.
+          example: git@github.com:owner/jarvis.git
+        branch:
+          type: string
+          description: Empty for a folder in detached HEAD, which cannot be adopted.
+          example: main
+        access:
+          $ref: "#/components/schemas/GitAccess"
+        public_key:
+          type: string
+          description: The deploy key to add to the repository, read-only. Only with `access` `key`.
+          example: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... casaos-jarvis
+        token_set:
+          type: boolean
+          description: Whether a token is kept. The token itself is never returned.
+        auto_deploy:
+          type: boolean
+        auto_paused:
+          type: boolean
+          description: Set by a manual revert; cleared by turning `auto_deploy` on again or by a manual deployment.
+        blocked:
+          type: boolean
+          description: A rollback failed; nothing automatic runs until a manual deployment or revert.
+        env_tracked:
+          type: boolean
+          description: The repository tracks `.env`, which CasaOS then never writes.
+        cloned:
+          type: boolean
+        head:
+          $ref: "#/components/schemas/GitAppHead"
+        deployed:
+          $ref: "#/components/schemas/GitAppDeployed"
+        check:
+          $ref: "#/components/schemas/GitAppCheck"
+        new_commits:
+          type: boolean
+          description: False while `deployed` is null.
+        state:
+          $ref: "#/components/schemas/GitAppState"
+        operation:
+          $ref: "#/components/schemas/GitAppOperation"
+        history:
+          type: array
+          description: The last three deployments, newest first.
+          items:
+            $ref: "#/components/schemas/GitAppHistoryEntry"
+        compose:
+          $ref: "#/components/schemas/GitAppCompose"
+        compose_example:
+          type: string
+          nullable: true
+          description: |
+            A compose file to add at the root of the repository, when the last check cloned a
+            repository without one (the clone is removed and `check.error` says so). Null otherwise.
+        env_template:
+          type: string
+          nullable: true
+          description: The repository's `.env.example` or `.env.sample`.
+        build_log:
+          type: string
+          description: The last 64 KiB of the last build's log.
+
+    GitAppHead:
+      description: The commit the folder is on. Null until cloned.
+      nullable: true
+      required:
+        - commit
+        - subject
+        - tracked_files_clean
+      properties:
+        commit:
+          type: string
+        subject:
+          type: string
+        tracked_files_clean:
+          type: boolean
+
+    GitAppDeployed:
+      description: The version running. Null before the first successful deployment.
+      nullable: true
+      required:
+        - commit
+        - subject
+        - at
+      properties:
+        commit:
+          type: string
+        subject:
+          type: string
+        at:
+          type: string
+          format: date-time
+
+    GitAppCheck:
+      description: The last check of the remote. Null before the first check.
+      nullable: true
+      required:
+        - at
+        - remote_commit
+        - error
+      properties:
+        at:
+          type: string
+          format: date-time
+        remote_commit:
+          type: string
+        error:
+          type: string
+
+    GitAppOperation:
+      description: The operation running. Null when none runs.
+      nullable: true
+      required:
+        - kind
+        - commit
+        - started_at
+      properties:
+        kind:
+          type: string
+          description: One of `check`, `build`, `deploy`, `revert`.
+          example: build
+        commit:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+
+    GitAppHistoryEntry:
+      required:
+        - commit
+        - subject
+        - at
+        - outcome
+        - reason
+        - revertable
+      properties:
+        commit:
+          type: string
+        subject:
+          type: string
+        at:
+          type: string
+          format: date-time
+        outcome:
+          type: string
+          description: One of `adopted`, `deployed`, `build_failed`, `rolled_back`, `failed`, `interrupted`.
+          example: deployed
+        reason:
+          type: string
+        revertable:
+          type: boolean
+          description: Whether this version can be reverted to, its images still being there.
+
+    GitAppCompose:
+      description: What the repository's compose files will run. Null until cloned.
+      nullable: true
+      required:
+        - files
+        - services
+      properties:
+        files:
+          type: array
+          items:
+            type: string
+          example:
+            - compose.yaml
+        services:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitAppComposeService"
+
+    GitAppComposeService:
+      required:
+        - name
+        - build
+        - image
+        - ports
+        - volumes
+        - sensitive
+      properties:
+        name:
+          type: string
+          example: web
+        build:
+          type: boolean
+          description: Built from the repository rather than pulled.
+        image:
+          type: string
+        ports:
+          type: array
+          description: As written in the compose file.
+          items:
+            type: string
+          example:
+            - "8080:8080"
+        volumes:
+          type: array
+          description: As written in the compose file.
+          items:
+            type: string
+          example:
+            - ./data:/data
+        sensitive:
+          type: array
+          description: |
+            Options that give the service power over the host, only these values: `privileged`,
+            `network_mode_host`, `pid_host`, `cap_add`, `devices`, `docker_socket` (a bind of the
+            Docker socket).
+          items:
+            type: string
+          example:
+            - privileged
+
+    GitAppCreateRequest:
+      required:
+        - name
+        - url
+        - access
+      properties:
+        name:
+          type: string
+          description: A compose project name, which also names the folder under /DATA/AppData.
+          example: jarvis
+        url:
+          type: string
+          example: git@github.com:owner/jarvis.git
+        branch:
+          type: string
+          description: Empty or absent for the branch the remote's HEAD points to.
+          example: main
+        access:
+          $ref: "#/components/schemas/GitAccess"
+        token:
+          type: string
+          description: Required with `access` `token`; never returned.
+
+    GitAppUpdateRequest:
+      properties:
+        branch:
+          type: string
+        auto_deploy:
+          type: boolean
+        access:
+          $ref: "#/components/schemas/GitAccess"
+        token:
+          type: string
+          description: Never returned; an empty token is refused.
+
+    GitAppDeployRequest:
+      properties:
+        commit:
+          type: string
+          description: Absent for the remote's latest commit; a commit of the history reverts to it.
+          pattern: "^[0-9a-f]{40}$"
+        env:
+          type: string
+          description: The `.env` to write, accepted while no deployment has succeeded and never when the repository tracks `.env`.
+
     GitAppState:
       description: |
         `building` and `deploying` while a deployment runs. Otherwise `failed` when automatic

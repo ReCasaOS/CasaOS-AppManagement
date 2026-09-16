@@ -305,3 +305,18 @@ func TestRemovingAGitAppThatNeverRan(t *testing.T) {
 	_, err = loadGitApp("jarvis")
 	assert.ErrorIs(t, err, ErrGitAppNotFound)
 }
+
+// A name from a request is an app's name or nothing: never a path out of the state folder.
+func TestAGitAppNameIsNeverAPath(t *testing.T) {
+	gitAppsIn(t)
+	withFakeGitDocker(t)
+	outside := filepath.Join(filepath.Dir(gitAppsDir), "outside.json")
+	assert.NilError(t, os.MkdirAll(gitAppsDir, 0o700))
+	assert.NilError(t, os.WriteFile(outside, []byte("{}"), 0o600))
+
+	_, err := GetGitApp(context.Background(), "../outside")
+	assert.ErrorIs(t, err, ErrGitAppNotFound)
+	assert.ErrorIs(t, DeleteGitApp(context.Background(), "../outside"), ErrGitAppNotFound)
+	_, err = os.Stat(outside)
+	assert.NilError(t, err, "the file beside the state folder is still there")
+}
