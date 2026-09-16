@@ -55,6 +55,7 @@ func TestStartupRecordsAnInterruptedOperationAndCleansUp(t *testing.T) {
 	assert.Equal(t, st.History[0].Outcome, gitOutcomeInterrupted)
 	assert.Equal(t, st.History[0].Commit, second)
 	assert.DeepEqual(t, st.Attempted, []string{second})
+	assert.DeepEqual(t, st.History[0].Images, map[string]string{"web": "jarvis-web:git-" + second[:12]})
 	assert.Equal(t, st.Deployed.Commit, first)
 	assert.Equal(t, gitAppStateOf(st), "interrupted")
 	_, err = os.Stat(worktree)

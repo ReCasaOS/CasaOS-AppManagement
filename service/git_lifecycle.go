@@ -10,6 +10,7 @@ import (
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"github.com/docker/compose/v5/pkg/api"
 	"go.uber.org/zap"
 )
 
@@ -73,10 +74,15 @@ func RecoverGitApps(ctx context.Context) {
 				subject, _ = git.Subject(ctx, st.Dir, operation.Commit)
 			}
 			st.attempt(operation.Commit)
-			st.record(gitHistoryEntry{
+			removable := st.record(gitHistoryEntry{
 				Commit: operation.Commit, Subject: subject, At: time.Now().UTC(), Outcome: gitOutcomeInterrupted,
 				Reason: fmt.Sprintf("AppManagement stopped during the %s started at %s", operation.Kind, operation.StartedAt.Format(time.RFC3339)),
+				// what the build may have tagged already, so that the history's cleanup reaches it
+				Images: interruptedGitImages(ctx, st, operation.Commit),
 			})
+			if len(removable) > 0 {
+				gitDocker.RemoveImages(ctx, removable)
+			}
 		}
 
 		if err := saveGitApp(st); err != nil {
@@ -99,4 +105,25 @@ func RecoverGitApps(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// interruptedGitImages are the git- tags a build of commit makes, read from the compose files
+// in the folder: those an interrupted build may have made already.
+func interruptedGitImages(ctx context.Context, st *gitApp, commit string) map[string]string {
+	images := map[string]string{}
+	if !st.Cloned || !gitCommitPattern.MatchString(commit) {
+		return images
+	}
+
+	project, err := loadGitProject(ctx, st.App, st.Dir, filepath.Join(st.Dir, ".env"))
+	if err != nil {
+		return images
+	}
+	for _, name := range builtServiceNames(project.Services) {
+		if tag, err := gitImageTag(api.GetImageNameOrDefault(project.Services[name], st.App), commit); err == nil {
+			images[name] = tag
+		}
+	}
+
+	return images
 }
