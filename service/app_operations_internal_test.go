@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"gotest.tools/v3/assert"
@@ -81,13 +82,40 @@ func TestAnUninstallIsRefusedWhileTheAppIsBusy(t *testing.T) {
 	assert.Error(t, err, "`casaos-test-uninstall` is busy: deploy in progress")
 }
 
-func TestABackupThatHoldsTheAppStillIsRefusedWhileItIsBusy(t *testing.T) {
+// A backup is the one operation that queues. It is asked for by a timer, or in the
+// second after an install whose hold has not been let go of yet, so it waits.
+func TestABackupThatHoldsTheAppStillWaitsForItsTurn(t *testing.T) {
+	logInTempDir(t)
+	app, _ := appWithOneBindAndOneVolume(t)
+	docker := &fakeBackupDocker{mountpoints: demoMountpoints()}
+
+	end, err := Begin(app.Name, "install")
+	assert.NilError(t, err)
+	go func() {
+		time.Sleep(2 * howOftenToAskAgain)
+		end()
+	}()
+
+	manifest, err := RunBackup(context.Background(), app, docker, &fakeCopier{}, BackupOptions{
+		Destination: "offsite", Stamp: restoreStamp, HoldStill: true, Containers: running("c1"),
+	})
+	assert.NilError(t, err)
+	assert.Assert(t, manifest.ContainersStopped)
+	assert.Equal(t, strings.Join(docker.stopped, ","), "c1", "it held the app still once its turn came")
+}
+
+// Waiting is not waiting forever: a hold nobody lets go of is still the refusal, and
+// nothing of the app was touched on the way to it.
+func TestABackupGivesUpWhenTheAppNeverComesFree(t *testing.T) {
 	logInTempDir(t)
 	app, _ := appWithOneBindAndOneVolume(t)
 	docker := &fakeBackupDocker{mountpoints: demoMountpoints()}
 	holding(t, app.Name)
 
-	_, err := RunBackup(context.Background(), app, docker, &fakeCopier{}, BackupOptions{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*howOftenToAskAgain)
+	defer cancel()
+
+	_, err := RunBackup(ctx, app, docker, &fakeCopier{}, BackupOptions{
 		Destination: "offsite", Stamp: restoreStamp, HoldStill: true, Containers: running("c1"),
 	})
 	assertBusy(t, err)

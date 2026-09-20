@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 
 	stdjson "encoding/json"
 
@@ -52,6 +53,11 @@ type backupDocker interface {
 	containerStopStarter
 	VolumeMountpoints(ctx context.Context, names []string) map[string]string
 }
+
+// backupPatience is how long a backup held still waits for whatever else holds the
+// app. Long enough for an install or an update to finish pulling its images, short
+// enough that a hold nobody lets go of still ends as a refusal somebody can read.
+const backupPatience = 10 * time.Minute
 
 // RunBackup copies an app to a destination and returns the manifest it wrote.
 //
@@ -106,7 +112,7 @@ func runBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 	manifest.Git = gitBackupOrigin(app.Name)
 
 	if opts.HoldStill {
-		end, err := Begin(app.Name, "backup")
+		end, err := beginWaiting(ctx, app.Name, "backup", backupPatience)
 		if err != nil {
 			return manifest, err
 		}
