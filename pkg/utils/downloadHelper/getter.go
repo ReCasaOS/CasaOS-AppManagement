@@ -2,6 +2,9 @@ package downloadHelper
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
 
 	"github.com/hashicorp/go-getter"
 )
@@ -14,8 +17,27 @@ import (
 // no .netrc credentials sent to whatever host the URL names, and symlinks
 // are never copied.
 func Download(src string, dst string) error {
+	if err := newClient(src, dst).Get(); err != nil {
+		return err
+	}
+
+	// A URL whose path ends in "/" is a directory to go-getter, and with
+	// X-Terraform-Get off its directory download fetches nothing and returns
+	// nil. The caller would take an empty dst for the new catalogue.
+	entries, err := os.ReadDir(dst)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if len(entries) == 0 {
+		return errors.New("nothing was downloaded: the URL must name an archive such as a .zip, not a directory ending in '/'")
+	}
+
+	return nil
+}
+
+func newClient(src string, dst string) *getter.Client {
 	httpGetter := &getter.HttpGetter{XTerraformGetDisabled: true}
-	client := &getter.Client{
+	return &getter.Client{
 		Ctx:             context.Background(),
 		Src:             src,
 		Dst:             dst,
@@ -27,6 +49,4 @@ func Download(src string, dst string) error {
 			"https": httpGetter,
 		})},
 	}
-
-	return client.Get()
 }
