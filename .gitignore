@@ -20,9 +20,5 @@ codegen/
 __debug_bin
 CasaOS-AppManagement 
 
-# node_modules
-node_modules
-package-lock.json
-
 .idea
 build/sysroot/usr/bin/appfile2compose
