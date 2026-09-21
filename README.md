@@ -76,7 +76,7 @@ go build ./...
 go test ./route/v2/ ./service/ -count=1
 ```
 
-Go 1.21 or later, per `go.mod`. `codegen/` is generated and not committed, so `go generate` comes first; it fetches oapi-codegen and the MessageBus spec, so the first run needs network access.
+Go 1.26.8 or later, per `go.mod`. `codegen/` is generated and not committed, so `go generate` comes first; it fetches oapi-codegen and the MessageBus spec, so the first run needs network access.
 
 `go test ./...` also runs `./pkg/docker`, which drives a real Docker daemon and pulls images from Docker Hub. On a Windows workstation those tests fail on a goroutine-leak assertion against a `go-winio` worker; CI runs them on Linux. `TestComposeAppLifecycle` in `./service` stays skipped unless `CASAOS_INTEGRATION` is set — it needs a live CasaOS host, not just a daemon.
 
