@@ -367,12 +367,7 @@ func CheckGitApp(ctx context.Context, name string) (*GitAppView, error) {
 
 	// read before the check runs: it changes st from here on
 	view := newGitAppView(ctx, st)
-
-	go func() {
-		ctx := context.Background()
-		checkGitApp(ctx, st, true)
-		deployGitAppAutomatically(ctx, name, end)
-	}()
+	go runGitCheck(st, end)
 
 	return view, nil
 }
@@ -385,6 +380,17 @@ func beginGitCheck(ctx context.Context, name string) (*gitApp, func(), error) {
 		return nil, nil, err
 	}
 
+	st, err := prepareGitCheck(ctx, name)
+	if err != nil {
+		end()
+		return nil, nil, err
+	}
+
+	return st, end, nil
+}
+
+// prepareGitCheck is beginGitCheck for a caller that holds the app already.
+func prepareGitCheck(ctx context.Context, name string) (*gitApp, error) {
 	st, err := findGitApp(ctx, name)
 	if err == nil && st.Origin == gitOriginAdoptable {
 		err = adoptGitApp(ctx, st)
@@ -393,12 +399,17 @@ func beginGitCheck(ctx context.Context, name string) (*gitApp, func(), error) {
 		st.Operation = &gitOperation{Kind: gitOperationCheck, StartedAt: time.Now().UTC()}
 		err = saveGitApp(st)
 	}
-	if err != nil {
-		end()
-		return nil, nil, err
-	}
 
-	return st, end, nil
+	return st, err
+}
+
+// runGitCheck runs the check beginGitCheck prepared, cloning an app not cloned yet, then
+// whatever the automatic rebuild may deploy, and releases end once all of it is over:
+// "Check now" and a webhook alike.
+func runGitCheck(st *gitApp, end func()) {
+	ctx := context.Background()
+	checkGitApp(ctx, st, true)
+	deployGitAppAutomatically(ctx, st.App, end)
 }
 
 // checkGitApp asks the remote where the branch is and records the answer, then clears the
