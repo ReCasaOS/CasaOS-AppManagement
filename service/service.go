@@ -122,7 +122,7 @@ func PublishEventWrapper(ctx context.Context, eventType message_bus.EventType, p
 		properties[k] = v
 	}
 
-	resp, err := external.PublishEventInSocket(ctx, eventType.SourceID, eventType.Name, properties)
+	resp, err := external.PublishEventInSocket(ctx, config.CommonInfo.RuntimePath, eventType.SourceID, eventType.Name, properties)
 	if err != nil {
 		logger.Error("failed to publish event", zap.Error(err))
 
