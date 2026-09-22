@@ -31,7 +31,9 @@ network (Gitea, Forgejo) reaching the box directly.
 ### Authentication
 
 With the app's webhook secret, every comparison in constant time. The request is accepted when
-one of these headers is valid:
+at least one of these headers is sent and every one of them sent is valid: a header that
+contradicts another is a request changed on the way, and is refused. Real forges send consistent
+headers (Gitea sends three, Forgejo four, all carrying the same HMAC).
 
 | Header | Forges | Check |
 |---|---|---|
@@ -135,8 +137,8 @@ In the git app's Repository tab, below the existing settings, a "Webhook" sectio
 ### AppManagement (Go, unit)
 
 - Signatures, as a table for every header: right secret, wrong secret, truncated signature,
-  missing or wrong `sha256=` prefix, empty header, two contradicting headers. No request gets a
-  2xx without a valid signature.
+  missing or wrong `sha256=` prefix, empty header, two contradicting headers (401, whichever
+  comes first). No request gets a 2xx without a valid signature.
 - Guards: webhook disabled and unknown app give the same 404; a body over 5 MiB gives 413;
   `ping` gives 200; a non-push event gives 202 `ignored`.
 - The JWT exemption covers this pair only: `GET` on the same path, and every other route, still
