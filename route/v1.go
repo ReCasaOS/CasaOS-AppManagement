@@ -32,7 +32,7 @@ func InitV1Router() http.Handler {
 
 	e.Use(echo_middleware.Gzip())
 	e.Use(echo_middleware.Recover())
-	e.Use(echo_middleware.Logger())
+	e.Use(echo_middleware.LoggerWithConfig(echo_middleware.LoggerConfig{Format: accessLogFormat}))
 
 	v1Group := e.Group("/v1")
 
