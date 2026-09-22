@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen/message_bus"
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
@@ -107,6 +108,11 @@ func (c *store) MessageBus() *message_bus.ClientWithResponses {
 	return client
 }
 
+// publishEventTimeout bounds one publish, socket and fallback together: the bus
+// answers in milliseconds, and a stuck one must not hold up the operation that
+// publishes, which waits on its deferred end event.
+const publishEventTimeout = 10 * time.Second
+
 func PublishEventWrapper(ctx context.Context, eventType message_bus.EventType, properties map[string]string) {
 	if MyService == nil {
 		fmt.Println("failed to publish event - messsage bus service not initialized")
@@ -121,6 +127,14 @@ func PublishEventWrapper(ctx context.Context, eventType message_bus.EventType, p
 	for k, v := range common.PropertiesFromContext(ctx) {
 		properties[k] = v
 	}
+
+	// An event outlives what caused it: most are published from goroutines once the
+	// HTTP request that started the operation has been answered, and a scheduled
+	// backup cut short by a shutdown still reports its error. The publish keeps the
+	// context's values but not its end, and gets a bound of its own, shared with
+	// the fallback.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishEventTimeout)
+	defer cancel()
 
 	resp, err := external.PublishEventInSocket(ctx, config.CommonInfo.RuntimePath, eventType.SourceID, eventType.Name, properties)
 	if err != nil {
