@@ -45,6 +45,14 @@ func installGitAppFromBackup(ctx context.Context, name string, origin BackupGit,
 		return nil, fmt.Errorf("the backup's branch `%s` is not a branch name", origin.Branch)
 	}
 
+	// a backup holds no webhook secret: whatever this machine kept, the app comes back with
+	// its webhook off, turned off before anything is registered so that no delivery signed
+	// with an older secret is taken meanwhile
+	off := false
+	if err := setGitWebhook(name, &off, false); err != nil {
+		return nil, err
+	}
+
 	st, err := loadGitApp(name)
 	if errors.Is(err, ErrGitAppNotFound) {
 		st = &gitApp{

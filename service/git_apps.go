@@ -46,6 +46,11 @@ type GitAppChanges struct {
 	AutoDeploy *bool
 	Access     *string
 	Token      *string
+	// WebhookEnabled turns the webhook on, with a new secret when it has none, or off,
+	// forgetting the secret.
+	WebhookEnabled *bool
+	// RegenerateWebhookSecret replaces the secret at once; refused while the webhook is off.
+	RegenerateWebhookSecret *bool
 }
 
 // checkGitAccess refuses an access mode the URL cannot carry. hasToken says whether a
@@ -243,6 +248,14 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 		}
 	}
 
+	webhookOn := pathExists(gitAppFile(name, ".webhook"))
+	if changes.WebhookEnabled != nil {
+		webhookOn = *changes.WebhookEnabled
+	}
+	if lo.FromPtr(changes.RegenerateWebhookSecret) && !webhookOn {
+		return nil, GitRequestError("the webhook is off: turn it on to get a secret")
+	}
+
 	if changes.Branch != nil && *changes.Branch != st.Branch {
 		if st.Cloned {
 			return nil, GitRequestError(fmt.Sprintf("the branch of %s is the one its folder is on: check another branch out there instead", name))
@@ -269,6 +282,9 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 		if err := setGitAccess(st, access, token); err != nil {
 			return nil, err
 		}
+	}
+	if err := setGitWebhook(name, changes.WebhookEnabled, lo.FromPtr(changes.RegenerateWebhookSecret)); err != nil {
+		return nil, err
 	}
 
 	if err := saveGitApp(st); err != nil {

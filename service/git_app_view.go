@@ -42,9 +42,10 @@ type GitAppView struct {
 	History    []GitHistoryView `json:"history"`
 	Compose    *GitComposeView  `json:"compose"`
 	// ComposeExample is set when the last check found no compose file in the repository.
-	ComposeExample *string `json:"compose_example"`
-	EnvTemplate    *string `json:"env_template"`
-	BuildLog       string  `json:"build_log"`
+	ComposeExample *string        `json:"compose_example"`
+	EnvTemplate    *string        `json:"env_template"`
+	BuildLog       string         `json:"build_log"`
+	Webhook        GitWebhookView `json:"webhook"`
 }
 
 type GitHeadView struct {
@@ -181,6 +182,7 @@ func newGitAppView(ctx context.Context, st *gitApp) *GitAppView {
 		NewCommits: gitNewCommits(st), State: gitAppStateOf(st),
 		History:  []GitHistoryView{},
 		BuildLog: readGitBuildLogTail(st.App),
+		Webhook:  gitWebhookView(st.App),
 	}
 
 	// copies: a deployment goes on changing st once its view is taken

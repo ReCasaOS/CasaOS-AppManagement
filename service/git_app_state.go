@@ -180,8 +180,8 @@ func validGitBranch(branch string) bool {
 		!strings.ContainsAny(branch, " ~^:?*[\\") && !strings.ContainsFunc(branch, unicode.IsControl)
 }
 
-// gitAppFile is one of an app's files: .json, .key, .key.pub, .token, .known_hosts or
-// .build.log.
+// gitAppFile is one of an app's files: .json, .key, .key.pub, .token, .known_hosts,
+// .build.log or .webhook.
 func gitAppFile(app, suffix string) string {
 	return filepath.Join(gitAppsDir, app+suffix)
 }
@@ -240,8 +240,12 @@ func GitAppNames() ([]string, error) {
 
 // forgetGitApp removes an app's state and secrets.
 func forgetGitApp(app string) error {
+	// a delivery recorded meanwhile would write the webhook's secret back
+	gitWebhooks.Lock()
+	defer gitWebhooks.Unlock()
+
 	failures := []error{}
-	for _, suffix := range []string{".json", ".key", ".key.pub", ".token", ".known_hosts", ".build.log"} {
+	for _, suffix := range []string{".json", ".key", ".key.pub", ".token", ".known_hosts", ".build.log", ".webhook"} {
 		if err := os.Remove(gitAppFile(app, suffix)); err != nil && !os.IsNotExist(err) {
 			failures = append(failures, err)
 		}

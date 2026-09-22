@@ -127,7 +127,11 @@ func TestTheViewOfAGitAppIsTheContract(t *testing.T) {
 	assert.DeepEqual(t, keys, []string{
 		"access", "app", "auto_deploy", "auto_paused", "blocked", "branch", "build_log", "check", "cloned", "compose",
 		"compose_example", "deployed", "dir", "env_template", "env_tracked", "head", "history", "new_commits", "operation",
-		"origin", "remote", "state", "token_set",
+		"origin", "remote", "state", "token_set", "webhook",
+	})
+	// off by default, and no secret while off
+	assert.DeepEqual(t, view["webhook"], map[string]any{
+		"enabled": false, "path": "/v2/app_management/git/jarvis/webhook", "last_delivery": nil,
 	})
 	assert.Equal(t, view["operation"], nil)
 	assert.Equal(t, view["compose_example"], nil)
