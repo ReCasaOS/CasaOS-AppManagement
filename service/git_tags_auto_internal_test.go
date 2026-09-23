@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"gotest.tools/v3/assert"
 )
 
@@ -95,6 +96,45 @@ func TestAnAppThatFollowsTagsIsUpgradedAutomaticallyAndNeverDowngraded(t *testin
 	assert.DeepEqual(t, fake.Calls(), []string{})
 	assert.Equal(t, st.Deployed.Commit, moved)
 	assert.Equal(t, st.Deployed.Tag, "v1.1.0")
+}
+
+// A release candidate promoted as is: the higher tag a check finds on the running commit becomes
+// the name of what runs, and nothing is deployed. A later move of that tag is reported, never
+// deployed by itself.
+func TestAHigherTagOnTheRunningCommitIsRecordedWithoutADeployment(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	gitAppsIn(t)
+	fake := withFakeGitDocker(t)
+	ctx := context.Background()
+	url, work := newTestRemote(t)
+	first := pushTestTag(t, work, "v2.0.0-rc.3")
+	_, err := CreateGitApp(ctx, GitAppRegistration{Name: "jarvis", URL: url, Access: "none", Follow: gitFollowTags, Prereleases: true})
+	assert.NilError(t, err)
+	checkTestApp(t, "jarvis")
+	st := deployTestApp(t)
+	assert.Equal(t, st.Deployed.Tag, "v2.0.0-rc.3")
+	st.AutoDeploy = true
+	assert.NilError(t, saveGitApp(st))
+	fake.calls = nil
+
+	assert.Equal(t, pushTestTag(t, work, "v2.0.0"), first)
+	st = checkTestApp(t, "jarvis")
+	assert.DeepEqual(t, fake.Calls(), []string{})
+	assert.Equal(t, st.Deployed.Commit, first)
+	assert.Equal(t, st.Deployed.Tag, "v2.0.0")
+	assert.Equal(t, st.History[0].Tag, "v2.0.0")
+	assert.Equal(t, gitNewCommits(st), false)
+
+	moved := pushTestCommit(t, work, "index.html", "v2")
+	gitShell(t, work, "git tag -f -a -m v2.0.0 v2.0.0 >/dev/null && git push -q -f origin v2.0.0")
+	checkTestApp(t, "jarvis")
+	view, err := GetGitApp(ctx, "jarvis")
+	assert.NilError(t, err)
+	assert.Equal(t, view.Check.RemoteCommit, moved)
+	assert.Equal(t, view.Check.TagMoved, true)
+	assert.Equal(t, view.NewCommits, false)
+	assert.Equal(t, view.Deployed.Commit, first)
+	assert.DeepEqual(t, fake.Calls(), []string{})
 }
 
 // After a change of mode nothing deploys by itself until one deployment by hand in the new

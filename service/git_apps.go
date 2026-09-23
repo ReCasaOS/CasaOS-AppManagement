@@ -495,7 +495,8 @@ func runGitCheck(st *gitApp, end func()) {
 }
 
 // checkGitApp asks the remote where the branch is, or which is the highest eligible tag, and
-// records the answer, then clears the operation. With clone, a registered app that is not
+// records the answer, then clears the operation. A higher tag found on the running commit
+// becomes the deployed tag. With clone, a registered app that is not
 // cloned yet is cloned, at that tag for an app that follows tags, and its compose files
 // validated. Whatever fails is recorded in the check, and changes nothing else.
 func checkGitApp(ctx context.Context, st *gitApp, clone bool) {
@@ -531,6 +532,14 @@ func checkGitApp(ctx context.Context, st *gitApp, clone bool) {
 		return
 	}
 	st.Check.RemoteCommit, st.Check.RemoteTag = remote.Commit, remote.Name
+	if st.followsTags() && st.Deployed != nil && st.Deployed.Tag != "" && remote.Commit == st.Deployed.Commit && gitTagHigher(remote.Name, st.Deployed.Tag) {
+		// a release candidate promoted as is: what runs is known by its higher tag, with nothing
+		// deployed, so that a later move of that tag is reported and never deployed by itself
+		st.Deployed.Tag = remote.Name
+		if entry := st.historyEntry(remote.Commit); gitRan(entry) {
+			entry.Tag = remote.Name
+		}
+	}
 
 	if st.Cloned || !clone {
 		return
