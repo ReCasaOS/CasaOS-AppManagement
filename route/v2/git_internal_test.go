@@ -110,3 +110,64 @@ func TestAPutPassesTheWebhookFieldsOn(t *testing.T) {
 		AutoDeploy: lo.ToPtr(true), WebhookEnabled: lo.ToPtr(false), RegenerateWebhookSecret: lo.ToPtr(true),
 	})
 }
+
+// The service builds the view itself: the tag fields it answers are those the spec declares.
+func TestAGitAppsTagFieldsAreAnsweredAsTheSpecDeclaresThem(t *testing.T) {
+	at := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
+	view := &service.GitAppView{
+		App: "jarvis", Follow: "tags", TagPattern: "v1.*", Prereleases: true,
+		Deployed: &service.GitDeployedView{Commit: "abc", Subject: "fix", At: at, Tag: "v1.4.1"},
+		Check:    &service.GitCheckView{At: at, RemoteCommit: "def", RemoteTag: "v1.4.1", TagMoved: true},
+		History:  []service.GitHistoryView{{Commit: "abc", At: at, Outcome: "deployed", Tag: "v1.4.1"}},
+	}
+	// the operation's type is the service's own: it comes the way a state file holds it
+	assert.NilError(t, json.Unmarshal([]byte(`{"kind":"build","commit":"def","started_at":"2026-09-23T10:00:00Z","tag":"v1.4.2"}`), &view.Operation))
+	raw, err := json.Marshal(view)
+	assert.NilError(t, err)
+
+	var answered codegen.GitApp
+	assert.NilError(t, json.Unmarshal(raw, &answered))
+	assert.Equal(t, answered.Follow, "tags")
+	assert.Equal(t, answered.TagPattern, "v1.*")
+	assert.Equal(t, answered.Prereleases, true)
+	assert.Equal(t, answered.Deployed.Tag, "v1.4.1")
+	assert.Equal(t, answered.Check.RemoteTag, "v1.4.1")
+	assert.Equal(t, answered.Check.TagMoved, true)
+	assert.Equal(t, answered.History[0].Tag, "v1.4.1")
+	assert.Equal(t, answered.Operation.Tag, "v1.4.2")
+}
+
+func TestAPostAndAPutPassTheTagFieldsOn(t *testing.T) {
+	var create codegen.GitAppCreateRequest
+	assert.NilError(t, json.Unmarshal([]byte(`{"name":"jarvis","url":"https://example.invalid/r.git","access":"none","follow":"tags","tag_pattern":"v2.*","prereleases":true}`), &create))
+	assert.DeepEqual(t, gitAppRegistration(create), service.GitAppRegistration{
+		Name: "jarvis", URL: "https://example.invalid/r.git", Access: "none", Follow: "tags", TagPattern: "v2.*", Prereleases: true,
+	})
+
+	var update codegen.GitAppUpdateRequest
+	assert.NilError(t, json.Unmarshal([]byte(`{"follow":"branch","branch":"main","tag_pattern":"","prereleases":false}`), &update))
+	assert.DeepEqual(t, gitAppChanges(update), service.GitAppChanges{
+		Follow: lo.ToPtr("branch"), Branch: lo.ToPtr("main"), TagPattern: lo.ToPtr(""), Prereleases: lo.ToPtr(false),
+	})
+}
+
+func TestTheTagsOfAGitAppAreAnsweredUnderData(t *testing.T) {
+	answer := func(tags []service.GitTag, err error) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		ctx := echo.New().NewContext(httptest.NewRequest(http.MethodGet, "/", nil), recorder)
+		assert.NilError(t, gitAppTagsAnswer(ctx, tags, err))
+
+		return recorder
+	}
+	const commit = "4f5f60c16eba0123456789abcdef0123456789ab"
+
+	recorder := answer([]service.GitTag{{Name: "v1.4.2", Commit: commit}}, nil)
+	assert.Equal(t, recorder.Code, http.StatusOK)
+	var answered codegen.GitAppTagsOK
+	assert.NilError(t, json.Unmarshal(recorder.Body.Bytes(), &answered))
+	assert.DeepEqual(t, *answered.Data, []codegen.GitTag{{Name: "v1.4.2", Commit: commit}})
+
+	recorder = answer(nil, service.GitRequestError("jarvis follows a branch, not tags"))
+	assert.Equal(t, recorder.Code, http.StatusBadRequest)
+	assert.Equal(t, recorder.Body.String(), "{\"message\":\"jarvis follows a branch, not tags\"}\n")
+}

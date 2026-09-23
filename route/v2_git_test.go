@@ -38,6 +38,12 @@ func TestTheGitRoutesAreServed(t *testing.T) {
 		{http.MethodPost, "/v2/app_management/git/no-such-app/check", "", http.StatusNotFound},
 		{http.MethodPost, "/v2/app_management/git/no-such-app/deploy", "", http.StatusNotFound},
 		{http.MethodPost, "/v2/app_management/git/no-such-app/deploy", `{"commit":"4f5f60c"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v2/app_management/git/no-such-app/deploy", `{"tag":"v1.0.0"}`, http.StatusNotFound},
+		{http.MethodPost, "/v2/app_management/git/no-such-app/deploy", `{"tag":"v1.0.0","commit":"4f5f60c16eba0123456789abcdef0123456789ab"}`, http.StatusBadRequest},
+		{http.MethodGet, "/v2/app_management/git/no-such-app/tags", "", http.StatusNotFound},
+		{http.MethodPut, "/v2/app_management/git/no-such-app", `{"follow":"tags","tag_pattern":"v2.*","prereleases":true}`, http.StatusNotFound},
+		{http.MethodPut, "/v2/app_management/git/no-such-app", `{"prereleases":"yes"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v2/app_management/git", `{"name":"Not A Name","url":"https://example.invalid/r.git","access":"none","follow":1}`, http.StatusBadRequest},
 		{http.MethodDelete, "/v2/app_management/git/no-such-app", "", http.StatusNotFound},
 	} {
 		request := httptest.NewRequest(call.method, call.path, strings.NewReader(call.body))

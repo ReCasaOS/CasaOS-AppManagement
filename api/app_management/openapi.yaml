@@ -1268,9 +1268,13 @@ paths:
         deploy key is generated and its public half returned, to be added to the repository as a
         read-only key. With `access: token` the token is kept on this machine and never returned.
 
+        With `follow` `tags` the app follows the highest version tag of its repository instead of
+        a branch: `branch` is then refused, and `tag_pattern` and `prereleases` choose the tags.
+
         400 for a name that is not a compose project name, a URL CasaOS cannot clone (HTTPS, SSH
-        or file, without a password), or an access the URL cannot carry. 409 for a name used by
-        an app, a compose project or another git app.
+        or file, without a password), an access the URL cannot carry, a `follow` other than
+        `branch` or `tags`, or a tag pattern that is not one. 409 for a name used by an app, a
+        compose project or another git app.
       operationId: createGitApp
       tags:
         - Git methods
@@ -1307,7 +1311,7 @@ paths:
           $ref: "#/components/responses/ResponseInternalServerError"
 
     put:
-      summary: Change the branch, the automatic rebuild, the access or the webhook of a git app
+      summary: Change the branch, the automatic rebuild, the access, the webhook or the mode of a git app
       description: |
         Every field is optional. The branch changes until the app is cloned. Turning
         `auto_deploy` on clears `auto_paused`. A token is accepted and never returned; an empty
@@ -1317,6 +1321,12 @@ paths:
         `webhook_enabled` turns the webhook on, generating its secret when there is none, or
         off, forgetting the secret. `regenerate_webhook_secret` replaces the secret at once, the
         old one refused from then on; 400 while the webhook is off.
+
+        `follow` changes the mode. The folder of a cloned app is put on the branch (`branch`,
+        or the remote's default when absent) or detached at its commit, its files untouched;
+        `tag_pattern` and `prereleases` are kept either way. After a change, nothing deploys
+        automatically until one deployment by hand in the new mode. 400 for a `branch` while
+        the app follows tags.
       operationId: updateGitApp
       tags:
         - Git methods
@@ -1364,7 +1374,9 @@ paths:
       description: |
         Starts a check in the background and answers 202 with `operation.kind` `check`; poll
         `GET /git/{app}` until `operation` is null. The check asks the remote where the branch
-        is; for a registered app not cloned yet it clones it and validates its compose files. A
+        is, or for an app that follows tags which is the highest eligible tag (`check.error`
+        names the filter when none is); for a registered app not cloned yet it clones it, at
+        that tag for an app that follows tags, and validates its compose files. A
         clone without a compose file is removed, `check.error` says so and `compose_example`
         holds a compose file to add. When the automatic rebuild may act on a new commit, its
         deployment starts once the check has ended. Adopts an adoptable app: 400 when its folder
@@ -1392,7 +1404,10 @@ paths:
       description: |
         Starts the deployment in the background and answers 202 with the operation running. No
         commit: the remote's latest. A commit of the history: a revert, which pauses the
-        automatic rebuild. `env` is written as `.env` first, while no deployment has succeeded
+        automatic rebuild. For an app that follows tags, `tag` deploys any eligible tag, lower
+        ones included (a lower one pauses the automatic deployment); neither `tag` nor `commit`
+        deploys the highest eligible tag; a commit must be a version of the history. `tag` with
+        `commit`: 400. `env` is written as `.env` first, while no deployment has succeeded
         and never when the repository tracks `.env`. 400 when a precondition fails, the message
         saying which: the folder not on its branch, tracked files modified, the commit already
         deployed, a revert to a version whose images are gone or over commits made in the folder.
@@ -1413,6 +1428,29 @@ paths:
           $ref: "#/components/responses/ResponseNotFound"
         "409":
           $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /git/{app}/tags:
+    get:
+      summary: The tags an app that follows tags may deploy
+      description: |
+        Asks the remote, as a check does. The eligible tags: those matching `tag_pattern` when
+        there is one, strict semver after one leading `v`, pre-releases only with
+        `prereleases`. Highest first, equal versions by name, at most 50. 400 for an app that
+        follows a branch, or a repository that cannot be reached.
+      operationId: getGitAppTags
+      tags:
+        - Git methods
+      parameters:
+        - $ref: "#/components/parameters/GitAppName"
+      responses:
+        "200":
+          $ref: "#/components/responses/GitAppTagsOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -1916,6 +1954,19 @@ components:
               - properties:
                   data:
                     $ref: "#/components/schemas/GitApp"
+
+    GitAppTagsOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GitTag"
 
     ComposeAppUpdatePlanOK:
       description: OK
@@ -3283,6 +3334,16 @@ components:
       type: string
       example: key
 
+    GitFollow:
+      description: |
+        What the app deploys: `branch`, the head of its branch; `tags`, the highest version tag
+        eligible under `tag_pattern` and `prereleases`, and automatically only a higher one.
+
+        One of `branch`, `tags`. Not declared as an enum, for the reason given on
+        `GitAppState`.
+      type: string
+      example: tags
+
     GitApp:
       description: |
         An app deployed from its git repository (`created` or `adopted`), or a compose app
@@ -3293,6 +3354,9 @@ components:
         - dir
         - remote
         - branch
+        - follow
+        - tag_pattern
+        - prereleases
         - access
         - token_set
         - auto_deploy
@@ -3329,8 +3393,21 @@ components:
           example: git@github.com:owner/jarvis.git
         branch:
           type: string
-          description: Empty for a folder in detached HEAD, which cannot be adopted.
+          description: |
+            Empty for a folder in detached HEAD, which cannot be adopted, and for an app that
+            follows tags.
           example: main
+        follow:
+          $ref: "#/components/schemas/GitFollow"
+        tag_pattern:
+          type: string
+          description: |
+            A glob on the full tag name (`*`, `?`, `[...]`), empty for every version tag. Kept
+            while the app follows a branch.
+          example: v2.*
+        prereleases:
+          type: boolean
+          description: Whether pre-releases (`-rc`, `-beta`, ...) are eligible. Kept while the app follows a branch.
         access:
           $ref: "#/components/schemas/GitAccess"
         public_key:
@@ -3361,7 +3438,9 @@ components:
           $ref: "#/components/schemas/GitAppCheck"
         new_commits:
           type: boolean
-          description: False while `deployed` is null.
+          description: |
+            False while `deployed` is null. For an app that follows tags, true only for a tag
+            higher than `deployed.tag`, or any other commit while `deployed.tag` is empty.
         state:
           $ref: "#/components/schemas/GitAppState"
         operation:
@@ -3463,6 +3542,7 @@ components:
         - commit
         - subject
         - at
+        - tag
       properties:
         commit:
           type: string
@@ -3471,6 +3551,10 @@ components:
         at:
           type: string
           format: date-time
+        tag:
+          type: string
+          description: The tag the commit was deployed as; empty for a branch's commit.
+          example: v1.4.2
 
     GitAppCheck:
       description: The last check of the remote. Null before the first check.
@@ -3478,6 +3562,8 @@ components:
       required:
         - at
         - remote_commit
+        - remote_tag
+        - tag_moved
         - error
       properties:
         at:
@@ -3485,6 +3571,15 @@ components:
           format: date-time
         remote_commit:
           type: string
+        remote_tag:
+          type: string
+          description: The highest eligible tag, which names `remote_commit`; empty for an app that follows a branch.
+          example: v1.4.2
+        tag_moved:
+          type: boolean
+          description: |
+            `remote_tag` is `deployed.tag` on another commit than `deployed.commit`. Never
+            redeployed automatically; deploying that tag by hand builds its new commit.
         error:
           type: string
 
@@ -3495,6 +3590,7 @@ components:
         - kind
         - commit
         - started_at
+        - tag
       properties:
         kind:
           type: string
@@ -3505,6 +3601,9 @@ components:
         started_at:
           type: string
           format: date-time
+        tag:
+          type: string
+          description: The tag `commit` is deployed as; empty for a branch's commit.
 
     GitAppHistoryEntry:
       required:
@@ -3514,6 +3613,7 @@ components:
         - outcome
         - reason
         - revertable
+        - tag
       properties:
         commit:
           type: string
@@ -3530,7 +3630,10 @@ components:
           type: string
         revertable:
           type: boolean
-          description: Whether this version can be reverted to, its images still being there.
+          description: Whether this version can be reverted to, its images and its commit still being there.
+        tag:
+          type: string
+          description: The tag the commit was deployed as; empty for a branch's commit.
 
     GitAppCompose:
       description: What the repository's compose files will run. Null until cloned.
@@ -3607,13 +3710,20 @@ components:
           example: git@github.com:owner/jarvis.git
         branch:
           type: string
-          description: Empty or absent for the branch the remote's HEAD points to.
+          description: Empty or absent for the branch the remote's HEAD points to; refused with `follow` `tags`.
           example: main
         access:
           $ref: "#/components/schemas/GitAccess"
         token:
           type: string
           description: Required with `access` `token`; never returned.
+        follow:
+          $ref: "#/components/schemas/GitFollow"
+        tag_pattern:
+          type: string
+          description: At most 100 characters, no space; a `path.Match` glob such as `v2.*`.
+        prereleases:
+          type: boolean
 
     GitAppUpdateRequest:
       properties:
@@ -3632,16 +3742,43 @@ components:
         regenerate_webhook_secret:
           type: boolean
           description: Replaces the secret at once; 400 while the webhook is off.
+        follow:
+          $ref: "#/components/schemas/GitFollow"
+        tag_pattern:
+          type: string
+          description: At most 100 characters, no space; a `path.Match` glob such as `v2.*`.
+        prereleases:
+          type: boolean
 
     GitAppDeployRequest:
       properties:
         commit:
           type: string
-          description: Absent for the remote's latest commit; a commit of the history reverts to it.
+          description: |
+            Absent for the remote's latest commit (the highest eligible tag for an app that
+            follows tags); a commit of the history reverts to it.
           pattern: "^[0-9a-f]{40}$"
+        tag:
+          type: string
+          description: |
+            For an app that follows tags, instead of `commit` (both: 400): an eligible tag,
+            lower ones included.
+          example: v1.4.2
         env:
           type: string
           description: The `.env` to write, accepted while no deployment has succeeded and never when the repository tracks `.env`.
+
+    GitTag:
+      required:
+        - name
+        - commit
+      properties:
+        name:
+          type: string
+          example: v1.4.2
+        commit:
+          type: string
+          description: The commit the tag names, an annotated tag peeled.
 
     GitAppState:
       description: |
