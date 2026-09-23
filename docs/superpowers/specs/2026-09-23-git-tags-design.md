@@ -1,6 +1,7 @@
 # Git apps that follow tags — design
 
-Status: approved in conversation on 2026-09-23, section by section. Builds on
+Status: approved in conversation on 2026-09-23, section by section, and amended after the final
+review of the implementation (see "Clarifications made while planning", the last section). Builds on
 `2026-09-16-git-apps-design.md` (git apps), whose "Out of scope" listed "Following tags or several
 branches", and on `2026-09-23-git-webhooks-design.md`.
 
@@ -67,10 +68,22 @@ never goes back to an older release by itself.
 ### Changing the mode
 
 `PUT` with `follow` changes the mode; `tag_pattern` and `prereleases` are kept when switching back
-and forth. Switching to branches sets `branch` from the request, or leaves it empty for the
-remote's default. No extra state: automatic deployment in tag mode requires a non-empty
-`deployed.tag`, and in branch mode an empty `deployed.tag`. So after a switch, nothing deploys by
-itself until the owner deploys once in the new mode.
+and forth. A change of mode forgets the last check (`check` is null until the next one): a check
+of one mode says nothing about the other.
+
+The folder of a cloned app follows the mode, and none of its files moves: it is detached at its
+commit to follow tags, and put on the branch to follow one. Switching to branches sets `branch`
+from the request. Without one, an app not cloned yet leaves it empty for the remote's default,
+which its first check reads; a cloned app reads the remote's default during the `PUT`, with the
+access the request gives and before any access file is written or removed, and a remote that
+cannot be read is a 400 asking for the branch, the app left as it was (an empty branch on a
+detached folder would make every branch deployment fail "not on the branch"). A local branch of
+that name holding commits the folder is not on is refused with a 400 ("`<branch>` holds commits
+the folder is not on: check it out there first") instead of being reset onto the folder's commit.
+
+No extra state: automatic deployment in tag mode requires a non-empty `deployed.tag`, and in
+branch mode an empty `deployed.tag`. So after a switch, nothing deploys by itself until the owner
+deploys once in the new mode.
 
 ## The check and the choice of the tag
 
@@ -87,6 +100,11 @@ itself until the owner deploys once in the new mode.
 - The check records `remote_tag` and `remote_commit`. With no eligible tag, `check.error` says so
   with the filter in force ("no tag matches (pattern `v2.*`, pre-releases excluded)") and nothing
   else changes.
+- A higher tag on the running commit is recorded, not deployed: when `remote_commit` is
+  `deployed.commit`, `deployed.tag` is not empty and `remote_tag` is strictly higher (a release
+  candidate promoted as is: `v2.0.0` tagged on the commit `v2.0.0-rc.3` runs), the check writes
+  `remote_tag` into `deployed.tag` and into that version's history entry. A later move of that tag
+  is then `tag_moved`, never deployed by itself.
 - The first clone in tag mode clones at the chosen tag
   (`git clone --branch <tag> --single-branch -- <url> <dir>`), which leaves a detached HEAD; the
   compose-file check of the clone is unchanged.
@@ -106,6 +124,11 @@ itself until the owner deploys once in the new mode.
     empty), `remote_commit` not in `attempted`, not paused, not blocked;
   - **manual**: any eligible tag, lower ones included. A tag whose commit is not in the history
     is built; a commit in the history stays a revert (no build, images reused), as today.
+- A deployment by hand pauses automatic deployment only when it goes down: a tag lower than
+  `deployed.tag`, a revert included. The same or a higher tag, a revert to a newer version that
+  ran included, clears the pause, as a deployment by hand that is no revert does on a branch.
+  The running version deployed again (a repair) leaves the pause as it was. Branch mode keeps its
+  rule: a revert pauses.
 - The switch uses `reset --keep` to the target commit instead of a fast-forward, since tags do not
   form a line. A failed start rolls back to the previous commit as today, and blocks the app if
   that fails too.
@@ -174,13 +197,18 @@ that `journalctl -u casaos | grep telemetry` shows them; nothing else changes.
 - Choice: pattern, pre-releases excluded then included, non-semver tags ignored, `v1.2.3` against
   `1.2.3`, no eligible tag and its message.
 - Automatic: deploys a strictly higher tag; nothing for a deleted tag, a narrowed pattern or a
-  moved tag (`tag_moved`); nothing while `deployed.tag` is empty after a change of mode.
+  moved tag (`tag_moved`); nothing while `deployed.tag` is empty after a change of mode; a higher
+  tag on the running commit is recorded, not deployed, and its later move is `tag_moved`.
 - Manual: an older tag builds; a history commit reverts; a tag that moved since the check is
-  refused.
+  refused; a revert back to the newer version clears the pause; a tag that does not start is
+  rolled back.
+- Mode: a change of mode clears the check; back on a branch, a remote that cannot be read changes
+  nothing, the access included, and a local branch holding other commits is refused; an app
+  cloned at a tag off its branch and never deployed deploys that branch after a switch.
 - History: the `kept` refs are made and removed; a revert works after the tag was deleted on the
   remote.
-- API: the new fields, `GET …/tags`, `deploy {tag}` (and `tag` with `commit` is a 400); the view
-  contract test; the enum-constant count stays 34.
+- API: the new fields, `GET …/tags` (a 400 when the repository cannot be reached), `deploy {tag}`
+  (and `tag` with `commit` is a 400); the view contract test; the enum-constant count stays 34.
 - Backups and restore: a tag-mode manifest; restore at the tag, then by commit when the tag moved;
   a branch-mode manifest unchanged byte for byte.
 
@@ -216,3 +244,34 @@ deployment.
 - Tags that are not semver (dates, codenames), and floating tags (`stable`, `v2`) redeployed when
   they move.
 - Repositories without a compose file (the next design).
+
+## Clarifications made while planning
+
+Writing the implementation plan, then the final review of the implementation, surfaced these
+points. The owner accepted them; they amend the sections above, which now say the same.
+
+1. **Back on a branch, the default branch is read during the `PUT`** (plan decision 1). A cloned
+   app switched to branches without a `branch` reads the remote's default at once, with the
+   access the request gives and before any access file is written or removed. A remote that
+   cannot be read is a 400 asking for the branch, and the app, its access included, stays as it
+   was. The first text left the branch empty for the remote's default: on a detached folder,
+   every branch deployment would then fail "not on the branch".
+2. **A local branch holding other commits is refused.** Back on a branch, the folder is put on it
+   with `git checkout -B`, which would reset a branch of that name the folder already has. When
+   that branch is not an ancestor of the folder's commit, the `PUT` is a 400: "`<branch>` holds
+   commits the folder is not on: check it out there first".
+3. **A change of mode clears the check.** A check of one mode says nothing about the other:
+   `check` is null until the next check, and the dashboard says the app is not checked yet.
+4. **A higher tag on the running commit is recorded.** When a check finds `remote_commit` equal to
+   `deployed.commit`, a non-empty `deployed.tag` and a strictly higher `remote_tag` (a release
+   candidate promoted as is), `remote_tag` becomes `deployed.tag` and the tag of that version's
+   history entry, and nothing is deployed. A later move of that tag is `tag_moved`, never
+   deployed by itself.
+5. **The pause only when going down.** In tag mode a deployment by hand pauses automatic
+   deployment only when its tag is lower than `deployed.tag`; the same or a higher tag, a revert
+   included, clears the pause. Branch mode keeps its rule: a revert pauses.
+6. **The first deployment of all moves with `reset --keep`.** With no deployment before it, the
+   folder may be on the tag an app that followed tags was cloned at, off its branch. After a
+   switch to that branch, the first deployment moves the folder to the branch's commit with
+   `git reset --keep` instead of a fast-forward, once the fetch has checked that the commit is on
+   the branch.
