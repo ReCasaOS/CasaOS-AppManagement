@@ -78,8 +78,12 @@ which its first check reads; a cloned app reads the remote's default during the 
 access the request gives and before any access file is written or removed, and a remote that
 cannot be read is a 400 asking for the branch, the app left as it was (an empty branch on a
 detached folder would make every branch deployment fail "not on the branch"). A local branch of
-that name holding commits the folder is not on is refused with a 400 ("`<branch>` holds commits
-the folder is not on: check it out there first") instead of being reset onto the folder's commit.
+that name is reset onto the folder's commit only when that loses nothing: the commits it holds
+that the folder is not on must be on the remote's branch, which is then fetched with the access
+the request gives. That is the usual case after a tag behind the branch's head: the local branch
+is where the last deployment from the branch left it. Otherwise the `PUT` is a 400 ("`<branch>`
+holds commits the folder is not on: check it out there first", or "... and the remote cannot be
+read to tell whether it has them"), the app left as it was.
 
 No extra state: automatic deployment in tag mode requires a non-empty `deployed.tag`, and in
 branch mode an empty `deployed.tag`. So after a switch, nothing deploys by itself until the owner
@@ -256,10 +260,17 @@ points. The owner accepted them; they amend the sections above, which now say th
    cannot be read is a 400 asking for the branch, and the app, its access included, stays as it
    was. The first text left the branch empty for the remote's default: on a detached folder,
    every branch deployment would then fail "not on the branch".
-2. **A local branch holding other commits is refused.** Back on a branch, the folder is put on it
-   with `git checkout -B`, which would reset a branch of that name the folder already has. When
-   that branch is not an ancestor of the folder's commit, the `PUT` is a 400: "`<branch>` holds
-   commits the folder is not on: check it out there first".
+2. **A local branch holding commits found nowhere else is refused** (narrowed after the final
+   review, pending the owner's confirmation). Back on a branch, the folder is put on it with
+   `git checkout -B`, which would reset a branch of that name the folder already has. When that
+   branch is not an ancestor of the folder's commit, the remote's branch is fetched, with the
+   access the request gives and before any access file is written or removed. The `PUT` goes on
+   when the local branch is an ancestor of the fetched commit: after a tag behind the branch's
+   head, the local branch is where the last deployment from the branch left it, and resetting it
+   loses nothing. Otherwise it is a 400: "`<branch>` holds commits the folder is not on: check it
+   out there first", or, when the fetch fails, "... and the remote cannot be read to tell whether
+   it has them". The first text refused every branch that is not an ancestor of the folder's
+   commit, which broke the ordinary round trip branch, tags, branch.
 3. **A change of mode clears the check.** A check of one mode says nothing about the other:
    `check` is null until the next check, and the dashboard says the app is not checked yet.
 4. **A higher tag on the running commit is recorded.** When a check finds `remote_commit` equal to
