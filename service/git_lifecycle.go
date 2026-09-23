@@ -75,7 +75,7 @@ func RecoverGitApps(ctx context.Context) {
 			}
 			st.attempt(operation.Commit)
 			removable := st.record(gitHistoryEntry{
-				Commit: operation.Commit, Subject: subject, At: time.Now().UTC(), Outcome: gitOutcomeInterrupted,
+				Commit: operation.Commit, Tag: operation.Tag, Subject: subject, At: time.Now().UTC(), Outcome: gitOutcomeInterrupted,
 				Reason: fmt.Sprintf("AppManagement stopped during the %s started at %s", operation.Kind, operation.StartedAt.Format(time.RFC3339)),
 				// what the build may have tagged already, so that the history's cleanup reaches it
 				Images: interruptedGitImages(ctx, st, operation.Commit),

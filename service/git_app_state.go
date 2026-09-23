@@ -418,3 +418,9 @@ func (st *gitApp) historyEntry(commit string) *gitHistoryEntry {
 
 	return newest
 }
+
+// gitRan reports whether entry is of a version that ran, deployed or adopted: one a revert can
+// go back to.
+func gitRan(entry *gitHistoryEntry) bool {
+	return entry != nil && (entry.Outcome == gitOutcomeDeployed || entry.Outcome == gitOutcomeAdopted)
+}

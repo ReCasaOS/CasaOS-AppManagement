@@ -100,7 +100,7 @@ func installGitAppFromBackup(ctx context.Context, name string, origin BackupGit,
 	if err := saveGitApp(st); err != nil {
 		return nil, err
 	}
-	runGitDeploy(ctx, st, origin.Commit, false, gitTriggerManual)
+	runGitDeploy(ctx, st, origin.Commit, "", false, gitTriggerManual)
 	if st.Deployed == nil || st.Deployed.Commit != origin.Commit {
 		return nil, fmt.Errorf("`%s` could not be deployed at %s: %s", name, origin.Commit[:12], st.History[0].Reason)
 	}
