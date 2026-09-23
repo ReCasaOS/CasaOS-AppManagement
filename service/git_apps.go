@@ -358,7 +358,8 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 
 // followGitFolder puts a cloned app's folder in the shape its new mode deploys from, and moves
 // none of its files: detached at its commit to follow tags, on the branch to follow one, the
-// remote's default when none is given. It returns the branch the app follows.
+// remote's default when none is given, never over commits that branch holds and the folder is
+// not on. It returns the branch the app follows.
 func followGitFolder(ctx context.Context, st *gitApp, follow, branch string) (string, error) {
 	if follow == gitFollowTags {
 		return "", git.Detach(ctx, st.Dir)
@@ -374,6 +375,18 @@ func followGitFolder(ctx context.Context, st *gitApp, follow, branch string) (st
 		}
 		if err != nil {
 			return "", GitRequestError(fmt.Sprintf("the remote's default branch cannot be read, give the branch to follow: %v", err))
+		}
+	}
+
+	// the folder's own branch, as an adopted folder has, would be reset to the folder's commit,
+	// dropping the commits it holds that the folder is not on
+	if local := "refs/heads/" + branch; git.HasCommit(ctx, st.Dir, local) {
+		contained, err := git.IsAncestor(ctx, st.Dir, local, "HEAD")
+		if err != nil {
+			return "", err
+		}
+		if !contained {
+			return "", GitRequestError(fmt.Sprintf("%s holds commits the folder is not on: check it out there first", branch))
 		}
 	}
 

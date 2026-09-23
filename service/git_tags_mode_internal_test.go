@@ -132,6 +132,41 @@ func TestAChangeOfModeForgetsTheLastCheck(t *testing.T) {
 	assert.Equal(t, view.NewCommits, false)
 }
 
+// Back on a branch, a local branch holding commits the folder is not on is refused: putting the
+// folder on it would reset it and drop them. Once the owner checks it out there, the folder goes
+// on it as it is.
+func TestBackOnABranchThatHoldsOtherCommitsIsRefused(t *testing.T) {
+	clonedTestApp(t)
+	ctx := context.Background()
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	tags, branch, main := gitFollowTags, gitFollowBranch, "main"
+	// a commit of the owner's on the folder's branch, as an adopted folder may hold, then the
+	// detached folder moved back, as a deployment of a tag moves it
+	mine := gitShell(t, st.Dir, "echo mine > notes.txt && git add notes.txt && git commit -qm mine && git rev-parse HEAD")
+	_, err = UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &tags})
+	assert.NilError(t, err)
+	gitShell(t, st.Dir, "git checkout -q --detach HEAD~1")
+
+	for _, changes := range []GitAppChanges{{Follow: &branch}, {Follow: &branch, Branch: &main}} {
+		_, err = UpdateGitApp(ctx, "jarvis", changes)
+		assertBadRequest(t, err, "main holds commits the folder is not on: check it out there first")
+	}
+	assert.Equal(t, gitShell(t, st.Dir, "git rev-parse refs/heads/main"), mine)
+	info, err := git.Describe(ctx, st.Dir)
+	assert.NilError(t, err)
+	assert.Equal(t, info.Branch, "", "still detached")
+	after, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	assert.Equal(t, after.Follow, gitFollowTags)
+
+	gitShell(t, st.Dir, "git checkout -q main")
+	view, err := UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch})
+	assert.NilError(t, err)
+	assert.Equal(t, view.Branch, "main")
+	assert.Equal(t, folderHead(t, st.Dir), mine)
+}
+
 // Back on a branch without one, the remote names its default: a remote that cannot be read, or
 // that names no valid branch, is a 400 that leaves the app following tags and its folder
 // detached. With the branch given, the remote is not asked.

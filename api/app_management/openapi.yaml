@@ -1326,7 +1326,9 @@ paths:
         or the remote's default when absent) or detached at its commit, its files untouched;
         `tag_pattern` and `prereleases` are kept either way. A change forgets the last check:
         `check` is null until the next one. After a change, nothing deploys automatically until
-        one deployment by hand in the new mode. 400 for a `branch` while the app follows tags.
+        one deployment by hand in the new mode. 400 for a `branch` while the app follows tags,
+        when the remote's default branch cannot be read, and when the folder's own copy of the
+        branch holds commits the folder is not on.
       operationId: updateGitApp
       tags:
         - Git methods
