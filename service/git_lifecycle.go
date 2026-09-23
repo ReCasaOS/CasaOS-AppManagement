@@ -83,6 +83,7 @@ func RecoverGitApps(ctx context.Context) {
 			if len(removable) > 0 {
 				gitDocker.RemoveImages(ctx, removable)
 			}
+			keepGitCommits(ctx, st)
 		}
 
 		if err := saveGitApp(st); err != nil {

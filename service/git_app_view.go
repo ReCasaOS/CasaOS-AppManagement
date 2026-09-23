@@ -200,8 +200,9 @@ func GitAppsWithoutContainers(listed []string) []codegen.WebAppGridItem {
 
 // newGitAppView reads what the API answers for st.
 //
-// ponytail: a view of a cloned app runs git four times; cache it per HEAD if polling it
-// ever shows up on a small box.
+// ponytail: a view of a cloned app runs git four times, and once more per version of the
+// history that may be reverted to; cache it per HEAD if polling it ever shows up on a small
+// box.
 func newGitAppView(ctx context.Context, st *gitApp) *GitAppView {
 	view := &GitAppView{
 		App: st.App, Origin: st.Origin, Dir: st.Dir, Remote: redactGitURL(st.Remote), Branch: st.Branch, Access: st.Access,
@@ -267,8 +268,8 @@ func newGitAppView(ctx context.Context, st *gitApp) *GitAppView {
 	return view
 }
 
-// gitRevertable reports whether the history can go back to entry: a version that ran,
-// that is not the one running, and whose images are still there.
+// gitRevertable reports whether the history can go back to entry: a version that ran, that
+// is not the one running, whose images are still there, and whose commit git still holds.
 func gitRevertable(ctx context.Context, st *gitApp, entry gitHistoryEntry) bool {
 	if entry.Outcome != gitOutcomeDeployed && entry.Outcome != gitOutcomeAdopted {
 		return false
@@ -277,7 +278,7 @@ func gitRevertable(ctx context.Context, st *gitApp, entry gitHistoryEntry) bool 
 		return false
 	}
 
-	return gitDocker.ImagesExist(ctx, entry.Images)
+	return gitDocker.ImagesExist(ctx, entry.Images) && git.HasCommit(ctx, st.Dir, entry.Commit)
 }
 
 func readGitBuildLogTail(app string) string {

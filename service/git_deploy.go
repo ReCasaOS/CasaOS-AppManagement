@@ -246,7 +246,7 @@ func gitDeployPreconditions(ctx context.Context, st *gitApp, target, tag string,
 		return GitRequestError(fmt.Sprintf("%s is on %s, not on the deployed %s: a revert would drop the commits made there", st.Dir, info.Head[:12], st.Deployed.Commit[:12]))
 	}
 	if revert && !gitRevertable(ctx, st, *st.historyEntry(target)) {
-		return GitRequestError(fmt.Sprintf("%s cannot be reverted to: it is the running version, it never ran, or its images are gone", target[:12]))
+		return GitRequestError(fmt.Sprintf("%s cannot be reverted to: it is the running version, it never ran, or its images or its commit are gone", target[:12]))
 	}
 
 	return nil
@@ -497,16 +497,54 @@ func failGitDeploy(ctx context.Context, st *gitApp, target, tag, subject string,
 	go PublishEventWrapper(ctx, event, map[string]string{common.PropertyTypeMessage.Name: cause.Error()})
 }
 
-// finishGitDeploy records how a deployment ended, clears the operation, and removes the
-// images no remembered version names any more.
+// finishGitDeploy records how a deployment ended, clears the operation, removes the images
+// no remembered version names any more, and keeps the commits the history offers.
 func finishGitDeploy(ctx context.Context, st *gitApp, entry gitHistoryEntry) {
 	st.Operation = nil
 	if removable := st.record(entry); len(removable) > 0 {
 		gitDocker.RemoveImages(ctx, removable)
 	}
+	keepGitCommits(ctx, st)
 
 	if err := saveGitApp(st); err != nil {
 		logger.Error("the end of a deployment could not be written down", zap.Error(err), zap.String("app", st.App))
+	}
+}
+
+// keepGitCommits keeps a ref in the folder for the running version and every version of the
+// history that ran, and drops the others: git never collects a commit a revert may go back
+// to, whatever became of the tag or the branch that brought it.
+func keepGitCommits(ctx context.Context, st *gitApp) {
+	if !st.Cloned {
+		return
+	}
+
+	wanted := map[string]bool{}
+	if st.Deployed != nil {
+		wanted[st.Deployed.Commit] = true
+	}
+	for i := range st.History {
+		if gitRan(&st.History[i]) {
+			wanted[st.History[i].Commit] = true
+		}
+	}
+
+	kept, err := git.KeptCommits(ctx, st.Dir)
+	if err != nil {
+		logger.Error("the commits a git app keeps could not be listed", zap.Error(err), zap.String("app", st.App))
+		return
+	}
+	for _, commit := range kept {
+		if wanted[commit] {
+			delete(wanted, commit)
+		} else if err := git.DropKeptCommit(ctx, st.Dir, commit); err != nil {
+			logger.Error("a commit a git app kept could not be dropped", zap.Error(err), zap.String("app", st.App))
+		}
+	}
+	for commit := range wanted {
+		if err := git.KeepCommit(ctx, st.Dir, commit); err != nil {
+			logger.Error("a commit of a git app could not be kept", zap.Error(err), zap.String("app", st.App))
+		}
 	}
 }
 
@@ -516,8 +554,7 @@ func finishGitDeploy(ctx context.Context, st *gitApp, entry gitHistoryEntry) {
 // meanwhile is told a deployment runs; end is released either way.
 func deployGitAppAutomatically(ctx context.Context, name string, end func()) {
 	st, err := loadGitApp(name)
-	if err != nil || !st.AutoDeploy || st.AutoPaused || st.Blocked || st.Deployed == nil || st.Check == nil || st.Check.Error != "" ||
-		st.Check.RemoteCommit == "" || st.Check.RemoteCommit == st.Deployed.Commit || lo.Contains(st.Attempted, st.Check.RemoteCommit) {
+	if err != nil || !gitMayDeployAutomatically(st) {
 		end()
 		return
 	}
@@ -526,6 +563,23 @@ func deployGitAppAutomatically(ctx context.Context, name string, end func()) {
 	if _, err := deployHolding(ctx, name, st.Check.RemoteCommit, st.Check.RemoteTag, nil, gitTriggerAutomatic, end); err != nil {
 		logger.Info("no automatic deployment", zap.String("app", name), zap.Error(err))
 	}
+}
+
+// gitMayDeployAutomatically reports whether the automatic rebuild may deploy what the last
+// check saw: a commit other than the running one and never tried, on an app neither paused
+// nor blocked. An app that follows tags only ever goes up, from a tag deployed in that mode:
+// a deleted, a lower or a moved tag deploys nothing. A branch app acts once a version of its
+// branch runs, never over one a tag deployed.
+func gitMayDeployAutomatically(st *gitApp) bool {
+	if !st.AutoDeploy || st.AutoPaused || st.Blocked || st.Deployed == nil || st.Check == nil || st.Check.Error != "" ||
+		st.Check.RemoteCommit == "" || st.Check.RemoteCommit == st.Deployed.Commit || lo.Contains(st.Attempted, st.Check.RemoteCommit) {
+		return false
+	}
+	if st.followsTags() {
+		return st.Deployed.Tag != "" && gitTagHigher(st.Check.RemoteTag, st.Deployed.Tag)
+	}
+
+	return st.Deployed.Tag == ""
 }
 
 // gitBuildLog is a build's output: written to the app's build log, whose last megabyte is
