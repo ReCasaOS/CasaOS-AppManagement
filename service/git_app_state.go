@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
 	"github.com/compose-spec/compose-go/v2/loader"
@@ -173,11 +172,10 @@ func redactGitURL(raw string) string {
 	return u.String()
 }
 
-// validGitBranch is a name git reads as a branch name: not an option, not a revision
-// expression (`..`, `@`, `@{`, `~`, `^`), and no character a ref name forbids.
+// validGitBranch is a name git reads as a branch name: see git.ValidRefName, which tags from
+// a remote pass too.
 func validGitBranch(branch string) bool {
-	return !strings.HasPrefix(branch, "-") && branch != "@" && !strings.Contains(branch, "..") && !strings.Contains(branch, "@{") &&
-		!strings.ContainsAny(branch, " ~^:?*[\\") && !strings.ContainsFunc(branch, unicode.IsControl)
+	return git.ValidRefName(branch)
 }
 
 // gitAppFile is one of an app's files: .json, .key, .key.pub, .token, .known_hosts,

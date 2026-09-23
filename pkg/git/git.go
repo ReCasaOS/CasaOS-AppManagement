@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 // How a remote is reached.
@@ -175,6 +176,14 @@ func exitCode(err error) int {
 	return -1
 }
 
+// ValidRefName is a name git reads as a branch or a tag name: not an option, not a revision
+// expression (`..`, `@`, `@{`, `~`, `^`), and no character a ref name forbids. Empty passes: a
+// caller that needs a name checks that itself.
+func ValidRefName(name string) bool {
+	return !strings.HasPrefix(name, "-") && name != "@" && !strings.Contains(name, "..") && !strings.Contains(name, "@{") &&
+		!strings.ContainsAny(name, " ~^:?*[\\") && !strings.ContainsFunc(name, unicode.IsControl)
+}
+
 // LsRemote is the commit the branch points at on the remote.
 func LsRemote(ctx context.Context, url, branch string, auth Auth) (string, error) {
 	out, err := run(ctx, lsRemoteTimeout, "", auth, "ls-remote", "--", url, "refs/heads/"+branch)
@@ -207,7 +216,35 @@ func DefaultBranch(ctx context.Context, url string, auth Auth) (string, error) {
 	return "", errors.New("the remote does not say which branch its HEAD points to")
 }
 
-// Clone clones one branch of url into dir.
+// LsRemoteTags is every tag of the remote and the commit it names. An annotated tag comes
+// twice: its plain line names the tag object, its peeled line `<name>^{}` the commit, which
+// wins. A name that is no valid ref name is left out, so that it never reaches git.
+func LsRemoteTags(ctx context.Context, url string, auth Auth) (map[string]string, error) {
+	out, err := run(ctx, lsRemoteTimeout, "", auth, "ls-remote", "--tags", "--", url)
+	if err != nil {
+		return nil, err
+	}
+
+	tags := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		hash, ref, _ := strings.Cut(line, "\t")
+		name, ok := strings.CutPrefix(ref, "refs/tags/")
+		if !ok {
+			continue
+		}
+		name, peeled := strings.CutSuffix(name, "^{}")
+		if name == "" || !ValidRefName(name) {
+			continue
+		}
+		if peeled || tags[name] == "" {
+			tags[name] = hash
+		}
+	}
+
+	return tags, nil
+}
+
+// Clone clones one branch of url into dir, or one tag, which leaves it in detached HEAD.
 func Clone(ctx context.Context, url, branch, dir string, auth Auth) error {
 	_, err := run(ctx, networkTimeout, "", auth, "clone", "--branch", branch, "--single-branch", "--", url, dir)
 
@@ -223,6 +260,28 @@ func Fetch(ctx context.Context, dir, url, branch string, auth Auth) (string, err
 	}
 
 	return run(ctx, localTimeout, dir, Auth{}, "rev-parse", "FETCH_HEAD")
+}
+
+// FetchTag fetches the tag from url into dir and returns the commit it names, an annotated
+// tag peeled. No local ref is written.
+func FetchTag(ctx context.Context, dir, url, tag string, auth Auth) (string, error) {
+	defer giveBack(dir, nil)
+
+	if _, err := run(ctx, networkTimeout, dir, auth, "fetch", "--no-tags", "--", url, "refs/tags/"+tag); err != nil {
+		return "", err
+	}
+
+	return run(ctx, localTimeout, dir, Auth{}, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+}
+
+// FetchCommit fetches commit itself from url into dir. Not every forge serves a commit by its
+// hash: one that does not refuses it.
+func FetchCommit(ctx context.Context, dir, url, commit string, auth Auth) error {
+	defer giveBack(dir, nil)
+
+	_, err := run(ctx, networkTimeout, dir, auth, "fetch", "--", url, commit)
+
+	return err
 }
 
 // Describe says what the work tree at dir is on.
@@ -339,10 +398,63 @@ func FastForward(ctx context.Context, dir, commit string) error {
 	return moveTo(ctx, dir, "merge", "--ff-only", commit)
 }
 
-// ResetKeep moves the checked-out branch to commit, keeping local changes git can keep.
-// Only a rollback or a revert uses it.
+// ResetKeep moves the checked-out branch, or a detached HEAD, to commit, keeping local
+// changes git can keep. A rollback, a revert, a redeployment and every move of an app that
+// follows tags use it: tags do not form a line.
 func ResetKeep(ctx context.Context, dir, commit string) error {
 	return moveTo(ctx, dir, "reset", "--keep", commit)
+}
+
+// Detach leaves the work tree at dir in detached HEAD on the commit it is on: no file and no
+// branch moves.
+func Detach(ctx context.Context, dir string) error {
+	defer giveBack(dir, nil)
+
+	_, err := run(ctx, localTimeout, dir, Auth{}, "checkout", "--quiet", "--detach")
+
+	return err
+}
+
+// Attach puts the work tree at dir on branch, made or moved to the commit it is on: no file
+// moves.
+func Attach(ctx context.Context, dir, branch string) error {
+	defer giveBack(dir, nil)
+
+	_, err := run(ctx, localTimeout, dir, Auth{}, "checkout", "--quiet", "-B", branch)
+
+	return err
+}
+
+// keptRefs is where a folder keeps one ref per commit a revert may go back to, so that git
+// never collects one whose tag or branch moved on.
+const keptRefs = "refs/recasaos/kept/"
+
+// KeepCommit makes dir keep commit, whatever becomes of the refs that brought it.
+func KeepCommit(ctx context.Context, dir, commit string) error {
+	defer giveBack(dir, nil)
+
+	_, err := run(ctx, localTimeout, dir, Auth{}, "update-ref", keptRefs+commit, commit)
+
+	return err
+}
+
+// DropKeptCommit removes the ref KeepCommit made for commit.
+func DropKeptCommit(ctx context.Context, dir, commit string) error {
+	defer giveBack(dir, nil)
+
+	_, err := run(ctx, localTimeout, dir, Auth{}, "update-ref", "-d", keptRefs+commit)
+
+	return err
+}
+
+// KeptCommits is every commit dir keeps a ref for.
+func KeptCommits(ctx context.Context, dir string) ([]string, error) {
+	out, err := run(ctx, localTimeout, dir, Auth{}, "for-each-ref", "--format=%(refname:lstrip=3)", keptRefs)
+	if err != nil || out == "" {
+		return []string{}, err
+	}
+
+	return strings.Split(out, "\n"), nil
 }
 
 func moveTo(ctx context.Context, dir string, args ...string) error {
