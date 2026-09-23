@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
@@ -310,6 +311,13 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 		}
 		branch = *changes.Branch
 	}
+	if switching && st.Cloned && follow == gitFollowBranch {
+		// before any access file is written or removed: a remote that cannot be read, or a
+		// branch the folder cannot go on, leaves the app as it was
+		if branch, err = gitBranchToFollow(ctx, st, access, token, branch); err != nil {
+			return nil, err
+		}
+	}
 
 	if st.Origin == gitOriginAdoptable {
 		if err := adoptGitApp(ctx, st); err != nil {
@@ -329,8 +337,7 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 		}
 	}
 	if switching && st.Cloned {
-		// after the access is set: the remote may be asked for its default branch
-		if branch, err = followGitFolder(ctx, st, follow, branch); err != nil {
+		if err := followGitFolder(ctx, st.Dir, follow, branch); err != nil {
 			return nil, err
 		}
 	}
@@ -357,16 +364,25 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 }
 
 // followGitFolder puts a cloned app's folder in the shape its new mode deploys from, and moves
-// none of its files: detached at its commit to follow tags, on the branch to follow one, the
-// remote's default when none is given, never over commits that branch holds and the folder is
-// not on. It returns the branch the app follows.
-func followGitFolder(ctx context.Context, st *gitApp, follow, branch string) (string, error) {
+// none of its files: detached at its commit to follow tags, on branch to follow one.
+func followGitFolder(ctx context.Context, dir, follow, branch string) error {
 	if follow == gitFollowTags {
-		return "", git.Detach(ctx, st.Dir)
+		return git.Detach(ctx, dir)
 	}
 
+	return git.Attach(ctx, dir, branch)
+}
+
+// gitBranchToFollow is the branch a cloned app going back to one follows: branch, or the remote's
+// default when none is given, read with access and token, the ones the request gives, which are
+// not written down yet. It refuses a branch of the folder holding commits the folder is not on,
+// which putting the folder on it would drop. Nothing is written.
+func gitBranchToFollow(ctx context.Context, st *gitApp, access, token, branch string) (string, error) {
 	if branch == "" {
-		auth, err := gitAuth(st)
+		auth, err := gitAuth(&gitApp{App: st.App, Access: access})
+		if access == git.AccessToken && token != "" {
+			auth, err = git.Auth{Mode: git.AccessToken, Token: strings.TrimSpace(token), AskpassDir: gitAppsDir}, nil
+		}
 		if err == nil {
 			branch, err = git.DefaultBranch(ctx, st.Remote, auth)
 		}
@@ -390,7 +406,7 @@ func followGitFolder(ctx context.Context, st *gitApp, follow, branch string) (st
 		}
 	}
 
-	return branch, git.Attach(ctx, st.Dir, branch)
+	return branch, nil
 }
 
 // DeleteGitApp removes a registered app no deployment has succeeded for: what a failed

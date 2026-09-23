@@ -167,6 +167,33 @@ func TestBackOnABranchThatHoldsOtherCommitsIsRefused(t *testing.T) {
 	assert.Equal(t, folderHead(t, st.Dir), mine)
 }
 
+// Back on a branch without one, the remote's default is read with the access the request gives,
+// before any access file is written or removed: a remote that cannot be read leaves the token that
+// was kept, and the app as it was.
+func TestAChangeOfModeThatCannotReadTheRemoteLeavesTheAccessAsItWas(t *testing.T) {
+	taggedTestApp(t)
+	ctx := context.Background()
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	// reached over HTTPS by token, and answering nothing
+	st.Remote, st.Access = "https://127.0.0.1:1/owner/jarvis.git", "token"
+	assert.NilError(t, saveGitApp(st))
+	assert.NilError(t, writeGitFile(gitAppFile("jarvis", ".token"), []byte("ghp_kept")))
+	branch, token, none, other := gitFollowBranch, "token", "none", "ghp_other"
+
+	for _, changes := range []GitAppChanges{{Access: &token, Token: &other, Follow: &branch}, {Access: &none, Follow: &branch}} {
+		_, err = UpdateGitApp(ctx, "jarvis", changes)
+		assertBadRequest(t, err, "the remote's default branch cannot be read")
+		kept, err := os.ReadFile(gitAppFile("jarvis", ".token"))
+		assert.NilError(t, err)
+		assert.Equal(t, string(kept), "ghp_kept")
+		after, err := loadGitApp("jarvis")
+		assert.NilError(t, err)
+		assert.Equal(t, after.Follow, gitFollowTags)
+		assert.Equal(t, after.Access, "token")
+	}
+}
+
 // Back on a branch without one, the remote names its default: a remote that cannot be read, or
 // that names no valid branch, is a 400 that leaves the app following tags and its folder
 // detached. With the branch given, the remote is not asked.
