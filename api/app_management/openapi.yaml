@@ -1328,7 +1328,8 @@ paths:
         `check` is null until the next one. After a change, nothing deploys automatically until
         one deployment by hand in the new mode. 400 for a `branch` while the app follows tags,
         when the remote's default branch cannot be read (with the access the request gives),
-        and when the folder's own copy of the branch holds commits the folder is not on; the
+        and when the folder's own copy of the branch holds commits that neither the folder nor
+        the remote's branch has, or that the remote cannot be read to rule out; the
         app, its access included, is then left as it was.
       operationId: updateGitApp
       tags:

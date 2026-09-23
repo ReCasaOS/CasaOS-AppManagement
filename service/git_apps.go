@@ -376,14 +376,17 @@ func followGitFolder(ctx context.Context, dir, follow, branch string) error {
 
 // gitBranchToFollow is the branch a cloned app going back to one follows: branch, or the remote's
 // default when none is given, read with access and token, the ones the request gives, which are
-// not written down yet. It refuses a branch of the folder holding commits the folder is not on,
-// which putting the folder on it would drop. Nothing is written.
+// not written down yet. It refuses a branch of the folder holding commits that neither the folder
+// nor the remote's branch has, which putting the folder on it would drop. Nothing of the app is
+// written: a fetch only brings the remote's branch into the folder's repository.
 func gitBranchToFollow(ctx context.Context, st *gitApp, access, token, branch string) (string, error) {
+	auth, authErr := gitAuth(&gitApp{App: st.App, Access: access})
+	if access == git.AccessToken && token != "" {
+		auth, authErr = git.Auth{Mode: git.AccessToken, Token: strings.TrimSpace(token), AskpassDir: gitAppsDir}, nil
+	}
+
 	if branch == "" {
-		auth, err := gitAuth(&gitApp{App: st.App, Access: access})
-		if access == git.AccessToken && token != "" {
-			auth, err = git.Auth{Mode: git.AccessToken, Token: strings.TrimSpace(token), AskpassDir: gitAppsDir}, nil
-		}
+		err := authErr
 		if err == nil {
 			branch, err = git.DefaultBranch(ctx, st.Remote, auth)
 		}
@@ -395,16 +398,30 @@ func gitBranchToFollow(ctx context.Context, st *gitApp, access, token, branch st
 		}
 	}
 
-	// the folder's own branch, as an adopted folder has, would be reset to the folder's commit,
-	// dropping the commits it holds that the folder is not on
-	if local := "refs/heads/" + branch; git.HasCommit(ctx, st.Dir, local) {
-		contained, err := git.IsAncestor(ctx, st.Dir, local, "HEAD")
-		if err != nil {
-			return "", err
-		}
-		if !contained {
-			return "", GitRequestError(fmt.Sprintf("%s holds commits the folder is not on: check it out there first", branch))
-		}
+	// the folder's own branch is reset to the folder's commit. Behind a tag, the usual case is
+	// the commit a deployment from the branch left it on, which the remote's branch has: nothing
+	// is lost. Commits found nowhere else, as an adopted folder may hold, are refused.
+	local := "refs/heads/" + branch
+	if !git.HasCommit(ctx, st.Dir, local) {
+		return branch, nil
+	}
+	contained, err := git.IsAncestor(ctx, st.Dir, local, "HEAD")
+	if err != nil || contained {
+		return branch, err
+	}
+
+	head, err := "", authErr
+	if err == nil {
+		head, err = git.Fetch(ctx, st.Dir, st.Remote, branch, auth)
+	}
+	if err != nil {
+		return "", GitRequestError(fmt.Sprintf("%s holds commits the folder is not on, and the remote cannot be read to tell whether it has them: %v", branch, err))
+	}
+	if contained, err = git.IsAncestor(ctx, st.Dir, local, head); err != nil {
+		return "", err
+	}
+	if !contained {
+		return "", GitRequestError(fmt.Sprintf("%s holds commits the folder is not on: check it out there first", branch))
 	}
 
 	return branch, nil

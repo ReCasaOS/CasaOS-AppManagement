@@ -190,6 +190,49 @@ func TestBackOnABranchThatHoldsOtherCommitsIsRefused(t *testing.T) {
 	assert.Equal(t, folderHead(t, st.Dir), mine)
 }
 
+// Branch, tags, then branch again, after a tag behind the branch's head ran: the folder's branch
+// holds the commit its last deployment from the branch left it on, which the remote's branch has,
+// so the folder goes on it and loses nothing. A remote that cannot be read to tell is a 400.
+func TestBackOnABranchAfterATagBehindItsHead(t *testing.T) {
+	_, work := clonedTestApp(t)
+	ctx := context.Background()
+	remote := filepath.Join(filepath.Dir(work), "remote.git")
+	first := gitShell(t, work, "git rev-parse HEAD")
+	pushTestTag(t, work, "v1.0.0")
+	second := pushTestCommit(t, work, "index.html", "v2")
+	st := deployTestApp(t)
+	assert.Equal(t, st.Deployed.Commit, second)
+	tags, branch, main := gitFollowTags, gitFollowBranch, "main"
+
+	_, err := UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &tags})
+	assert.NilError(t, err)
+	_, err = DeployGitAppTag(ctx, "jarvis", "v1.0.0", nil)
+	assert.NilError(t, err)
+	st = waitForGitApp(t, "jarvis")
+	assert.Equal(t, st.Deployed.Commit, first, st.History[0].Reason)
+	assert.Equal(t, gitShell(t, st.Dir, "git rev-parse refs/heads/main"), second)
+
+	assert.NilError(t, os.Rename(remote, remote+".gone"))
+	_, err = UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch, Branch: &main})
+	assertBadRequest(t, err, "main holds commits the folder is not on, and the remote cannot be read")
+	assert.NilError(t, os.Rename(remote+".gone", remote))
+	after, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	assert.Equal(t, after.Follow, gitFollowTags)
+
+	view, err := UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch})
+	assert.NilError(t, err)
+	assert.Equal(t, view.Branch, "main")
+	info, err := git.Describe(ctx, st.Dir)
+	assert.NilError(t, err)
+	assert.Equal(t, info.Branch, "main")
+	assert.Equal(t, info.Head, first, "no file moved")
+
+	st = deployTestApp(t)
+	assert.Equal(t, st.Deployed.Commit, second)
+	assert.Equal(t, folderHead(t, st.Dir), second)
+}
+
 // Back on a branch without one, the remote's default is read with the access the request gives,
 // before any access file is written or removed: a remote that cannot be read leaves the token that
 // was kept, and the app as it was.
