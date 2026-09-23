@@ -38,6 +38,11 @@ type GitAppRegistration struct {
 	Branch string
 	Access string
 	Token  string
+	// Follow is gitFollowBranch, empty for the same, or gitFollowTags; TagPattern and
+	// Prereleases choose the tags an app that follows them may deploy.
+	Follow      string
+	TagPattern  string
+	Prereleases bool
 }
 
 // GitAppChanges changes a git app; nil leaves a field as it is.
@@ -51,6 +56,11 @@ type GitAppChanges struct {
 	WebhookEnabled *bool
 	// RegenerateWebhookSecret replaces the secret at once; refused while the webhook is off.
 	RegenerateWebhookSecret *bool
+	// Follow changes the mode: the folder of a cloned app is put on the branch or detached.
+	// TagPattern and Prereleases change the tags an app that follows them may deploy.
+	Follow      *string
+	TagPattern  *string
+	Prereleases *bool
 }
 
 // checkGitAccess refuses an access mode the URL cannot carry. hasToken says whether a
@@ -108,6 +118,19 @@ func CreateGitApp(ctx context.Context, registration GitAppRegistration) (*GitApp
 	if !validGitBranch(registration.Branch) {
 		return nil, GitRequestError(fmt.Sprintf("`%s` is not a branch name", registration.Branch))
 	}
+	follow := registration.Follow
+	if follow == "" {
+		follow = gitFollowBranch
+	}
+	if err := checkGitFollow(follow); err != nil {
+		return nil, err
+	}
+	if follow == gitFollowTags && registration.Branch != "" {
+		return nil, errGitTagsHaveNoBranch
+	}
+	if err := checkGitTagPattern(registration.TagPattern); err != nil {
+		return nil, err
+	}
 	if err := checkGitAccess(registration.URL, registration.Access, registration.Token != ""); err != nil {
 		return nil, err
 	}
@@ -129,6 +152,7 @@ func CreateGitApp(ctx context.Context, registration GitAppRegistration) (*GitApp
 	st := &gitApp{
 		App: name, Origin: gitOriginCreated, Dir: filepath.Join(gitAppsDataRoot, name),
 		Remote: registration.URL, Branch: registration.Branch,
+		Follow: follow, TagPattern: registration.TagPattern, Prereleases: registration.Prereleases,
 		History: []gitHistoryEntry{}, Attempted: []string{},
 	}
 	if err := setGitAccess(st, registration.Access, registration.Token); err != nil {
@@ -217,8 +241,8 @@ func adoptGitApp(ctx context.Context, st *gitApp) error {
 	return saveGitApp(st)
 }
 
-// UpdateGitApp changes the branch, the automatic rebuild or the access of a git app, and
-// adopts an adoptable one.
+// UpdateGitApp changes the branch, the automatic rebuild, the access, the webhook or the mode
+// of a git app, and adopts an adoptable one.
 func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*GitAppView, error) {
 	end, err := Begin(name, "settings change")
 	if err != nil {
@@ -256,14 +280,35 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 		return nil, GitRequestError("the webhook is off: turn it on to get a secret")
 	}
 
-	if changes.Branch != nil && *changes.Branch != st.Branch {
-		if st.Cloned {
+	follow := st.follow()
+	if changes.Follow != nil {
+		if err := checkGitFollow(*changes.Follow); err != nil {
+			return nil, err
+		}
+		follow = *changes.Follow
+	}
+	switching := follow != st.follow()
+	if changes.TagPattern != nil {
+		if err := checkGitTagPattern(*changes.TagPattern); err != nil {
+			return nil, err
+		}
+	}
+
+	branch := st.Branch
+	switch {
+	case follow == gitFollowTags && lo.FromPtr(changes.Branch) != "":
+		return nil, errGitTagsHaveNoBranch
+	case follow == gitFollowTags:
+		branch = ""
+	case changes.Branch != nil && *changes.Branch != st.Branch:
+		// the folder is on its branch: another comes with a change of mode only
+		if st.Cloned && !switching {
 			return nil, GitRequestError(fmt.Sprintf("the branch of %s is the one its folder is on: check another branch out there instead", name))
 		}
 		if !validGitBranch(*changes.Branch) {
 			return nil, GitRequestError(fmt.Sprintf("`%s` is not a branch name", *changes.Branch))
 		}
-		st.Branch = *changes.Branch
+		branch = *changes.Branch
 	}
 
 	if st.Origin == gitOriginAdoptable {
@@ -283,6 +328,19 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 			return nil, err
 		}
 	}
+	if switching && st.Cloned {
+		// after the access is set: the remote may be asked for its default branch
+		if branch, err = followGitFolder(ctx, st, follow, branch); err != nil {
+			return nil, err
+		}
+	}
+	st.Follow, st.Branch = follow, branch
+	if changes.TagPattern != nil {
+		st.TagPattern = *changes.TagPattern
+	}
+	if changes.Prereleases != nil {
+		st.Prereleases = *changes.Prereleases
+	}
 	if err := setGitWebhook(name, changes.WebhookEnabled, lo.FromPtr(changes.RegenerateWebhookSecret)); err != nil {
 		return nil, err
 	}
@@ -292,6 +350,30 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 	}
 
 	return newGitAppView(ctx, st), nil
+}
+
+// followGitFolder puts a cloned app's folder in the shape its new mode deploys from, and moves
+// none of its files: detached at its commit to follow tags, on the branch to follow one, the
+// remote's default when none is given. It returns the branch the app follows.
+func followGitFolder(ctx context.Context, st *gitApp, follow, branch string) (string, error) {
+	if follow == gitFollowTags {
+		return "", git.Detach(ctx, st.Dir)
+	}
+
+	if branch == "" {
+		auth, err := gitAuth(st)
+		if err == nil {
+			branch, err = git.DefaultBranch(ctx, st.Remote, auth)
+		}
+		if err == nil && (branch == "" || !validGitBranch(branch)) {
+			err = fmt.Errorf("`%s` is not a branch name", branch)
+		}
+		if err != nil {
+			return "", GitRequestError(fmt.Sprintf("the remote's default branch cannot be read, give the branch to follow: %v", err))
+		}
+	}
+
+	return branch, git.Attach(ctx, st.Dir, branch)
 }
 
 // DeleteGitApp removes a registered app no deployment has succeeded for: what a failed
