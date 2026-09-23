@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -46,13 +45,12 @@ func init() {
 	V2DocPath = "/doc" + V2APIPath
 }
 
-// gitWebhookPath is the one route a request reaches without a token: a forge proves itself
-// with the app's webhook secret instead, and sends bodies this spec does not describe.
-var gitWebhookPath = regexp.MustCompile(`^/v2/app_management/git/[^/]+/webhook$`)
-
-// isGitWebhook is a forge's delivery: that method on that path, and nothing else.
+// isGitWebhook is a forge's delivery, the one route a request reaches without a token: a
+// forge proves itself with the app's webhook secret instead, and sends bodies this spec does
+// not describe. It is the route echo matched, not the path: echo routes on the raw path, so
+// `/git/x%2Fwebhook` decodes to a webhook's path while it is routed to `/git/:app`.
 func isGitWebhook(c echo.Context) bool {
-	return c.Request().Method == http.MethodPost && gitWebhookPath.MatchString(c.Request().URL.Path)
+	return c.Request().Method == http.MethodPost && c.Path() == V2APIPath+"/git/:app/webhook"
 }
 
 func InitV2Router() http.Handler {

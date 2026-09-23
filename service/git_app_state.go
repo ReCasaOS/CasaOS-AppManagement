@@ -245,7 +245,7 @@ func forgetGitApp(app string) error {
 	defer gitWebhooks.Unlock()
 
 	failures := []error{}
-	for _, suffix := range []string{".json", ".key", ".key.pub", ".token", ".known_hosts", ".build.log", ".webhook"} {
+	for _, suffix := range []string{".webhook", ".json", ".key", ".key.pub", ".token", ".known_hosts", ".build.log"} {
 		if err := os.Remove(gitAppFile(app, suffix)); err != nil && !os.IsNotExist(err) {
 			failures = append(failures, err)
 		}

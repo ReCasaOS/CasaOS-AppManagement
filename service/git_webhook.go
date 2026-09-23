@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/compose-spec/compose-go/v2/loader"
 )
 
 // A git app's webhook: its secret and its last delivery, in `<app>.webhook` beside the
@@ -83,6 +85,11 @@ func saveGitWebhook(app string, hook *gitWebhook) error {
 // replaces its secret when regenerate is set. Turning it on makes a secret when there is
 // none; turning it off forgets the secret, and the last delivery with it.
 func setGitWebhook(app string, enabled *bool, regenerate bool) error {
+	// a name from a request (a restore's manifest among them): an app's name, never a path
+	if app == "" || app != loader.NormalizeProjectName(app) {
+		return ErrGitAppNotFound
+	}
+
 	gitWebhooks.Lock()
 	defer gitWebhooks.Unlock()
 
@@ -94,9 +101,11 @@ func setGitWebhook(app string, enabled *bool, regenerate bool) error {
 		return nil
 	}
 
+	// a file that cannot be read is shown as a webhook turned off, and holds no secret a
+	// forge could have: turning it on writes a new one over it
 	hook, err := loadGitWebhook(app)
 	if err != nil {
-		return err
+		hook = nil
 	}
 
 	switch {

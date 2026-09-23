@@ -75,13 +75,15 @@ func TestOnlyAGitWebhookIsServedWithoutAToken(t *testing.T) {
 		{http.MethodPost, "/v2/app_management/git/no-such-app/webhook", "application/json", `{"ref":"refs/heads/main"}`, http.StatusNotFound, `{"message":"not found"}`},
 		{http.MethodPost, "/v2/app_management/git/no-such-app/webhook", "application/x-www-form-urlencoded", "payload=%7B%22ref%22%3A%22refs%2Fheads%2Fmain%22%7D", http.StatusNotFound, `{"message":"not found"}`},
 		{http.MethodPost, "/v2/app_management/git/no-such-app/webhook", "", "", http.StatusNotFound, `{"message":"not found"}`},
-		{http.MethodPost, "/v2/app_management/git/no-such-app/webhook", "application/json", strings.Repeat(" ", 5<<20+1), http.StatusRequestEntityTooLarge, `{"message":"the body is over 5 MiB"}`},
+		// nothing is read from a caller before the app and its webhook are known to be there
+		{http.MethodPost, "/v2/app_management/git/no-such-app/webhook", "application/json", strings.Repeat(" ", 5<<20+1), http.StatusNotFound, `{"message":"not found"}`},
 		// everything else keeps the token
 		{http.MethodGet, "/v2/app_management/git/no-such-app/webhook", "", "", http.StatusUnauthorized, ""},
 		{http.MethodPut, "/v2/app_management/git/no-such-app/webhook", "", "", http.StatusUnauthorized, ""},
 		{http.MethodDelete, "/v2/app_management/git/no-such-app/webhook", "", "", http.StatusUnauthorized, ""},
 		{http.MethodPost, "/v2/app_management/git/no-such-app/webhook/more", "", "", http.StatusUnauthorized, ""},
 		{http.MethodPost, "/v2/app_management/git/webhook", "", "", http.StatusUnauthorized, ""},
+		{http.MethodPost, "/v2/app_management/git/no-such-app%2Fwebhook", "", "", http.StatusUnauthorized, ""},
 		{http.MethodPost, "/v2/app_management/git/no-such-app/check", "", "", http.StatusUnauthorized, ""},
 		{http.MethodPost, "/v2/app_management/git/no-such-app/deploy", "", "", http.StatusUnauthorized, ""},
 		{http.MethodGet, "/v2/app_management/git/no-such-app", "", "", http.StatusUnauthorized, ""},

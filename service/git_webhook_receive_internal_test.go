@@ -25,6 +25,13 @@ func freshGitWebhookRuns(t *testing.T) {
 	gitWebhookRuns.last, gitWebhookRuns.pending = map[string]time.Time{}, map[string]bool{}
 }
 
+// setGitWebhookDebounce sets the window under the lock the checks owed read it under.
+func setGitWebhookDebounce(d time.Duration) {
+	gitWebhooks.Lock()
+	defer gitWebhooks.Unlock()
+	gitWebhookDebounce = d
+}
+
 // deliver sends body to jarvis's webhook with header.
 func deliver(header http.Header, body []byte) (string, error) {
 	return ReceiveGitWebhook("jarvis", header, bytes.NewReader(body))
@@ -146,7 +153,7 @@ func TestAWebhookAnswersPingsAndOtherEventsAndRefusesWhatIsNotSigned(t *testing.
 }
 
 // A push runs what "Check now" runs, the automatic deployment included; the pushes a forge
-// sends within ten seconds of it run nothing more.
+// sends within ten seconds of it make one more check, when the ten seconds are over.
 func TestAPushChecksTheAppOnceWithinTenSeconds(t *testing.T) {
 	fake, work, _ := deployedTestApp(t, true)
 	freshGitWebhookRuns(t)
@@ -155,9 +162,9 @@ func TestAPushChecksTheAppOnceWithinTenSeconds(t *testing.T) {
 	second := pushTestCommit(t, work, "index.html", "v2")
 	assert.Equal(t, gitWebhookDebounce, 10*time.Second)
 	previous := gitWebhookDebounce
-	t.Cleanup(func() { gitWebhookDebounce = previous })
+	t.Cleanup(func() { setGitWebhookDebounce(previous) })
 	// the window outlasts a slow runner's build
-	gitWebhookDebounce = time.Hour
+	setGitWebhookDebounce(time.Hour)
 
 	answer, err := deliver(signedDelivery(secret, "push", body), body)
 	assert.NilError(t, err)
@@ -172,21 +179,32 @@ func TestAPushChecksTheAppOnceWithinTenSeconds(t *testing.T) {
 	assert.Equal(t, delivery.Result, "checked")
 
 	checked := st.Check.At
-	pushTestCommit(t, work, "index.html", "v3")
-	answer, err = deliver(signedDelivery(secret, "push", body), body)
-	assert.NilError(t, err)
-	assert.Equal(t, answer, GitWebhookCoalesced)
+	third := pushTestCommit(t, work, "index.html", "v3")
+	for range 2 {
+		answer, err = deliver(signedDelivery(secret, "push", body), body)
+		assert.NilError(t, err)
+		assert.Equal(t, answer, GitWebhookCoalesced)
+	}
+	time.Sleep(2 * howOftenToAskAgain)
 	st = waitForGitApp(t, "jarvis")
-	assert.Assert(t, st.Check.At.Equal(checked), "no second check")
+	assert.Assert(t, st.Check.At.Equal(checked), "no second check inside the window")
 	assert.Equal(t, st.Deployed.Commit, second)
 	assert.Equal(t, lastDelivery(t).Result, "coalesced")
 
-	// past the window, a push checks again
-	gitWebhookDebounce = 0
+	// the window closes: one check, which sees the last push
+	setGitWebhookDebounce(0)
+	st = waitForGitCheckAfter(t, "jarvis", checked)
+	assert.Equal(t, st.Check.RemoteCommit, third)
+	assert.Equal(t, st.Deployed.Commit, third)
+	owed := st.Check.At
+	time.Sleep(2 * howOftenToAskAgain)
+	assert.Assert(t, waitForGitApp(t, "jarvis").Check.At.Equal(owed), "one check for both pushes")
+
+	// past the window, a push checks again at once
 	answer, err = deliver(signedDelivery(secret, "push", body), body)
 	assert.NilError(t, err)
 	assert.Equal(t, answer, GitWebhookChecking)
-	assert.Assert(t, waitForGitApp(t, "jarvis").Check.At.After(checked))
+	assert.Assert(t, waitForGitApp(t, "jarvis").Check.At.After(owed))
 }
 
 // A push to an app something else holds gets one check, run once the app is free; with the
@@ -201,6 +219,9 @@ func TestAPushToABusyAppQueuesOneCheckThatRunsOnceItIsFree(t *testing.T) {
 
 	end, err := Begin("jarvis", gitOperationDeploy)
 	assert.NilError(t, err)
+	// the hold is the whole process's: released whatever fails below
+	release := sync.OnceFunc(end)
+	t.Cleanup(release)
 	answer, err := deliver(signedDelivery(secret, "push", body), body)
 	assert.NilError(t, err)
 	assert.Equal(t, answer, GitWebhookQueued)
@@ -214,7 +235,7 @@ func TestAPushToABusyAppQueuesOneCheckThatRunsOnceItIsFree(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Assert(t, st.Check.At.Equal(before), "nothing checks while the app is held")
 
-	end()
+	release()
 	st = waitForGitCheckAfter(t, "jarvis", before)
 	assert.Equal(t, st.Check.RemoteCommit, second)
 	assert.Equal(t, st.Deployed.Commit, first, "the automatic rebuild is off: nothing is deployed")

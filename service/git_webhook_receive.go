@@ -51,6 +51,12 @@ func ReceiveGitWebhook(app string, header http.Header, body io.Reader) (string, 
 		return "", ErrGitWebhookNotFound
 	}
 
+	// nothing is read from a caller nothing has authenticated before the webhook is known to
+	// be there: asked again below, under the lock, since it may be turned off meanwhile
+	if !pathExists(gitAppFile(app, ".webhook")) || !pathExists(gitAppFile(app, ".json")) {
+		return "", ErrGitWebhookNotFound
+	}
+
 	forge, event, action := gitWebhookEvent(header)
 	log := func(outcome string) {
 		logger.Info("git webhook", zap.String("app", app), zap.String("forge", forge), zap.String("event", event), zap.String("outcome", outcome))
@@ -104,17 +110,24 @@ func ReceiveGitWebhook(app string, header http.Header, body io.Reader) (string, 
 }
 
 // scheduleGitWebhookCheck starts the check a push asks for, gitWebhooks held: at once when
-// the app is free, once it is when it is busy, and not at all when a webhook started one
-// less than gitWebhookDebounce ago or one waits already.
+// the app is free, once it is when it is busy, and when the window closes when a webhook
+// started one less than gitWebhookDebounce ago, so that a push landing after that check
+// asked the remote is still seen. One check waits at most: the pushes meanwhile join it.
 func scheduleGitWebhookCheck(app string) (string, error) {
-	if gitWebhookRuns.pending[app] || time.Since(gitWebhookRuns.last[app]) < gitWebhookDebounce {
+	if gitWebhookRuns.pending[app] {
+		return GitWebhookCoalesced, nil
+	}
+	if time.Since(gitWebhookRuns.last[app]) < gitWebhookDebounce {
+		gitWebhookRuns.pending[app] = true
+		go runQueuedGitWebhookCheck(app, true)
+
 		return GitWebhookCoalesced, nil
 	}
 
 	st, end, err := beginGitCheck(context.Background(), app)
 	if errors.As(err, new(ErrAppBusy)) {
 		gitWebhookRuns.pending[app] = true
-		go runQueuedGitWebhookCheck(app)
+		go runQueuedGitWebhookCheck(app, false)
 
 		return GitWebhookQueued, nil
 	}
@@ -128,9 +141,14 @@ func scheduleGitWebhookCheck(app string) (string, error) {
 	return GitWebhookChecking, nil
 }
 
-// runQueuedGitWebhookCheck waits for the busy app to come free, up to gitWebhookPatience,
-// then checks it as the webhook would have.
-func runQueuedGitWebhookCheck(app string) {
+// runQueuedGitWebhookCheck waits for the debounce window to close when afterWindow is set,
+// then for the app to come free, up to gitWebhookPatience, then checks it as the webhook
+// would have.
+func runQueuedGitWebhookCheck(app string, afterWindow bool) {
+	if afterWindow && !waitForGitWebhookWindow(app) {
+		return
+	}
+
 	ctx := context.Background()
 	end, err := beginWaiting(ctx, app, gitOperationCheck, gitWebhookPatience)
 
@@ -155,4 +173,24 @@ func runQueuedGitWebhookCheck(app string) {
 	}
 
 	runGitCheck(st, end)
+}
+
+// waitForGitWebhookWindow waits until gitWebhookDebounce has passed since a webhook last
+// started a check of app, false if the check owed was forgotten meanwhile (the tests reset
+// gitWebhookRuns).
+func waitForGitWebhookWindow(app string) bool {
+	for {
+		gitWebhooks.Lock()
+		owed := gitWebhookRuns.pending[app]
+		wait := time.Until(gitWebhookRuns.last[app].Add(gitWebhookDebounce))
+		gitWebhooks.Unlock()
+
+		if !owed {
+			return false
+		}
+		if wait <= 0 {
+			return true
+		}
+		time.Sleep(min(wait, howOftenToAskAgain))
+	}
 }

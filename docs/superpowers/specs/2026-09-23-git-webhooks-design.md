@@ -37,7 +37,7 @@ headers (Gitea sends three, Forgejo four, all carrying the same HMAC).
 
 | Header | Forges | Check |
 |---|---|---|
-| `X-Hub-Signature-256: sha256=<hex>` | GitHub, Gitea, Forgejo, Bitbucket | HMAC-SHA256 of the raw body |
+| `X-Hub-Signature-256: sha256=<hex>` | GitHub, Gitea, Forgejo | HMAC-SHA256 of the raw body |
 | `X-Gitea-Signature: <hex>` | Gitea | HMAC-SHA256 of the raw body |
 | `X-Forgejo-Signature: <hex>` | Forgejo | HMAC-SHA256 of the raw body |
 | `X-Gogs-Signature: <hex>` | Gogs | HMAC-SHA256 of the raw body |
@@ -49,6 +49,7 @@ Otherwise **401**.
 
 - Webhook disabled, or no such app: **404**, the same answer in both cases, so that the route
   does not tell which apps exist.
+- Nothing is read from the body before the app and its webhook are known to exist.
 - Body read up to 5 MiB; beyond, **413**. The body is used for the signature only; nothing in it
   is parsed or trusted.
 - The log line names the app, the forge, the event and the outcome; never the body, the headers'
@@ -77,7 +78,9 @@ The check runs in the background.
 - **Same path as the button**: a check (`ls-remote` of the tracked branch, clone if needed),
   then `deployGitAppAutomatically`, exactly as `CheckGitApp` runs them.
 - **Debounce**: at most one webhook-triggered check every 10 seconds per app. A push inside that
-  window answers `coalesced` (forges may send several events for one `git push`).
+  window answers `coalesced` (forges may send several events for one `git push`), and one check
+  runs when the window closes, so that a push landing after the first check asked the remote
+  is not left to the poll; the pushes meanwhile join it.
 - **Busy app** (a build or another operation holds it): one pending check is kept for the app
   and runs as soon as the app is free, waiting up to 30 minutes (the same waiting mechanism as
   backups since v0.4.94). Answer `queued`. Further pushes while one is pending answer
