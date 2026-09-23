@@ -85,6 +85,12 @@ type gitApp struct {
 	History       []gitHistoryEntry `json:"history"`
 	// Attempted is what the automatic rebuild does not try again, the last 20.
 	Attempted []string `json:"attempted"`
+	// Follow is gitFollowTags for an app that follows the tags of its repository; anything
+	// else, an older state's empty value included, follows a branch. TagPattern and
+	// Prereleases choose the tags it may deploy, and are kept while it follows a branch.
+	Follow      string `json:"follow"`
+	TagPattern  string `json:"tag_pattern"`
+	Prereleases bool   `json:"prereleases"`
 }
 
 type gitDeployment struct {
@@ -93,18 +99,24 @@ type gitDeployment struct {
 	At      time.Time `json:"at"`
 	// Images are the git- tags of the running version, per service.
 	Images map[string]string `json:"images"`
+	// Tag is the tag the commit was deployed as, empty for a branch's commit.
+	Tag string `json:"tag"`
 }
 
 type gitCheck struct {
 	At           time.Time `json:"at"`
 	RemoteCommit string    `json:"remote_commit"`
 	Error        string    `json:"error"`
+	// RemoteTag is the highest eligible tag, which names RemoteCommit; empty on a branch.
+	RemoteTag string `json:"remote_tag"`
 }
 
 type gitOperation struct {
 	Kind      string    `json:"kind"`
 	Commit    string    `json:"commit"`
 	StartedAt time.Time `json:"started_at"`
+	// Tag is the tag Commit is deployed as, empty for a branch's commit.
+	Tag string `json:"tag"`
 }
 
 type gitHistoryEntry struct {
@@ -114,6 +126,8 @@ type gitHistoryEntry struct {
 	Outcome string            `json:"outcome"`
 	Reason  string            `json:"reason"`
 	Images  map[string]string `json:"images"`
+	// Tag is the tag Commit was deployed as, empty for a branch's commit.
+	Tag string `json:"tag"`
 }
 
 var scpLikeGitURL = regexp.MustCompile(`^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:\S+$`)

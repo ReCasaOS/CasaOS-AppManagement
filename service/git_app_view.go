@@ -35,7 +35,7 @@ type GitAppView struct {
 	Cloned     bool             `json:"cloned"`
 	Head       *GitHeadView     `json:"head"`
 	Deployed   *GitDeployedView `json:"deployed"`
-	Check      *gitCheck        `json:"check"`
+	Check      *GitCheckView    `json:"check"`
 	NewCommits bool             `json:"new_commits"`
 	State      string           `json:"state"`
 	Operation  *gitOperation    `json:"operation"`
@@ -46,6 +46,11 @@ type GitAppView struct {
 	EnvTemplate    *string        `json:"env_template"`
 	BuildLog       string         `json:"build_log"`
 	Webhook        GitWebhookView `json:"webhook"`
+	// Follow is `branch` or `tags`. TagPattern and Prereleases choose the tags an app that
+	// follows them may deploy, and are kept while it follows a branch.
+	Follow      string `json:"follow"`
+	TagPattern  string `json:"tag_pattern"`
+	Prereleases bool   `json:"prereleases"`
 }
 
 type GitHeadView struct {
@@ -58,6 +63,17 @@ type GitDeployedView struct {
 	Commit  string    `json:"commit"`
 	Subject string    `json:"subject"`
 	At      time.Time `json:"at"`
+	Tag     string    `json:"tag"`
+}
+
+// GitCheckView is the `check` of the API: the last check, and whether it found the deployed
+// tag on another commit.
+type GitCheckView struct {
+	At           time.Time `json:"at"`
+	RemoteCommit string    `json:"remote_commit"`
+	RemoteTag    string    `json:"remote_tag"`
+	TagMoved     bool      `json:"tag_moved"`
+	Error        string    `json:"error"`
 }
 
 type GitHistoryView struct {
@@ -67,6 +83,7 @@ type GitHistoryView struct {
 	Outcome    string    `json:"outcome"`
 	Reason     string    `json:"reason"`
 	Revertable bool      `json:"revertable"`
+	Tag        string    `json:"tag"`
 }
 
 type GitComposeView struct {
@@ -123,10 +140,20 @@ func gitAppStateOf(st *gitApp) string {
 	return "idle"
 }
 
-// gitNewCommits reports whether the last check saw the branch somewhere else than what runs.
-// Nothing runs before the first deployment, so nothing is new either.
+// gitNewCommits reports whether the last check saw a version to deploy: the branch somewhere
+// else than what runs, or for an app that follows tags a tag higher than the one deployed (any
+// other tag, before its first deployment in that mode). A check that found no tag, such as the
+// branch check left from before a switch to tags, sees nothing to deploy. Nothing runs before
+// the first deployment, so nothing is new either.
 func gitNewCommits(st *gitApp) bool {
-	return st.Deployed != nil && st.Check != nil && st.Check.RemoteCommit != "" && st.Check.RemoteCommit != st.Deployed.Commit
+	if st.Deployed == nil || st.Check == nil || st.Check.RemoteCommit == "" || st.Check.RemoteCommit == st.Deployed.Commit {
+		return false
+	}
+	if !st.followsTags() {
+		return true
+	}
+
+	return st.Check.RemoteTag != "" && (st.Deployed.Tag == "" || gitTagHigher(st.Check.RemoteTag, st.Deployed.Tag))
 }
 
 // GitAppGrid is what the app card shows of a registered git app, nil for any other app.
@@ -180,15 +207,20 @@ func newGitAppView(ctx context.Context, st *gitApp) *GitAppView {
 		AutoDeploy: st.AutoDeploy, AutoPaused: st.AutoPaused, Blocked: st.Blocked,
 		EnvTracked: st.EnvTracked, Cloned: st.Cloned,
 		NewCommits: gitNewCommits(st), State: gitAppStateOf(st),
-		History:  []GitHistoryView{},
-		BuildLog: readGitBuildLogTail(st.App),
-		Webhook:  gitWebhookView(st.App),
+		History:     []GitHistoryView{},
+		BuildLog:    readGitBuildLogTail(st.App),
+		Webhook:     gitWebhookView(st.App),
+		Follow:      st.follow(),
+		TagPattern:  st.TagPattern,
+		Prereleases: st.Prereleases,
 	}
 
 	// copies: a deployment goes on changing st once its view is taken
 	if st.Check != nil {
-		check := *st.Check
-		view.Check = &check
+		view.Check = &GitCheckView{
+			At: st.Check.At, RemoteCommit: st.Check.RemoteCommit, RemoteTag: st.Check.RemoteTag, TagMoved: gitTagMoved(st),
+			Error: st.Check.Error,
+		}
 	}
 	if st.Operation != nil {
 		operation := *st.Operation
@@ -206,12 +238,12 @@ func newGitAppView(ctx context.Context, st *gitApp) *GitAppView {
 	}
 
 	if st.Deployed != nil {
-		view.Deployed = &GitDeployedView{Commit: st.Deployed.Commit, Subject: st.Deployed.Subject, At: st.Deployed.At}
+		view.Deployed = &GitDeployedView{Commit: st.Deployed.Commit, Subject: st.Deployed.Subject, At: st.Deployed.At, Tag: st.Deployed.Tag}
 	}
 
 	for _, entry := range st.History {
 		view.History = append(view.History, GitHistoryView{
-			Commit: entry.Commit, Subject: entry.Subject, At: entry.At, Outcome: entry.Outcome, Reason: entry.Reason,
+			Commit: entry.Commit, Tag: entry.Tag, Subject: entry.Subject, At: entry.At, Outcome: entry.Outcome, Reason: entry.Reason,
 			Revertable: gitRevertable(ctx, st, entry),
 		})
 	}

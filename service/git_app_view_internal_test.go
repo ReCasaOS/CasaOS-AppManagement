@@ -126,9 +126,13 @@ func TestTheViewOfAGitAppIsTheContract(t *testing.T) {
 	sort.Strings(keys)
 	assert.DeepEqual(t, keys, []string{
 		"access", "app", "auto_deploy", "auto_paused", "blocked", "branch", "build_log", "check", "cloned", "compose",
-		"compose_example", "deployed", "dir", "env_template", "env_tracked", "head", "history", "new_commits", "operation",
-		"origin", "remote", "state", "token_set", "webhook",
+		"compose_example", "deployed", "dir", "env_template", "env_tracked", "follow", "head", "history", "new_commits",
+		"operation", "origin", "prereleases", "remote", "state", "tag_pattern", "token_set", "webhook",
 	})
+	// an older state, without the fields, follows a branch
+	assert.Equal(t, view["follow"], "branch")
+	assert.Equal(t, view["tag_pattern"], "")
+	assert.Equal(t, view["prereleases"], false)
 	// off by default, and no secret while off
 	assert.DeepEqual(t, view["webhook"], map[string]any{
 		"enabled": false, "path": "/v2/app_management/git/jarvis/webhook", "last_delivery": nil,
@@ -140,10 +144,11 @@ func TestTheViewOfAGitAppIsTheContract(t *testing.T) {
 	assert.Equal(t, view["env_template"], "GREETING=hello\n")
 	assert.Equal(t, view["build_log"], "#1 building\n")
 	assert.DeepEqual(t, view["head"], map[string]any{"commit": second, "subject": "change .env.example", "tracked_files_clean": true})
-	assert.DeepEqual(t, view["deployed"], map[string]any{"commit": second, "subject": "change .env.example", "at": "2026-09-16T10:00:00Z"})
-	assert.DeepEqual(t, view["check"], map[string]any{"at": "2026-09-16T10:00:00Z", "remote_commit": second, "error": ""})
+	assert.DeepEqual(t, view["deployed"], map[string]any{"commit": second, "subject": "change .env.example", "at": "2026-09-16T10:00:00Z", "tag": ""})
+	assert.DeepEqual(t, view["check"], map[string]any{"at": "2026-09-16T10:00:00Z", "remote_commit": second, "remote_tag": "", "tag_moved": false, "error": ""})
 
 	history := view["history"].([]any)
+	assert.Equal(t, history[0].(map[string]any)["tag"], "")
 	assert.Equal(t, history[0].(map[string]any)["revertable"], false, "the running version")
 	assert.Equal(t, history[1].(map[string]any)["revertable"], true)
 
