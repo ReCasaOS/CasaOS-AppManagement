@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -100,4 +102,47 @@ func TestTheModeOfAClonedAppChangesAndItsFolderFollows(t *testing.T) {
 	assertBadRequest(t, err, "follow is branch or tags")
 	_, err = UpdateGitApp(ctx, "jarvis", GitAppChanges{TagPattern: &badPattern})
 	assertBadRequest(t, err, "tag pattern")
+}
+
+// Back on a branch without one, the remote names its default: a remote that cannot be read, or
+// that names no valid branch, is a 400 that leaves the app following tags and its folder
+// detached. With the branch given, the remote is not asked.
+func TestBackOnABranchWithoutOneTheRemoteMustNameItsDefault(t *testing.T) {
+	_, work := clonedTestApp(t)
+	ctx := context.Background()
+	remote := filepath.Join(filepath.Dir(work), "remote.git")
+	tags, branch, main := gitFollowTags, gitFollowBranch, "main"
+	_, err := UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &tags})
+	assert.NilError(t, err)
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	stillOnTags := func() {
+		t.Helper()
+		info, err := git.Describe(ctx, st.Dir)
+		assert.NilError(t, err)
+		assert.Equal(t, info.Branch, "", "still detached")
+		after, err := loadGitApp("jarvis")
+		assert.NilError(t, err)
+		assert.Equal(t, after.Follow, gitFollowTags)
+		assert.Equal(t, after.Branch, "")
+	}
+
+	// a name git would take for an option never reaches git checkout -B
+	gitShell(t, remote, "git update-ref refs/heads/-bad refs/heads/main && git symbolic-ref HEAD refs/heads/-bad")
+	_, err = UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch})
+	assertBadRequest(t, err, "`-bad` is not a branch name")
+	stillOnTags()
+
+	assert.NilError(t, os.Rename(remote, remote+".gone"))
+	_, err = UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch})
+	assertBadRequest(t, err, "give the branch to follow")
+	stillOnTags()
+
+	view, err := UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch, Branch: &main})
+	assert.NilError(t, err)
+	assert.Equal(t, view.Follow, gitFollowBranch)
+	assert.Equal(t, view.Branch, "main")
+	info, err := git.Describe(ctx, st.Dir)
+	assert.NilError(t, err)
+	assert.Equal(t, info.Branch, "main")
 }
