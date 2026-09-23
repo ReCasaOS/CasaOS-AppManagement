@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
@@ -118,4 +120,15 @@ func TestTheTagsOfAnAppAreListedHighestFirstFiftyAtMost(t *testing.T) {
 	assertBadRequest(t, err, "follows a branch, not tags")
 	_, err = GitAppTags(ctx, "nextcloud")
 	assert.ErrorIs(t, err, ErrGitAppNotFound)
+}
+
+// The tags of a repository that cannot be reached are a 400 that says so.
+func TestTheTagsOfARepositoryThatCannotBeReachedAreRefused(t *testing.T) {
+	_, work, _ := taggedTestApp(t)
+	remote := filepath.Join(filepath.Dir(work), "remote.git")
+	assert.NilError(t, os.Rename(remote, remote+".gone"))
+
+	_, err := GitAppTags(context.Background(), "jarvis")
+
+	assertBadRequest(t, err, "the repository cannot be reached")
 }

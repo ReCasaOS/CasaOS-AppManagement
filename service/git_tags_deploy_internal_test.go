@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"gotest.tools/v3/assert"
 )
@@ -254,4 +256,31 @@ func TestAnInterruptedDeploymentOfATagKeepsItsTag(t *testing.T) {
 	assert.Equal(t, st.History[0].Outcome, gitOutcomeInterrupted)
 	assert.Equal(t, st.History[0].Commit, second)
 	assert.Equal(t, st.History[0].Tag, "v1.1.0")
+}
+
+// A tag that does not start is rolled back as a branch's commit is: the detached folder goes back
+// to the previous commit, which runs again under its tag.
+func TestATagThatDoesNotStartIsRolledBack(t *testing.T) {
+	fake, work, first := deployedTaggedTestApp(t, false)
+	second := pushTestCommit(t, work, "index.html", "v2")
+	pushTestTag(t, work, "v1.1.0")
+	fake.startErrs = []error{errors.New("container jarvis-web-1 of web exited with code 1")}
+
+	st := deployTestApp(t)
+
+	assert.DeepEqual(t, fake.Calls(), []string{
+		"build " + second[:12], "retag " + second[:12], "start " + second[:12],
+		"retag " + first[:12], "start " + first[:12],
+	})
+	assert.Equal(t, st.History[0].Outcome, gitOutcomeRolledBack)
+	assert.Equal(t, st.History[0].Tag, "v1.1.0")
+	assert.Equal(t, st.Deployed.Commit, first)
+	assert.Equal(t, st.Deployed.Tag, "v1.0.0")
+	assert.Equal(t, st.Blocked, false)
+	assert.DeepEqual(t, st.Attempted, []string{second})
+	assert.Equal(t, gitAppStateOf(st), "rolled_back")
+	info, err := git.Describe(context.Background(), st.Dir)
+	assert.NilError(t, err)
+	assert.Equal(t, info.Branch, "", "still detached")
+	assert.Equal(t, info.Head, first)
 }
