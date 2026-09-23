@@ -47,11 +47,17 @@ func (a *AppManagement) UpdateGitApp(ctx echo.Context, app codegen.GitAppName) e
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 	}
 
-	view, err := service.UpdateGitApp(ctx.Request().Context(), app, service.GitAppChanges{
-		Branch: body.Branch, AutoDeploy: body.AutoDeploy, Access: body.Access, Token: body.Token,
-	})
+	view, err := service.UpdateGitApp(ctx.Request().Context(), app, gitAppChanges(body))
 
 	return gitAppAnswer(ctx, http.StatusOK, view, err)
+}
+
+// gitAppChanges is what a PUT asks the service to change.
+func gitAppChanges(body codegen.GitAppUpdateRequest) service.GitAppChanges {
+	return service.GitAppChanges{
+		Branch: body.Branch, AutoDeploy: body.AutoDeploy, Access: body.Access, Token: body.Token,
+		WebhookEnabled: body.WebhookEnabled, RegenerateWebhookSecret: body.RegenerateWebhookSecret,
+	}
 }
 
 func (a *AppManagement) DeleteGitApp(ctx echo.Context, app codegen.GitAppName) error {

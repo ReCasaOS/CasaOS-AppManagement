@@ -1307,12 +1307,16 @@ paths:
           $ref: "#/components/responses/ResponseInternalServerError"
 
     put:
-      summary: Change the branch, the automatic rebuild or the access of a git app
+      summary: Change the branch, the automatic rebuild, the access or the webhook of a git app
       description: |
         Every field is optional. The branch changes until the app is cloned. Turning
         `auto_deploy` on clears `auto_paused`. A token is accepted and never returned; an empty
         one is refused, and switching `access` to `none` or `key` forgets the one kept. Adopts an
         adoptable app: 400 when its folder is in detached HEAD or has no remote.
+
+        `webhook_enabled` turns the webhook on, generating its secret when there is none, or
+        off, forgetting the secret. `regenerate_webhook_secret` replaces the secret at once, the
+        old one refused from then on; 400 while the webhook is off.
       operationId: updateGitApp
       tags:
         - Git methods
@@ -3256,6 +3260,7 @@ components:
         - compose_example
         - env_template
         - build_log
+        - webhook
       properties:
         app:
           type: string
@@ -3330,6 +3335,60 @@ components:
         build_log:
           type: string
           description: The last 64 KiB of the last build's log.
+        webhook:
+          $ref: "#/components/schemas/GitWebhook"
+
+    GitWebhook:
+      description: |
+        The app's webhook: a push the forge POSTs to `path`, signed with `secret`, checks the
+        app at once. The secret is not in backups: a restored app comes back with its webhook off.
+      required:
+        - enabled
+        - path
+        - last_delivery
+      properties:
+        enabled:
+          type: boolean
+        path:
+          type: string
+          description: The route to give the forge, after the address it reaches the box by.
+          example: /v2/app_management/git/jarvis/webhook
+        secret:
+          type: string
+          description: 64 hex characters, only while `enabled`.
+          example: 5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e
+        last_delivery:
+          $ref: "#/components/schemas/GitWebhookDelivery"
+
+    GitWebhookDelivery:
+      description: The last delivery whose signature was valid. Null until the first one.
+      nullable: true
+      required:
+        - at
+        - forge
+        - event
+        - result
+      properties:
+        at:
+          type: string
+          format: date-time
+        forge:
+          type: string
+          description: |
+            One of `github`, `gitea`, `forgejo`, `gogs`, `gitlab`, `unknown`: named after the
+            event header, else after the signature header. Not declared as an enum, for the
+            reason given on `GitAppState`.
+          example: github
+        event:
+          type: string
+          description: The event header's value, at most 64 characters; empty when the forge sent none.
+          example: push
+        result:
+          type: string
+          description: |
+            One of `checked`, `coalesced`, `queued`, `ignored`, `pong`. Not declared as an enum,
+            for the reason given on `GitAppState`.
+          example: checked
 
     GitAppHead:
       description: The commit the folder is on. Null until cloned.
@@ -3516,6 +3575,12 @@ components:
         token:
           type: string
           description: Never returned; an empty token is refused.
+        webhook_enabled:
+          type: boolean
+          description: On generates the secret when there is none; off forgets it.
+        regenerate_webhook_secret:
+          type: boolean
+          description: Replaces the secret at once; 400 while the webhook is off.
 
     GitAppDeployRequest:
       properties:

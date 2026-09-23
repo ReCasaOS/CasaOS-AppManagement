@@ -1,14 +1,19 @@
 package v2
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/service"
 	"github.com/labstack/echo/v4"
+	"github.com/samber/lo"
 	"gotest.tools/v3/assert"
 )
 
@@ -46,4 +51,34 @@ func TestAGitAppIsAnsweredUnderData(t *testing.T) {
 	assert.Equal(t, recorder.Code, http.StatusAccepted)
 	assert.Assert(t, len(recorder.Body.String()) > 0)
 	assert.Equal(t, recorder.Body.String()[:36], `{"data":{"app":"jarvis","origin":"",`)
+}
+
+// The service builds the view itself: what it answers is what the spec declares.
+func TestAGitAppsWebhookIsAnsweredAsTheSpecDeclaresIt(t *testing.T) {
+	at := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
+	view := &service.GitAppView{App: "jarvis", History: []service.GitHistoryView{}, Webhook: service.GitWebhookView{
+		Enabled: true, Path: "/v2/app_management/git/jarvis/webhook", Secret: strings.Repeat("5e", 32),
+		LastDelivery: &service.GitWebhookDelivery{At: at, Forge: "github", Event: "push", Result: "checked"},
+	}}
+	raw, err := json.Marshal(view)
+	assert.NilError(t, err)
+
+	var answered codegen.GitApp
+	assert.NilError(t, json.Unmarshal(raw, &answered))
+	assert.Equal(t, answered.Webhook.Enabled, true)
+	assert.Equal(t, answered.Webhook.Path, "/v2/app_management/git/jarvis/webhook")
+	assert.Equal(t, lo.FromPtr(answered.Webhook.Secret), strings.Repeat("5e", 32))
+	assert.Assert(t, answered.Webhook.LastDelivery.At.Equal(at))
+	assert.Equal(t, answered.Webhook.LastDelivery.Forge, "github")
+	assert.Equal(t, answered.Webhook.LastDelivery.Event, "push")
+	assert.Equal(t, answered.Webhook.LastDelivery.Result, "checked")
+}
+
+func TestAPutPassesTheWebhookFieldsOn(t *testing.T) {
+	var body codegen.GitAppUpdateRequest
+	assert.NilError(t, json.Unmarshal([]byte(`{"auto_deploy":true,"webhook_enabled":false,"regenerate_webhook_secret":true}`), &body))
+
+	assert.DeepEqual(t, gitAppChanges(body), service.GitAppChanges{
+		AutoDeploy: lo.ToPtr(true), WebhookEnabled: lo.ToPtr(false), RegenerateWebhookSecret: lo.ToPtr(true),
+	})
 }
