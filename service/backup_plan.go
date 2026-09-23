@@ -59,6 +59,12 @@ type BackupGit struct {
 	Remote string `json:"remote"`
 	Branch string `json:"branch"`
 	Commit string `json:"commit"`
+	// An app that follows tags: the mode, the tag the commit was deployed as, and the tag
+	// filter. Omitted for a branch app, whose origin stays what older versions wrote.
+	Follow      string `json:"follow,omitempty"`
+	Tag         string `json:"tag,omitempty"`
+	TagPattern  string `json:"tag_pattern,omitempty"`
+	Prereleases bool   `json:"prereleases,omitempty"`
 }
 
 // BackupFormatVersion is bumped when the layout changes in a way a reader must

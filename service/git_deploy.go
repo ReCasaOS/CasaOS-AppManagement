@@ -28,6 +28,9 @@ type gitTrigger int
 const (
 	gitTriggerManual gitTrigger = iota
 	gitTriggerAutomatic
+	// gitTriggerRestore is a restore's deployment of the backed-up commit: by hand, and built
+	// wherever the commit's tag went since.
+	gitTriggerRestore
 )
 
 // gitBuildLogCap is how much of the last build's log is kept.
@@ -275,7 +278,7 @@ func runGitDeploy(ctx context.Context, st *gitApp, target, tag string, revert bo
 		images = previous.Images
 	default:
 		// for a redeployment, only once its images are gone: a build tags them anew
-		if images, err = fetchAndBuild(ctx, st, target, tag, previous, auth); err != nil {
+		if images, err = fetchAndBuild(ctx, st, target, tag, previous, trigger, auth); err != nil {
 			return
 		}
 
@@ -312,7 +315,7 @@ func runGitDeploy(ctx context.Context, st *gitApp, target, tag string, revert bo
 
 	st.Deployed = &gitDeployment{Commit: target, Tag: tag, Subject: subject, At: time.Now().UTC(), Images: images}
 	st.Blocked = false
-	if trigger == gitTriggerManual && !redeploy {
+	if trigger != gitTriggerAutomatic && !redeploy {
 		// a revert pauses the automatic rebuild, and so does an older tag deployed by hand, or
 		// the next check would undo them. The first deployment of an app that follows tags, no
 		// tag deployed before it, pauses nothing even when its commit ran before: automatic
@@ -333,13 +336,14 @@ func runGitDeploy(ctx context.Context, st *gitApp, target, tag string, revert bo
 // fetchAndBuild fetches what target comes from and checks it may be deployed, then builds
 // it: on a branch, target is on it and descends from what runs; for tags, the tag still
 // names target. A failure is recorded here.
-func fetchAndBuild(ctx context.Context, st *gitApp, target, tag string, previous *gitDeployment, auth git.Auth) (map[string]string, error) {
+func fetchAndBuild(ctx context.Context, st *gitApp, target, tag string, previous *gitDeployment, trigger gitTrigger, auth git.Auth) (map[string]string, error) {
 	var err error
 	switch {
 	case !st.followsTags():
 		err = fetchGitBranch(ctx, st, target, previous, auth)
-	case previous == nil || target != previous.Commit:
-		// a repair builds the commit that runs, which the folder holds, wherever its tag went
+	case trigger != gitTriggerRestore && (previous == nil || target != previous.Commit):
+		// a repair builds the commit that runs, and a restore the backed-up commit, which the
+		// folder holds, wherever their tag went
 		err = fetchGitTag(ctx, st, target, tag, auth)
 	}
 	if err != nil {
