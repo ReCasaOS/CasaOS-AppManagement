@@ -42,6 +42,34 @@ func TestAGitAppRefusalIsAnsweredWithItsStatus(t *testing.T) {
 	}
 }
 
+// A forge learns how its delivery went, and a caller without a valid signature only which
+// refusal it got.
+func TestAGitWebhookIsAnsweredWithItsStatus(t *testing.T) {
+	for _, c := range []struct {
+		answer string
+		err    error
+		status int
+		body   string
+	}{
+		{service.GitWebhookPong, nil, http.StatusOK, "pong"},
+		{service.GitWebhookChecking, nil, http.StatusAccepted, "checking"},
+		{service.GitWebhookCoalesced, nil, http.StatusAccepted, "coalesced"},
+		{service.GitWebhookQueued, nil, http.StatusAccepted, "queued"},
+		{service.GitWebhookIgnored, nil, http.StatusAccepted, "ignored"},
+		{"", service.ErrGitWebhookSignature, http.StatusUnauthorized, "invalid signature"},
+		{"", service.ErrGitWebhookNotFound, http.StatusNotFound, "not found"},
+		{"", service.ErrGitWebhookTooLarge, http.StatusRequestEntityTooLarge, "the body is over 5 MiB"},
+		{"", errors.New("open /var/lib/casaos/git_apps/jarvis.webhook: permission denied"), http.StatusInternalServerError, "internal error"},
+	} {
+		recorder := httptest.NewRecorder()
+		ctx := echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/", nil), recorder)
+		assert.NilError(t, gitWebhookAnswer(ctx, c.answer, c.err))
+
+		assert.Equal(t, recorder.Code, c.status, c.body)
+		assert.Equal(t, recorder.Body.String(), fmt.Sprintf("{\"message\":%q}\n", c.body))
+	}
+}
+
 func TestAGitAppIsAnsweredUnderData(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx := echo.New().NewContext(httptest.NewRequest(http.MethodPost, "/", nil), recorder)

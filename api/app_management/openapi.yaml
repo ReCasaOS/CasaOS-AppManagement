@@ -1416,6 +1416,57 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /git/{app}/webhook:
+    post:
+      summary: A forge tells that the repository changed
+      description: |
+        Called by the forge, not the dashboard: no token, but the body signed with the app's
+        webhook secret. `X-Hub-Signature-256: sha256=<hex>`, `X-Gitea-Signature`,
+        `X-Forgejo-Signature` and `X-Gogs-Signature` carry the hex HMAC-SHA256 of the raw body,
+        `X-Gitlab-Token` the secret itself; at least one is sent and every one sent is valid, or
+        401. The body, read up to 5 MiB (413 beyond), is signed and never interpreted, so this
+        route is not checked against this spec: forges send form-encoded bodies too.
+
+        A push (`X-GitHub-Event`, `X-Gitea-Event`, `X-Forgejo-Event` or `X-Gogs-Event` `push`;
+        `X-Gitlab-Event` `Push Hook` or `Tag Push Hook`), or a signed delivery naming no event,
+        starts what `POST /git/{app}/check` starts and answers 202 `checking`; a push less than
+        10 seconds after the last check a webhook started, or while one is queued, answers 202
+        `coalesced`; a push to an app another operation holds queues one check that runs once
+        the app is free, waiting up to 30 minutes, and answers 202 `queued`. GitHub's `ping`
+        answers 200 `pong`; any other event 202 `ignored`. 404 alike for an app that does not
+        exist and a webhook that is off.
+      operationId: receiveGitWebhook
+      security: []
+      tags:
+        - Git methods
+      parameters:
+        - $ref: "#/components/parameters/GitAppName"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "202":
+          $ref: "#/components/responses/ResponseOK"
+        "401":
+          description: No valid signature
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BaseResponse"
+              example:
+                message: invalid signature
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "413":
+          description: A body over 5 MiB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BaseResponse"
+              example:
+                message: the body is over 5 MiB
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   # the endpoint is newer version of POST /appstore for the demand of @ETWang1991
   # the old api is dependent by CasaOS. So we can't remove it.
   # a good idea is /v3/app-management/appstore. But it is hard to implement in ZimaOS

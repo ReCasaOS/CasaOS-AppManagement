@@ -87,6 +87,35 @@ func (a *AppManagement) DeployGitApp(ctx echo.Context, app codegen.GitAppName) e
 	return gitAppAnswer(ctx, http.StatusAccepted, view, err)
 }
 
+// ReceiveGitWebhook is a forge's delivery. It carries no token: route/v2.go lets this
+// method and path through, and the service checks the signature instead.
+func (a *AppManagement) ReceiveGitWebhook(ctx echo.Context, app codegen.GitAppName) error {
+	answer, err := service.ReceiveGitWebhook(app, ctx.Request().Header, ctx.Request().Body)
+
+	return gitWebhookAnswer(ctx, answer, err)
+}
+
+// gitWebhookAnswer tells the forge how its delivery went, and a caller not proven by a
+// signature nothing more than which refusal it got.
+func gitWebhookAnswer(ctx echo.Context, answer string, err error) error {
+	status := http.StatusAccepted
+	switch {
+	case errors.Is(err, service.ErrGitWebhookNotFound):
+		status, answer = http.StatusNotFound, err.Error()
+	case errors.Is(err, service.ErrGitWebhookSignature):
+		status, answer = http.StatusUnauthorized, err.Error()
+	case errors.Is(err, service.ErrGitWebhookTooLarge):
+		status, answer = http.StatusRequestEntityTooLarge, err.Error()
+	case err != nil:
+		// the service logged what failed
+		status, answer = http.StatusInternalServerError, "internal error"
+	case answer == service.GitWebhookPong:
+		status = http.StatusOK
+	}
+
+	return ctx.JSON(status, codegen.ResponseOK{Message: &answer})
+}
+
 func gitAppAnswer(ctx echo.Context, status int, view *service.GitAppView, err error) error {
 	if err != nil {
 		return gitAppError(ctx, err)

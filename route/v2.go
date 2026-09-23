@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -45,6 +46,15 @@ func init() {
 	V2DocPath = "/doc" + V2APIPath
 }
 
+// gitWebhookPath is the one route a request reaches without a token: a forge proves itself
+// with the app's webhook secret instead, and sends bodies this spec does not describe.
+var gitWebhookPath = regexp.MustCompile(`^/v2/app_management/git/[^/]+/webhook$`)
+
+// isGitWebhook is a forge's delivery: that method on that path, and nothing else.
+func isGitWebhook(c echo.Context) bool {
+	return c.Request().Method == http.MethodPost && gitWebhookPath.MatchString(c.Request().URL.Path)
+}
+
 func InitV2Router() http.Handler {
 	appManagement := v2Route.NewAppManagement()
 
@@ -65,7 +75,7 @@ func InitV2Router() http.Handler {
 
 	e.Use(echojwt.WithConfig(echojwt.Config{
 		Skipper: func(c echo.Context) bool {
-			return external.IsInternalRequest(c.RealIP(), c.Request().Header.Get(echo.HeaderAuthorization), config.CommonInfo.RuntimePath)
+			return isGitWebhook(c) || external.IsInternalRequest(c.RealIP(), c.Request().Header.Get(echo.HeaderAuthorization), config.CommonInfo.RuntimePath)
 		},
 		ParseTokenFunc: func(c echo.Context, token string) (interface{}, error) {
 			valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(config.CommonInfo.RuntimePath) })
@@ -108,6 +118,7 @@ func InitV2Router() http.Handler {
 
 	e.Use(middleware.OapiRequestValidatorWithOptions(_swagger, &middleware.Options{
 		Options: openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc},
+		Skipper: isGitWebhook,
 	}))
 
 	codegen.RegisterHandlersWithBaseURL(e, appManagement, V2APIPath)
