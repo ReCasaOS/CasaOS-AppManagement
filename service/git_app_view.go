@@ -133,7 +133,9 @@ func gitAppStateOf(st *gitApp) string {
 		return "failed"
 	case newest == gitOutcomeBuildFailed, newest == gitOutcomeRolledBack, newest == gitOutcomeInterrupted:
 		return newest
-	case st.Check != nil && st.Check.Error != "":
+	case st.Check != nil && st.Check.Error != "" && !strings.HasPrefix(st.Check.Error, gitNoTag):
+		// a check that found no eligible tag reached the repository: its message says why
+		// nothing deploys
 		return "unreachable"
 	}
 

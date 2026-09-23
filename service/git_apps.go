@@ -494,9 +494,10 @@ func runGitCheck(st *gitApp, end func()) {
 	deployGitAppAutomatically(ctx, st.App, end)
 }
 
-// checkGitApp asks the remote where the branch is and records the answer, then clears the
-// operation. With clone, a registered app that is not cloned yet is cloned and its compose
-// files validated. Whatever fails is recorded in the check, and changes nothing else.
+// checkGitApp asks the remote where the branch is, or which is the highest eligible tag, and
+// records the answer, then clears the operation. With clone, a registered app that is not
+// cloned yet is cloned, at that tag for an app that follows tags, and its compose files
+// validated. Whatever fails is recorded in the check, and changes nothing else.
 func checkGitApp(ctx context.Context, st *gitApp, clone bool) {
 	defer func() {
 		st.Operation = nil
@@ -505,39 +506,48 @@ func checkGitApp(ctx context.Context, st *gitApp, clone bool) {
 		}
 	}()
 
-	previous := ""
+	previous := gitCheck{}
 	if st.Check != nil {
-		previous = st.Check.RemoteCommit
+		previous = *st.Check
 	}
-	st.Check = &gitCheck{At: time.Now().UTC(), RemoteCommit: previous}
+	st.Check = &gitCheck{At: time.Now().UTC(), RemoteCommit: previous.RemoteCommit, RemoteTag: previous.RemoteTag}
 	st.NoComposeFile = false
 
 	auth, err := gitAuth(st)
-	if err == nil && st.Branch == "" {
-		st.Branch, err = git.DefaultBranch(ctx, st.Remote, auth)
-	}
-	commit := ""
-	if err == nil {
-		commit, err = git.LsRemote(ctx, st.Remote, st.Branch, auth)
+	var remote GitTag
+	if err == nil && st.followsTags() {
+		// never the default branch: an app that follows tags has none
+		remote, err = eligibleGitTag(ctx, st, auth, "")
+	} else if err == nil {
+		if st.Branch == "" {
+			st.Branch, err = git.DefaultBranch(ctx, st.Remote, auth)
+		}
+		if err == nil {
+			remote.Commit, err = git.LsRemote(ctx, st.Remote, st.Branch, auth)
+		}
 	}
 	if err != nil {
 		st.Check.Error = err.Error()
 		return
 	}
-	st.Check.RemoteCommit = commit
+	st.Check.RemoteCommit, st.Check.RemoteTag = remote.Commit, remote.Name
 
 	if st.Cloned || !clone {
 		return
 	}
 
-	if err := cloneGitApp(ctx, st, auth); err != nil {
+	ref := st.Branch
+	if st.followsTags() {
+		ref = remote.Name
+	}
+	if err := cloneGitApp(ctx, st, ref, auth); err != nil {
 		st.Check.Error = err.Error()
 	}
 }
 
-// cloneGitApp clones a created app into its folder, which must be absent or empty, and
-// keeps the clone only when it holds a compose file.
-func cloneGitApp(ctx context.Context, st *gitApp, auth git.Auth) error {
+// cloneGitApp clones a created app into its folder, which must be absent or empty, at ref, its
+// branch or a tag, and keeps the clone only when it holds a compose file.
+func cloneGitApp(ctx context.Context, st *gitApp, ref string, auth git.Auth) error {
 	if entries, err := os.ReadDir(st.Dir); err == nil && len(entries) > 0 {
 		return fmt.Errorf("%s already exists and is not empty", st.Dir)
 	}
@@ -546,7 +556,7 @@ func cloneGitApp(ctx context.Context, st *gitApp, auth git.Auth) error {
 	// app goes, and what is left beside it is CasaOS's own to remove
 	partial := gitPartialClone(st)
 	_ = os.RemoveAll(partial)
-	if err := git.Clone(ctx, st.Remote, st.Branch, partial, auth); err != nil {
+	if err := git.Clone(ctx, st.Remote, ref, partial, auth); err != nil {
 		_ = os.RemoveAll(partial)
 		return err
 	}

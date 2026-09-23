@@ -75,7 +75,7 @@ func installGitAppFromBackup(ctx context.Context, name string, origin BackupGit,
 	}
 
 	if !st.Cloned {
-		if err := cloneGitApp(ctx, st, auth); err != nil {
+		if err := cloneGitApp(ctx, st, st.Branch, auth); err != nil {
 			return nil, err
 		}
 		if err := saveGitApp(st); err != nil {

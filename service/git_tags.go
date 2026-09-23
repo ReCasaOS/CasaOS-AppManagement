@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
 )
 
 // Git apps that follow the tags of their repository instead of a branch: which tags they may
@@ -141,4 +143,61 @@ func eligibleGitTags(tags map[string]string, pattern string, prereleases bool) [
 func gitTagMoved(st *gitApp) bool {
 	return st.followsTags() && st.Deployed != nil && st.Check != nil && st.Check.RemoteTag != "" &&
 		st.Check.RemoteTag == st.Deployed.Tag && st.Check.RemoteCommit != st.Deployed.Commit
+}
+
+// gitTagsListed is as many tags as GitAppTags gives.
+const gitTagsListed = 50
+
+// remoteGitTags is the eligible tags of the app's remote, highest first.
+func remoteGitTags(ctx context.Context, st *gitApp, auth git.Auth) ([]GitTag, error) {
+	tags, err := git.LsRemoteTags(ctx, st.Remote, auth)
+	if err != nil {
+		return nil, err
+	}
+
+	return eligibleGitTags(tags, st.TagPattern, st.Prereleases), nil
+}
+
+// eligibleGitTag is tag among the eligible tags of the app's remote, the highest when tag is
+// empty. What is not there is a request error that says so; a remote that cannot be reached
+// is git's own error.
+func eligibleGitTag(ctx context.Context, st *gitApp, auth git.Auth, tag string) (GitTag, error) {
+	tags, err := remoteGitTags(ctx, st, auth)
+	if err != nil {
+		return GitTag{}, err
+	}
+
+	for _, eligible := range tags {
+		if tag == "" || eligible.Name == tag {
+			return eligible, nil
+		}
+	}
+	if tag != "" {
+		return GitTag{}, GitRequestError(fmt.Sprintf("`%s` is not one of the eligible tags of the remote", tag))
+	}
+
+	return GitTag{}, GitRequestError(gitNoTagMessage(st.TagPattern, st.Prereleases))
+}
+
+// GitAppTags is the eligible tags of an app that follows tags, highest first, at most 50. It
+// asks the remote, as a check does.
+func GitAppTags(ctx context.Context, name string) ([]GitTag, error) {
+	st, err := findGitApp(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if !st.followsTags() {
+		return nil, GitRequestError(fmt.Sprintf("%s follows a branch, not tags", name))
+	}
+
+	auth, err := gitAuth(st)
+	if err != nil {
+		return nil, err
+	}
+	tags, err := remoteGitTags(ctx, st, auth)
+	if err != nil {
+		return nil, GitRequestError(fmt.Sprintf("the repository cannot be reached: %v", err))
+	}
+
+	return tags[:min(len(tags), gitTagsListed)], nil
 }
