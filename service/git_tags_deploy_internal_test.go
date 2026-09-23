@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"gotest.tools/v3/assert"
 )
 
@@ -75,6 +76,49 @@ func TestAnyEligibleTagIsDeployedByHand(t *testing.T) {
 	// first left the history: a commit no version of the history ran is refused
 	_, err = DeployGitApp(ctx, "jarvis", first, nil)
 	assertBadRequest(t, err, "no version of the history that ran")
+}
+
+// In tag mode a deployment by hand pauses automatic deployment only when it goes down: back to
+// the newer version that ran, a revert as well, it resumes it, as on a branch.
+func TestADeploymentByHandOfATagPausesOnlyWhenItGoesDown(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	gitAppsIn(t)
+	fake := withFakeGitDocker(t)
+	ctx := context.Background()
+	url, work := newTestRemote(t)
+	older := pushTestTag(t, work, "v1.4.1")
+	_, err := CreateGitApp(ctx, GitAppRegistration{Name: "jarvis", URL: url, Access: "none", Follow: gitFollowTags})
+	assert.NilError(t, err)
+	checkTestApp(t, "jarvis")
+	deployTestApp(t)
+	newer := pushTestCommit(t, work, "index.html", "v2")
+	pushTestTag(t, work, "v1.4.2")
+	st := deployTestApp(t)
+	assert.Equal(t, st.Deployed.Tag, "v1.4.2")
+	st.AutoDeploy = true
+	assert.NilError(t, saveGitApp(st))
+
+	_, err = DeployGitAppTag(ctx, "jarvis", "v1.4.1", nil)
+	assert.NilError(t, err)
+	st = waitForGitApp(t, "jarvis")
+	assert.Equal(t, st.Deployed.Commit, older)
+	assert.Equal(t, st.AutoPaused, true, "an older version")
+
+	fake.calls = nil
+	_, err = DeployGitAppTag(ctx, "jarvis", "v1.4.2", nil)
+	assert.NilError(t, err)
+	st = waitForGitApp(t, "jarvis")
+	// a revert: nothing is built
+	assert.DeepEqual(t, fake.Calls(), []string{"retag " + newer[:12], "start " + newer[:12]})
+	assert.Equal(t, st.Deployed.Tag, "v1.4.2")
+	assert.Equal(t, st.AutoPaused, false, "back to the newer version")
+
+	// and the next tag deploys by itself
+	latest := pushTestCommit(t, work, "index.html", "v3")
+	pushTestTag(t, work, "v1.5.0")
+	st = checkTestApp(t, "jarvis")
+	assert.Equal(t, st.Deployed.Commit, latest)
+	assert.Equal(t, st.Deployed.Tag, "v1.5.0")
 }
 
 func TestADeploymentOfATagRefusesWhatItCannotDo(t *testing.T) {

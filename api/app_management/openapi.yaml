@@ -1405,7 +1405,8 @@ paths:
         Starts the deployment in the background and answers 202 with the operation running. No
         commit: the remote's latest. A commit of the history: a revert, which pauses the
         automatic rebuild. For an app that follows tags, `tag` deploys any eligible tag, lower
-        ones included (a lower one pauses the automatic deployment); neither `tag` nor `commit`
+        ones included (only a tag lower than the deployed one, a revert included, pauses the
+        automatic deployment; the same or a higher one resumes it); neither `tag` nor `commit`
         deploys the highest eligible tag; a commit must be a version of the history. `tag` with
         `commit`: 400. `env` is written as `.env` first, while no deployment has succeeded
         and never when the repository tracks `.env`. 400 when a precondition fails, the message
@@ -3421,7 +3422,7 @@ components:
           type: boolean
         auto_paused:
           type: boolean
-          description: Set by a manual revert; cleared by turning `auto_deploy` on again or by a manual deployment.
+          description: Set by a manual revert (for an app that follows tags, by a manual deployment of a tag lower than the deployed one); cleared by turning `auto_deploy` on again or by another manual deployment.
         blocked:
           type: boolean
           description: A rollback failed; nothing automatic runs until a manual deployment or revert.

@@ -316,16 +316,16 @@ func runGitDeploy(ctx context.Context, st *gitApp, target, tag string, revert bo
 	st.Deployed = &gitDeployment{Commit: target, Tag: tag, Subject: subject, At: time.Now().UTC(), Images: images}
 	st.Blocked = false
 	if trigger != gitTriggerAutomatic && !redeploy {
-		// a revert pauses the automatic rebuild, and so does an older tag deployed by hand, or
-		// the next check would undo them. The first deployment of an app that follows tags, no
-		// tag deployed before it, pauses nothing even when its commit ran before: automatic
-		// deployment resumes after it. The version that runs, deployed again, leaves the
-		// switch as it was
+		// going down pauses the automatic rebuild, or the next check would undo it: on a branch
+		// a revert, or an older tag; for tags, an older tag only, so that the same or a higher
+		// one deployed by hand, a revert included, resumes it. The first deployment of an app
+		// that follows tags, no tag deployed before it, pauses nothing. The version that runs,
+		// deployed again, leaves the switch as it was
 		previousTag := ""
 		if previous != nil {
 			previousTag = previous.Tag
 		}
-		st.AutoPaused = (revert && (previousTag != "" || !st.followsTags())) || gitTagHigher(previousTag, tag)
+		st.AutoPaused = (revert && !st.followsTags()) || gitTagHigher(previousTag, tag)
 	}
 	st.EnvTracked, _ = git.IsTracked(ctx, st.Dir, ".env")
 	finishGitDeploy(ctx, st, gitHistoryEntry{Commit: target, Tag: tag, Subject: subject, At: st.Deployed.At, Outcome: gitOutcomeDeployed, Images: images})
