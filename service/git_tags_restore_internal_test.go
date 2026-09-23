@@ -50,7 +50,7 @@ func TestAnAppThatFollowsTagsIsRestoredAtItsTag(t *testing.T) {
 	url, work := newTestRemote(t)
 	first := pushTestTag(t, work, "v1.0.0")
 	pushTestCommit(t, work, "index.html", "v2")
-	pushTestTag(t, work, "v1.1.0")
+	second := pushTestTag(t, work, "v1.1.0")
 
 	_, err := installGitAppFromBackup(ctx, "jarvis", BackupGit{Remote: url, Commit: first, Follow: gitFollowTags, Tag: "v1.0.0", TagPattern: "v1.*"}, nil)
 	assert.NilError(t, err)
@@ -67,6 +67,8 @@ func TestAnAppThatFollowsTagsIsRestoredAtItsTag(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, info.Branch, "", "in detached HEAD, as an app that follows tags is")
 	assert.Equal(t, info.Head, first)
+	// v1.1.0 contains v1.0.0's commit: only what the clone holds shows which tag it was made at
+	assert.Assert(t, !git.HasCommit(ctx, st.Dir, second), "cloned at v1.0.0, not at the highest tag")
 }
 
 // The backed-up commit comes back whatever its tag did: fetched by its hash when the tag moved
