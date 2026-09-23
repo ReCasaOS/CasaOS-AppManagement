@@ -133,6 +133,28 @@ func TestAChangeOfModeForgetsTheLastCheck(t *testing.T) {
 	assert.Equal(t, view.NewCommits, false)
 }
 
+// The compose file a check found missing goes with that check: at the ref of the other mode, the
+// repository may hold one.
+func TestAChangeOfModeForgetsTheComposeExampleOfTheLastCheck(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	gitAppsIn(t)
+	withFakeGitDocker(t)
+	ctx := context.Background()
+	url, work := newTestRemote(t)
+	gitShell(t, work, "git checkout -q -b bare && git rm -q compose.yaml && git commit -qm bare && git tag v1.0.0 && git push -q origin v1.0.0 && git checkout -q main")
+	_, err := CreateGitApp(ctx, GitAppRegistration{Name: "jarvis", URL: url, Access: "none", Follow: gitFollowTags})
+	assert.NilError(t, err)
+	st := checkTestApp(t, "jarvis")
+	assert.Equal(t, st.NoComposeFile, true, st.Check.Error)
+	branch := gitFollowBranch
+
+	view, err := UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch})
+
+	assert.NilError(t, err)
+	assert.Assert(t, view.Check == nil)
+	assert.Assert(t, view.ComposeExample == nil)
+}
+
 // Back on a branch, a local branch holding commits the folder is not on is refused: putting the
 // folder on it would reset it and drop them. Once the owner checks it out there, the folder goes
 // on it as it is.

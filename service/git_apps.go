@@ -343,8 +343,9 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 	}
 	st.Follow, st.Branch = follow, branch
 	if switching {
-		// a check of the other mode says nothing about this one: not checked yet
-		st.Check = nil
+		// a check of the other mode says nothing about this one, nor the compose file it found
+		// missing at another ref: not checked yet
+		st.Check, st.NoComposeFile = nil, false
 	}
 	if changes.TagPattern != nil {
 		st.TagPattern = *changes.TagPattern
