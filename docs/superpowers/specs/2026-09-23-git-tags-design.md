@@ -45,8 +45,9 @@ never goes back to an older release by itself.
 ### The app's view
 
 - `follow`, `tag_pattern`, `prereleases` at the top level.
-- `check` gains `remote_tag` (the highest eligible tag, empty in branch mode or when none is
-  eligible) and `tag_moved` (true when `remote_tag` equals `deployed.tag` and `remote_commit`
+- `check` gains `remote_tag` (the highest eligible tag; empty in branch mode; when none is
+  eligible, the check's error says so and the previous `remote_tag` and `remote_commit` are
+  kept) and `tag_moved` (true when `remote_tag` equals `deployed.tag` and `remote_commit`
   differs from `deployed.commit`).
 - `deployed.tag`, `history[].tag` and `operation.tag`.
 - The view contract test (`git_app_view_internal_test.go`) lists the new keys.
