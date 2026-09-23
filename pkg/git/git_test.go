@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -340,6 +341,29 @@ func TestLsRemoteTagsGivesEachTagTheCommitItNames(t *testing.T) {
 	tags, err = LsRemoteTags(ctx, url, Auth{})
 	assert.NilError(t, err)
 	assert.DeepEqual(t, tags, map[string]string{"v1.0.0": first, "light": first, "v1.1.0": second, "nested": second})
+}
+
+// A hostile remote advertises a tag whose name holds a newline: ls-remote prints the rest of
+// the name as a line of its own, where a strict semver tag names what the remote wrote in
+// place of a commit hash. That line is left out.
+func TestATagListingLineWithoutACommitHashIsLeftOut(t *testing.T) {
+	// the remote is a fake upload-pack reached through ext::, which git refuses unless told
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "protocol.ext.allow")
+	t.Setenv("GIT_CONFIG_VALUE_0", "always")
+
+	oid := strings.Repeat("1", 40)
+	pkt := func(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
+	dir := t.TempDir()
+	advert := filepath.Join(dir, "advert")
+	assert.NilError(t, os.WriteFile(advert, []byte(pkt(oid+" HEAD\x00multi_ack\n")+
+		pkt(oid+" refs/tags/v1.0.0\n--output=pwned\trefs/tags/v99.0.0\n")+"0000"), 0o644))
+	server := filepath.Join(dir, "upload-pack.sh")
+	assert.NilError(t, os.WriteFile(server, []byte("cat '"+advert+"'\ncat >/dev/null\n"), 0o755))
+
+	tags, err := LsRemoteTags(context.Background(), "ext::sh "+server, Auth{})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, tags, map[string]string{"v1.0.0": oid})
 }
 
 // A clone at a tag is in detached HEAD, a tag fetched is its commit, and a commit no ref of

@@ -218,7 +218,9 @@ func DefaultBranch(ctx context.Context, url string, auth Auth) (string, error) {
 
 // LsRemoteTags is every tag of the remote and the commit it names. An annotated tag comes
 // twice: its plain line names the tag object, its peeled line `<name>^{}` the commit, which
-// wins. A name that is no valid ref name is left out, so that it never reaches git.
+// wins. A name that is no valid ref name is left out, so that it never reaches git. So is a
+// line whose hash is no commit hash: a ref name with a newline in it, which a hostile remote
+// can advertise, makes ls-remote print a line of its own that starts with anything.
 func LsRemoteTags(ctx context.Context, url string, auth Auth) (map[string]string, error) {
 	out, err := run(ctx, lsRemoteTimeout, "", auth, "ls-remote", "--tags", "--", url)
 	if err != nil {
@@ -228,6 +230,9 @@ func LsRemoteTags(ctx context.Context, url string, auth Auth) (map[string]string
 	tags := map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
 		hash, ref, _ := strings.Cut(line, "\t")
+		if len(hash) != 40 || strings.Trim(hash, "0123456789abcdef") != "" {
+			continue
+		}
 		name, ok := strings.CutPrefix(ref, "refs/tags/")
 		if !ok {
 			continue
