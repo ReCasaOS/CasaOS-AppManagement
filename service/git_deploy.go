@@ -293,9 +293,10 @@ func runGitDeploy(ctx context.Context, st *gitApp, target, tag string, revert bo
 	subject, _ := git.Subject(ctx, st.Dir, target)
 
 	move := git.FastForward
-	if revert || redeploy || st.followsTags() || (previous != nil && previous.Tag != "") {
+	if previous == nil || revert || redeploy || st.followsTags() || previous.Tag != "" {
 		// tags do not form a line: an app that follows them is moved, never fast-forwarded,
-		// and so is the first deployment on a branch after them
+		// and so is the first deployment on a branch after them, or the first of all, whose
+		// folder may be on a tag the app was cloned at. fetchGitBranch found target on the branch
 		move = git.ResetKeep
 	}
 	if err := move(ctx, st.Dir, target); err != nil {

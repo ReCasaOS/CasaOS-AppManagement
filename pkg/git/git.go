@@ -404,8 +404,8 @@ func FastForward(ctx context.Context, dir, commit string) error {
 }
 
 // ResetKeep moves the checked-out branch, or a detached HEAD, to commit, keeping local
-// changes git can keep. A rollback, a revert, a redeployment and every move of an app that
-// follows tags use it: tags do not form a line.
+// changes git can keep. A rollback, a revert, a redeployment, a first deployment and every move
+// of an app that follows tags use it: tags do not form a line.
 func ResetKeep(ctx context.Context, dir, commit string) error {
 	return moveTo(ctx, dir, "reset", "--keep", commit)
 }

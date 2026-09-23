@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/git"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"gotest.tools/v3/assert"
 )
 
@@ -235,4 +236,35 @@ func TestBackOnABranchWithoutOneTheRemoteMustNameItsDefault(t *testing.T) {
 	info, err := git.Describe(ctx, st.Dir)
 	assert.NilError(t, err)
 	assert.Equal(t, info.Branch, "main")
+}
+
+// An app registered to follow tags, cloned at a tag off its default branch and never deployed,
+// goes back to the branch: its first deployment there moves the folder to the branch's head,
+// which does not descend from that tag.
+func TestAnAppNeverDeployedFollowsItsBranchAfterTags(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	gitAppsIn(t)
+	fake := withFakeGitDocker(t)
+	ctx := context.Background()
+	url, work := newTestRemote(t)
+	first := gitShell(t, work, "git rev-parse HEAD")
+	hotfix := gitShell(t, work, "git checkout -q -b hotfix "+first+" && echo fix > fix.txt && git add fix.txt && git commit -qm fix && git tag -a -m v1.0.1 v1.0.1 && git push -q origin v1.0.1 && git rev-parse HEAD && git checkout -q main")
+	second := pushTestCommit(t, work, "index.html", "v2")
+	_, err := CreateGitApp(ctx, GitAppRegistration{Name: "jarvis", URL: url, Access: "none", Follow: gitFollowTags})
+	assert.NilError(t, err)
+	st := checkTestApp(t, "jarvis")
+	assert.Equal(t, folderHead(t, st.Dir), hotfix)
+	branch := gitFollowBranch
+	_, err = UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch})
+	assert.NilError(t, err)
+
+	st = deployTestApp(t)
+
+	assert.DeepEqual(t, fake.Calls(), []string{"build " + second[:12], "retag " + second[:12], "start " + second[:12]})
+	assert.Equal(t, st.Deployed.Commit, second)
+	assert.Equal(t, st.Deployed.Tag, "")
+	info, err := git.Describe(ctx, st.Dir)
+	assert.NilError(t, err)
+	assert.Equal(t, info.Branch, "main")
+	assert.Equal(t, info.Head, second)
 }
