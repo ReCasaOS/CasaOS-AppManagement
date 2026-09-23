@@ -144,9 +144,9 @@ func gitAppStateOf(st *gitApp) string {
 
 // gitNewCommits reports whether the last check saw a version to deploy: the branch somewhere
 // else than what runs, or for an app that follows tags a tag higher than the one deployed (any
-// other tag, before its first deployment in that mode). A check that found no tag, such as the
-// branch check left from before a switch to tags, sees nothing to deploy. Nothing runs before
-// the first deployment, so nothing is new either.
+// other tag, before its first deployment in that mode). A check that found no tag, such as a
+// branch check an older version kept across a switch to tags, sees nothing to deploy. Nothing
+// runs before the first deployment, so nothing is new either.
 func gitNewCommits(st *gitApp) bool {
 	if st.Deployed == nil || st.Check == nil || st.Check.RemoteCommit == "" || st.Check.RemoteCommit == st.Deployed.Commit {
 		return false

@@ -335,6 +335,10 @@ func UpdateGitApp(ctx context.Context, name string, changes GitAppChanges) (*Git
 		}
 	}
 	st.Follow, st.Branch = follow, branch
+	if switching {
+		// a check of the other mode says nothing about this one: not checked yet
+		st.Check = nil
+	}
 	if changes.TagPattern != nil {
 		st.TagPattern = *changes.TagPattern
 	}

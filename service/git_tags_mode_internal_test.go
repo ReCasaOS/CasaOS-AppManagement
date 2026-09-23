@@ -104,6 +104,34 @@ func TestTheModeOfAClonedAppChangesAndItsFolderFollows(t *testing.T) {
 	assertBadRequest(t, err, "tag pattern")
 }
 
+// A check of one mode says nothing about the other: a change of mode forgets the last check, in
+// both directions, and the app is not checked yet in its new mode. A change that keeps the mode
+// keeps it.
+func TestAChangeOfModeForgetsTheLastCheck(t *testing.T) {
+	_, work := clonedTestApp(t)
+	ctx := context.Background()
+	pushTestTag(t, work, "v1.0.0")
+	tags, branch := gitFollowTags, gitFollowBranch
+
+	view, err := UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch})
+	assert.NilError(t, err)
+	assert.Assert(t, view.Check != nil, "the same mode")
+
+	view, err = UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &tags})
+	assert.NilError(t, err)
+	assert.Assert(t, view.Check == nil, "a branch check, after a switch to tags")
+	st, err := loadGitApp("jarvis")
+	assert.NilError(t, err)
+	assert.Assert(t, st.Check == nil)
+
+	st = checkTestApp(t, "jarvis")
+	assert.Equal(t, st.Check.RemoteTag, "v1.0.0")
+	view, err = UpdateGitApp(ctx, "jarvis", GitAppChanges{Follow: &branch})
+	assert.NilError(t, err)
+	assert.Assert(t, view.Check == nil, "a tag check, after a switch to a branch")
+	assert.Equal(t, view.NewCommits, false)
+}
+
 // Back on a branch without one, the remote names its default: a remote that cannot be read, or
 // that names no valid branch, is a 400 that leaves the app following tags and its folder
 // detached. With the branch given, the remote is not asked.

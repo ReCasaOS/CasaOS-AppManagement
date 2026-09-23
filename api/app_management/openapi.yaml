@@ -1324,9 +1324,9 @@ paths:
 
         `follow` changes the mode. The folder of a cloned app is put on the branch (`branch`,
         or the remote's default when absent) or detached at its commit, its files untouched;
-        `tag_pattern` and `prereleases` are kept either way. After a change, nothing deploys
-        automatically until one deployment by hand in the new mode. 400 for a `branch` while
-        the app follows tags.
+        `tag_pattern` and `prereleases` are kept either way. A change forgets the last check:
+        `check` is null until the next one. After a change, nothing deploys automatically until
+        one deployment by hand in the new mode. 400 for a `branch` while the app follows tags.
       operationId: updateGitApp
       tags:
         - Git methods
