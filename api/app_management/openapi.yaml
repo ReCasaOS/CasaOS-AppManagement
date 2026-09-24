@@ -138,12 +138,15 @@ paths:
 
   /operations:
     get:
-      summary: The operations holding apps right now
+      summary: The operations running on apps right now
       description: |
-        Read from the registry every operation on an app goes through: a backup, a restore,
-        an install, an update, a git app's check, build or deployment, a settings change.
-        One entry per held app, sorted by app. An empty list means nothing runs: the core
-        asks before it updates the box by itself, and waits while anything is listed.
+        What holds an app (a restore, an install, an update, a git app's check, build or
+        deployment, a settings change, a backup that stops the app), and every backup and
+        restore in progress whether or not it holds its app: a backup copied from the running
+        app, as asked or because the app answers DNS, the retention that deletes old runs
+        after a backup, and the box's own backup and restore, listed as `casaos-system`.
+        One entry per app, sorted by app. An empty list means nothing runs: the core asks
+        before it updates the box by itself, and waits while anything is listed.
       operationId: appOperations
       tags:
         - Common methods
@@ -2397,8 +2400,9 @@ components:
         kind:
           type: string
           description: |
-            What holds the app, as a busy app's 409 names it: `backup`, `restore`, `install`,
-            `update`, `deploy`, `check` and so on. Not declared as an enum, for the reason
+            What runs on the app, as a busy app's 409 names it: `backup`, `restore`, `install`,
+            `update`, `deploy`, `check` and so on. An app held while a backup or restore also
+            runs on it is listed under what holds it. Not declared as an enum, for the reason
             given on `GitAppState`.
           example: backup
 

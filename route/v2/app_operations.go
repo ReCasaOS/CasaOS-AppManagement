@@ -8,7 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// AppOperations answers what holds each app right now. The core asks before it updates the
+// AppOperations answers what runs on each app right now. The core asks before it updates the
 // box by itself, as an internal request.
 func (a *AppManagement) AppOperations(ctx echo.Context) error {
 	operations := []codegen.AppOperation{}
