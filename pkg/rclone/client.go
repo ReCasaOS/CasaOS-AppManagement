@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"strings"
@@ -141,6 +142,17 @@ func (c *Client) CreateDestination(name, backend string, parameters map[string]s
 	}
 	if backend == "" {
 		return errors.New("a destination needs a backend, such as s3, sftp or ftp")
+	}
+
+	// A backend that signs in through a browser (onedrive, drive, dropbox) is given
+	// the token rclone authorize printed elsewhere. Asked to refresh it, which is
+	// its default, rclone starts its own sign-in and waits for a browser this box
+	// does not have, and the call times out: keep the token as it is given.
+	if parameters["token"] != "" {
+		if _, set := parameters["config_refresh_token"]; !set {
+			parameters = maps.Clone(parameters)
+			parameters["config_refresh_token"] = "false"
+		}
 	}
 
 	encoded, err := json.Marshal(parameters)

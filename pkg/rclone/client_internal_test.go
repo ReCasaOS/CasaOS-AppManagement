@@ -87,6 +87,45 @@ func TestCreatingADestination(t *testing.T) {
 	}
 }
 
+// A token pasted from rclone authorize is kept as it is: asked to refresh it,
+// rclone would start a sign-in and wait for a browser the box does not have.
+func TestADestinationGivenATokenIsNotSignedInAgain(t *testing.T) {
+	client, seen := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+	given := map[string]string{"token": `{"access_token":"x"}`, "drive_type": "personal"}
+
+	for _, parameters := range []map[string]string{
+		given,
+		{"token": `{"access_token":"x"}`, "config_refresh_token": "true"},
+		{"host": "nas.local"},
+	} {
+		if err := client.CreateDestination("offsite", "onedrive", parameters); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sent := func(i int) map[string]string {
+		var parameters map[string]string
+		if err := json.Unmarshal([]byte((*seen)[i].PostForm.Get("parameters")), &parameters); err != nil {
+			t.Fatal(err)
+		}
+		return parameters
+	}
+	if got := sent(0); got["config_refresh_token"] != "false" || got["token"] == "" || got["drive_type"] != "personal" {
+		t.Fatalf("a token must be kept as given, with the other options: %v", got)
+	}
+	if _, touched := given["config_refresh_token"]; touched {
+		t.Fatal("the caller's map was changed")
+	}
+	if got := sent(1); got["config_refresh_token"] != "true" {
+		t.Fatalf("an explicit choice is the owner's: %v", got)
+	}
+	if _, set := sent(2)["config_refresh_token"]; set {
+		t.Fatal("a backend without a token is left alone")
+	}
+}
+
 func TestADestinationNeedsANameAndABackend(t *testing.T) {
 	client, seen := serverFor(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 
