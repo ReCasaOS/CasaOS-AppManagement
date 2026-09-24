@@ -134,3 +134,28 @@ func TestARestoreIsRefusedWhileTheAppIsBusy(t *testing.T) {
 	assertBusy(t, err)
 	assert.Equal(t, len(restorer.restored), 0)
 }
+
+// The core reads this before it updates the box by itself: every held app once, by name
+// whatever order the holds came in, and nothing once they are let go of.
+func TestRunningOperationsListWhatBeginHolds(t *testing.T) {
+	assert.DeepEqual(t, RunningOperations(), []AppOperation{})
+
+	var ends []func()
+	for _, hold := range []AppOperation{{"jarvis", "deploy"}, {"adguard", "backup"}, {"nextcloud", "update"}, {"bitwarden", "restore"}} {
+		end, err := Begin(hold.App, hold.Kind)
+		assert.NilError(t, err)
+		ends = append(ends, end)
+	}
+
+	want := []AppOperation{{"adguard", "backup"}, {"bitwarden", "restore"}, {"jarvis", "deploy"}, {"nextcloud", "update"}}
+	assert.DeepEqual(t, RunningOperations(), want)
+	assert.DeepEqual(t, RunningOperations(), want)
+
+	ends[0]()
+	assert.DeepEqual(t, RunningOperations(), []AppOperation{{"adguard", "backup"}, {"bitwarden", "restore"}, {"nextcloud", "update"}})
+
+	for _, end := range ends {
+		end()
+	}
+	assert.DeepEqual(t, RunningOperations(), []AppOperation{})
+}

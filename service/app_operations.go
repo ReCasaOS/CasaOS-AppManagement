@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -53,6 +55,27 @@ func Begin(app, kind string) (end func(), err error) {
 			delete(appOperations.running, app)
 		})
 	}, nil
+}
+
+// AppOperation is one app Begin holds, and the kind of operation holding it.
+type AppOperation struct {
+	App  string
+	Kind string
+}
+
+// RunningOperations lists what Begin holds right now, sorted by app so that the same holds
+// always read the same. Empty when nothing runs: the core asks before it updates the box by
+// itself, and waits while anything is listed.
+func RunningOperations() []AppOperation {
+	appOperations.Lock()
+	defer appOperations.Unlock()
+
+	operations := []AppOperation{}
+	for _, app := range slices.Sorted(maps.Keys(appOperations.running)) {
+		operations = append(operations, AppOperation{App: app, Kind: appOperations.running[app]})
+	}
+
+	return operations
 }
 
 // howOftenToAskAgain is the gap between two attempts at a held app. Short enough
