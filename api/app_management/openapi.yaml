@@ -136,6 +136,21 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /operations:
+    get:
+      summary: The operations holding apps right now
+      description: |
+        Read from the registry every operation on an app goes through: a backup, a restore,
+        an install, an update, a git app's check, build or deployment, a settings change.
+        One entry per held app, sorted by app. An empty list means nothing runs: the core
+        asks before it updates the box by itself, and waits while anything is listed.
+      operationId: appOperations
+      tags:
+        - Common methods
+      responses:
+        "200":
+          $ref: "#/components/responses/AppOperationsOK"
+
   /convert:
     post:
       summary: Convert to compose app from another file format
@@ -1913,6 +1928,19 @@ components:
           schema:
             $ref: "#/components/schemas/Info"
 
+    AppOperationsOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            required:
+              - operations
+            properties:
+              operations:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AppOperation"
+
     GlobalSettingOK:
       description: OK
       content:
@@ -2357,6 +2385,22 @@ components:
           type: string
           readOnly: true
           example: "amd64"
+
+    AppOperation:
+      required:
+        - app
+        - kind
+      properties:
+        app:
+          type: string
+          example: jarvis
+        kind:
+          type: string
+          description: |
+            What holds the app, as a busy app's 409 names it: `backup`, `restore`, `install`,
+            `update`, `deploy`, `check` and so on. Not declared as an enum, for the reason
+            given on `GitAppState`.
+          example: backup
 
     GlobalSetting:
       required:
