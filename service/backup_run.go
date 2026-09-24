@@ -108,10 +108,17 @@ func runBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 
 	manifest := PlanBackup(app.Name, inventory, mountpoints)
 	manifest.MarkBindFiles(isRegularFile)
-	manifest.ContainersStopped = opts.HoldStill
 	manifest.Git = gitBackupOrigin(app.Name)
 
-	if opts.HoldStill {
+	hold := opts.HoldStill
+	if hold && servesDNS(app.Services) {
+		hold = false
+		logger.Info("backup not held still: the app answers DNS, and stopped it would take the box's lookups down with it",
+			zap.String("app", app.Name))
+	}
+	manifest.ContainersStopped = hold
+
+	if hold {
 		end, err := beginWaiting(ctx, app.Name, "backup", backupPatience)
 		if err != nil {
 			return manifest, err

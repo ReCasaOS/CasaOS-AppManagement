@@ -34,14 +34,24 @@ func BackupOnDemand(ctx context.Context, app *ComposeApp, docker backupDocker, c
 // Recorded before the error is looked at by the caller: a failure that is not
 // written down is a failure nobody finds out about until they need the backup.
 func finishBackupRecord(record *BackupRunRecord, manifest BackupManifest, err error) {
+	finishBackupRecordWith(record, manifest, err, RecordBackupRun)
+}
+
+// finishBackupRecordWith is finishBackupRecord writing through write, so a test can
+// read what would be written. The record says whether the app was stopped as the
+// run did it, not as it was asked: an app that answers DNS is copied running.
+func finishBackupRecordWith(record *BackupRunRecord, manifest BackupManifest, err error, write func(BackupRunRecord) error) {
 	record.FinishedAt = time.Now()
+	if !record.Restore {
+		record.ContainersStopped = manifest.ContainersStopped
+	}
 	record.Copied = len(manifest.Operations)
 	record.SkippedCount = len(manifest.Skipped)
 	if err != nil {
 		record.Error = err.Error()
 	}
 
-	if logErr := RecordBackupRun(*record); logErr != nil {
+	if logErr := write(*record); logErr != nil {
 		logger.Error("a backup ran and could not be written down", zap.Error(logErr), zap.String("app", record.App))
 	}
 }
