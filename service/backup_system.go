@@ -111,6 +111,9 @@ func RunSystemBackup(ctx context.Context, copier BackupCopier, units unitControl
 		return BackupManifest{}, errors.New("a backup needs a name to file it under")
 	}
 
+	// it holds services, never an app, so Begin does not see it: see markInProgress
+	defer markInProgress(SystemBackupName, "backup")()
+
 	ctx = backupEventContext(ctx, &ComposeApp{Name: SystemBackupName}, opts.Destination, opts.Stamp, "backup")
 	publishBackupBegin(ctx)
 
@@ -192,6 +195,8 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 	if opts.Stamp == "" {
 		return report, ErrRestoreNeedsStamp
 	}
+
+	defer markInProgress(SystemBackupName, "restore")()
 
 	root := RootFor(SystemBackupName, opts.Stamp)
 	manifest, err := fetchManifest(ctx, restorer, opts.Destination, root)

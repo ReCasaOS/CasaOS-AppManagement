@@ -2,13 +2,16 @@ package service
 
 import (
 	"context"
+	stdjson "encoding/json"
 	"errors"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"github.com/compose-spec/compose-go/v2/types"
 	"gotest.tools/v3/assert"
 )
 
@@ -158,4 +161,160 @@ func TestRunningOperationsListWhatBeginHolds(t *testing.T) {
 		end()
 	}
 	assert.DeepEqual(t, RunningOperations(), []AppOperation{})
+}
+
+// A mark is listed like a hold and refuses nothing: a backup copied from the running app
+// lets a settings save through, as it always did. One entry per app, the hold's kind over
+// the mark's, and the app stays listed until its last mark is done.
+func TestAMarkIsListedAndRefusesNothing(t *testing.T) {
+	first := markInProgress("demo", "backup")
+	second := markInProgress("demo", "backup")
+	assert.DeepEqual(t, RunningOperations(), []AppOperation{{"demo", "backup"}})
+
+	end, err := Begin("demo", "save")
+	assert.NilError(t, err, "a mark is not a hold")
+	assert.DeepEqual(t, RunningOperations(), []AppOperation{{"demo", "save"}})
+	end()
+
+	first()
+	first() // twice is harmless
+	// the second backup still runs
+	assert.DeepEqual(t, RunningOperations(), []AppOperation{{"demo", "backup"}})
+
+	second()
+	assert.DeepEqual(t, RunningOperations(), []AppOperation{})
+}
+
+// What GET /operations would have answered at each step of a copy.
+type watchingCopier struct {
+	fakeCopier
+	seen [][]AppOperation
+}
+
+func (w *watchingCopier) CopyDirectory(ctx context.Context, source, destinationName, destination string) error {
+	w.seen = append(w.seen, RunningOperations())
+
+	return w.fakeCopier.CopyDirectory(ctx, source, destinationName, destination)
+}
+
+func (w *watchingCopier) CopyFile(ctx context.Context, source, destinationName, destination string) error {
+	w.seen = append(w.seen, RunningOperations())
+
+	return w.fakeCopier.CopyFile(ctx, source, destinationName, destination)
+}
+
+type watchingRestorer struct {
+	fakeRestorer
+	seen [][]AppOperation
+}
+
+func (w *watchingRestorer) RestoreDirectory(ctx context.Context, destination, remotePath, hostPath string) error {
+	w.seen = append(w.seen, RunningOperations())
+
+	return w.fakeRestorer.RestoreDirectory(ctx, destination, remotePath, hostPath)
+}
+
+func (w *watchingRestorer) RestoreFile(ctx context.Context, destination, remotePath, hostPath string) error {
+	w.seen = append(w.seen, RunningOperations())
+
+	return w.fakeRestorer.RestoreFile(ctx, destination, remotePath, hostPath)
+}
+
+type watchingRunner struct {
+	fakeRunner
+	seen [][]AppOperation
+}
+
+func (w *watchingRunner) Purge(ctx context.Context, destination, remotePath string) error {
+	w.seen = append(w.seen, RunningOperations())
+
+	return w.fakeRunner.Purge(ctx, destination, remotePath)
+}
+
+// listedThroughout checks that every step of a copy saw the one operation, and that the
+// list is empty again once it is over.
+func listedThroughout(t *testing.T, seen [][]AppOperation, want AppOperation) {
+	t.Helper()
+
+	assert.Assert(t, len(seen) > 0, "nothing was copied")
+	for _, operations := range seen {
+		assert.DeepEqual(t, operations, []AppOperation{want})
+	}
+	assert.DeepEqual(t, RunningOperations(), []AppOperation{})
+}
+
+// The core reads the list before it updates the box, and the update stops app-management
+// with whatever it is copying. So a backup is listed for as long as it copies, whether it
+// holds the app still or copies it running: as it does when asked to, and always for an
+// app that answers DNS, which is never stopped.
+func TestABackupIsListedWhileItCopiesHeldStillOrNot(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	logInTempDir(t)
+
+	answersDNS := func(app *ComposeApp) {
+		service := app.Services["app"]
+		service.Ports = []types.ServicePortConfig{{Target: 53, Published: "53", Protocol: "udp"}}
+		app.Services["app"] = service
+	}
+
+	for _, run := range []struct {
+		name string
+		hold bool
+		dns  bool
+	}{{"copied running", false, false}, {"held still", true, false}, {"answers DNS", true, true}} {
+		t.Run(run.name, func(t *testing.T) {
+			app, _ := appWithOneBindAndOneVolume(t)
+			if run.dns {
+				answersDNS(app)
+			}
+			copier := &watchingCopier{}
+
+			manifest, err := RunBackup(context.Background(), app, &fakeBackupDocker{mountpoints: demoMountpoints()}, copier, BackupOptions{
+				Destination: "offsite", Stamp: restoreStamp, HoldStill: run.hold, Containers: running("c1"),
+			})
+			assert.NilError(t, err)
+			assert.Equal(t, manifest.ContainersStopped, run.hold && !run.dns)
+			listedThroughout(t, copier.seen, AppOperation{"demo", "backup"})
+		})
+	}
+}
+
+// The box's own backup and restore hold services, not an app: listed all the same, under
+// the name the box's backups are filed under.
+func TestTheBoxsBackupAndRestoreAreListedWhileTheyCopy(t *testing.T) {
+	logInTempDir(t)
+
+	copier := &watchingCopier{}
+	_, err := RunSystemBackup(context.Background(), copier, &fakeUnits{}, SystemBackupOptions{
+		Destination: "offsite", Stamp: restoreStamp, HoldStill: true,
+	})
+	assert.NilError(t, err)
+	listedThroughout(t, copier.seen, AppOperation{SystemBackupName, "backup"})
+
+	raw, err := stdjson.Marshal(PlanBackup(SystemBackupName, SystemBackupInventory(func(string) bool { return true }), nil))
+	assert.NilError(t, err)
+	restorer := &watchingRestorer{fakeRestorer: fakeRestorer{files: map[string][]byte{
+		path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw,
+	}}}
+	_, err = RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{
+		Destination: "offsite", Stamp: restoreStamp,
+	})
+	assert.NilError(t, err)
+	listedThroughout(t, restorer.seen, AppOperation{SystemBackupName, "restore"})
+}
+
+// Retention deletes the old runs once a backup is written, after the backup has let go of
+// its app: a purge cut short is a backup interrupted too.
+func TestTheRetentionAfterAScheduledBackupIsListedWhileItDeletes(t *testing.T) {
+	schedulerInTempDir(t)
+
+	schedule := daily(time.Time{})
+	schedule.Keep = 1
+	assert.NilError(t, SaveBackupSchedules([]BackupSchedule{schedule}))
+
+	runner := &watchingRunner{fakeRunner: fakeRunner{present: []string{"2026-09-09T03-00-00Z", "2026-09-10T03-00-00Z"}}}
+	RunDueBackups(context.Background(), at(10, 7, 0), runner)
+
+	assert.Equal(t, len(runner.purged), 1)
+	listedThroughout(t, runner.seen, AppOperation{"nextcloud", "backup"})
 }

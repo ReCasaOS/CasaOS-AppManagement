@@ -87,6 +87,9 @@ func RestoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 		return report, ErrRestoreNeedsStamp
 	}
 
+	// listed from the start, before the hold it takes once the manifest is read
+	defer markInProgress(opts.App, "restore")()
+
 	root := RootFor(opts.App, opts.Stamp)
 
 	manifest, err := fetchManifest(ctx, restorer, opts.Destination, root)

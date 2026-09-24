@@ -166,6 +166,9 @@ func ApplyRetention(ctx context.Context, destination, app string, keep int, runn
 		return
 	}
 
+	// the tail of a backup, run once the backup has let go of the app: see markInProgress
+	defer markInProgress(app, "backup")()
+
 	stamps, err := runner.Runs(destination, app)
 	if err != nil {
 		logger.Error("could not list what is already at the destination, so nothing was deleted",

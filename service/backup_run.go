@@ -72,6 +72,9 @@ func RunBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 		return BackupManifest{}, errors.New("a backup needs a name to file it under")
 	}
 
+	// listed from the start, held still or not: see markInProgress
+	defer markInProgress(app.Name, "backup")()
+
 	ctx = backupEventContext(ctx, app, opts.Destination, opts.Stamp, "backup")
 	publishBackupBegin(ctx)
 	manifest, err := runBackup(ctx, app, docker, copier, opts)

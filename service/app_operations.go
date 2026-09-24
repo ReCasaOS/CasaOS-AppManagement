@@ -33,7 +33,9 @@ func (e ErrAppBusy) Error() string {
 var appOperations = struct {
 	sync.Mutex
 	running map[string]string
-}{running: map[string]string{}}
+	// marked is what runs on an app without holding it: see markInProgress
+	marked map[string][]string
+}{running: map[string]string{}, marked: map[string][]string{}}
 
 // Begin claims app for an operation of the given kind, or refuses with ErrAppBusy. end
 // releases it; calling it more than once is harmless.
@@ -57,22 +59,63 @@ func Begin(app, kind string) (end func(), err error) {
 	}, nil
 }
 
-// AppOperation is one app Begin holds, and the kind of operation holding it.
+// markInProgress says that an operation of the given kind runs on app, without claiming
+// it: it never refuses, and it stops nothing else from running. done says it is over;
+// calling it more than once is harmless.
+//
+// It is for what RunningOperations must list and Begin never sees. A backup copied from
+// the running app, as asked or because the app answers DNS, takes no hold; nor does the
+// box's own backup or restore, which hold services rather than an app; nor the retention
+// that deletes old runs once a backup is written. The core reads the list before it
+// updates the box, and the update stops app-management with whatever it is copying.
+func markInProgress(app, kind string) (done func()) {
+	appOperations.Lock()
+	defer appOperations.Unlock()
+
+	appOperations.marked[app] = append(appOperations.marked[app], kind)
+
+	var once sync.Once
+
+	return func() {
+		once.Do(func() {
+			appOperations.Lock()
+			defer appOperations.Unlock()
+
+			kinds := appOperations.marked[app]
+			i := slices.Index(kinds, kind)
+			if kinds = slices.Delete(kinds, i, i+1); len(kinds) == 0 {
+				delete(appOperations.marked, app)
+			} else {
+				appOperations.marked[app] = kinds
+			}
+		})
+	}
+}
+
+// AppOperation is one app something runs on, and the kind of operation it is.
 type AppOperation struct {
 	App  string
 	Kind string
 }
 
-// RunningOperations lists what Begin holds right now, sorted by app so that the same holds
-// always read the same. Empty when nothing runs: the core asks before it updates the box by
-// itself, and waits while anything is listed.
+// RunningOperations lists what runs on the apps right now: what Begin holds, and what
+// markInProgress says runs without a hold. One entry per app, the hold's kind over a mark's,
+// sorted by app so that the same operations always read the same. Empty when nothing runs:
+// the core asks before it updates the box by itself, and waits while anything is listed.
 func RunningOperations() []AppOperation {
 	appOperations.Lock()
 	defer appOperations.Unlock()
 
+	kinds := maps.Clone(appOperations.running)
+	for app, marked := range appOperations.marked {
+		if _, held := kinds[app]; !held {
+			kinds[app] = marked[0]
+		}
+	}
+
 	operations := []AppOperation{}
-	for _, app := range slices.Sorted(maps.Keys(appOperations.running)) {
-		operations = append(operations, AppOperation{App: app, Kind: appOperations.running[app]})
+	for _, app := range slices.Sorted(maps.Keys(kinds)) {
+		operations = append(operations, AppOperation{App: app, Kind: kinds[app]})
 	}
 
 	return operations
