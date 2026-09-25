@@ -115,7 +115,15 @@ func InitV2Router() http.Handler {
 	// })
 
 	e.Use(middleware.OapiRequestValidatorWithOptions(_swagger, &middleware.Options{
-		Options: openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc},
+		Options: openapi3filter.Options{
+			AuthenticationFunc: openapi3filter.NoopAuthenticationFunc,
+			// The dashboard edits what it read and sends it back whole, readOnly
+			// fields included (a schedule's last_run); the handlers ignore those and
+			// keep their own. kin-openapi refuses them by default since the version
+			// this project moved to, which made every schedule unsavable
+			// (ReCasaOS/CasaOS#7).
+			ExcludeReadOnlyValidations: true,
+		},
 		Skipper: isGitWebhook,
 	}))
 
