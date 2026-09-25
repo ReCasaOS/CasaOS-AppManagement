@@ -170,6 +170,17 @@ func beginWaiting(ctx context.Context, app, kind string, patience time.Duration)
 	}
 }
 
+// held reports whether an operation holds app: what Begin claimed and has not let go. A
+// mark is no hold: what runs without one leaves the app's containers alone.
+func held(app string) bool {
+	appOperations.Lock()
+	defer appOperations.Unlock()
+
+	_, ok := appOperations.running[app]
+
+	return ok
+}
+
 // handOver renames what holds app when an operation passes its hold to one it starts, so
 // that a refusal names what really runs.
 func handOver(app, kind string) {

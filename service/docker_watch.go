@@ -1,11 +1,18 @@
 package service
 
 import (
+	"context"
 	"slices"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen/message_bus"
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"github.com/docker/compose/v5/pkg/api"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/filters"
+	client2 "github.com/docker/docker/client"
+	"go.uber.org/zap"
 )
 
 // The Docker watch: what happens to an app's containers when nobody asked for it.
@@ -152,4 +159,98 @@ func containerPublished(eventType message_bus.EventType, app, container string) 
 		common.PropertyTypeAppName.Name:       app,
 		common.PropertyTypeContainerName.Name: container,
 	}}
+}
+
+// longestPause is how long a broken event stream waits at most before it is followed
+// again. A stream that lived longer than this broke for a new reason: the next pause
+// starts short again.
+const longestPause = time.Minute
+
+// WatchDocker follows Docker's events for the apps' containers until ctx ends, and
+// publishes what they mean. A stream that breaks -- Docker restarting, or not up yet --
+// is followed again after a pause that doubles up to longestPause.
+func WatchDocker(ctx context.Context) {
+	watch := newDockerWatch()
+	pause := time.Second
+
+	for {
+		followed := time.Now()
+		err := watch.follow(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Nobody watched while it was broken: a container runs again once it says so,
+		// and none that may have stopped meanwhile is taken for healthy.
+		for _, c := range watch.containers {
+			c.running = false
+		}
+
+		if time.Since(followed) > longestPause {
+			pause = time.Second
+		}
+		logger.Error("the Docker event stream broke, following it again", zap.Error(err), zap.Duration("in", pause))
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pause):
+		}
+		pause = min(2*pause, longestPause)
+	}
+}
+
+// follow reads one stream of events until it breaks, and returns why.
+func (w *dockerWatch) follow(ctx context.Context) error {
+	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+
+	// ends the client's reader with the stream
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	messages, errs := cli.Events(ctx, events.ListOptions{Filters: filters.NewArgs(
+		filters.Arg("type", string(events.ContainerEventType)),
+		filters.Arg("label", api.ProjectLabel),
+		filters.Arg("event", string(events.ActionDie)),
+		filters.Arg("event", string(events.ActionKill)),
+		filters.Arg("event", string(events.ActionStart)),
+		filters.Arg("event", string(events.ActionHealthStatus)), // a prefix to Docker: every status
+	)})
+
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for {
+		var out []published
+
+		select {
+		case err := <-errs:
+			return err
+		case now := <-ticker.C:
+			out = w.tick(now)
+		case m := <-messages:
+			app := m.Actor.Attributes[api.ProjectLabel]
+			// a one-off container is somebody's `docker compose run`, not the app
+			if app == "" || m.Actor.Attributes[api.OneoffLabel] == "True" {
+				continue
+			}
+
+			out = w.observe(containerEvent{
+				at:        time.Unix(0, m.TimeNano),
+				app:       app,
+				container: m.Actor.Attributes["name"],
+				action:    string(m.Action),
+				exitCode:  m.Actor.Attributes["exitCode"],
+			}, held(app))
+		}
+
+		// never held up by the message bus: the next event is already on its way
+		for _, p := range out {
+			go PublishEventWrapper(ctx, p.eventType, p.properties)
+		}
+	}
 }

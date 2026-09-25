@@ -169,6 +169,11 @@ func main() {
 			panic(err)
 		}
 
+		// An app's container that crashes, turns unhealthy or keeps restarting, told on
+		// the message bus for the core's alerts. Docker's own events rather than a tick:
+		// a crash is news the moment it happens.
+		go service.WatchDocker(ctx)
+
 		crontab.Start()
 		defer crontab.Stop()
 
