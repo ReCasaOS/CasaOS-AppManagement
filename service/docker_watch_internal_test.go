@@ -9,13 +9,14 @@ import (
 )
 
 // step is one thing that happens to the container jarvis-web-1 of the app jarvis, at
-// minutes after the first: a Docker event, or with no action the watch's tick.
+// minutes after the first: a Docker event, the listing the watch resumes from after a
+// break in the event stream, or with no action the watch's tick.
 type step struct {
 	at     float64
 	action string
 	exit   string // of a die
 	held   bool   // an operation holds jarvis
-	want   string // the event published, if any
+	want   string // the events published, if any
 }
 
 var (
@@ -23,6 +24,13 @@ var (
 	unhealthy  = common.EventTypeAppContainerUnhealthy.Name
 	restarting = common.EventTypeAppContainerRestarting.Name
 	healthy    = common.EventTypeAppContainerHealthy.Name
+)
+
+// what the listing of the running containers says of the step's container
+const (
+	listed          = "listed running"
+	listedUnhealthy = "listed unhealthy"
+	notListed       = "not listed"
 )
 
 func TestTheDockerWatchDecisions(t *testing.T) {
@@ -47,6 +55,11 @@ func TestTheDockerWatchDecisions(t *testing.T) {
 			{at: 0, action: "die", exit: "1", want: died},
 			{at: 0.1, action: "start"},
 			{at: 0.2, action: "die", exit: "1", want: died},
+		}},
+		{"1. a crash stops the container", []step{
+			{at: 0, action: "start"},
+			{at: 1, action: "die", exit: "1", want: died},
+			{at: 31},
 		}},
 
 		{"2. unhealthy", []step{
@@ -124,6 +137,52 @@ func TestTheDockerWatchDecisions(t *testing.T) {
 			{at: 0, action: "start"},
 			{at: 30},
 		}},
+		{"4. a container forgotten, then unhealthy, then healthy", []step{
+			{at: 0, action: "start"},
+			{at: 20}, // forgotten: nothing happened to it for ten minutes
+			{at: 60, action: "health_status: unhealthy", want: unhealthy},
+			{at: 65, action: "health_status: healthy"},
+			{at: 74.9},
+			{at: 75, want: healthy},
+		}},
+		{"4. unhealthy as the watch starts, then healthy", []step{
+			{at: 0, action: "health_status: unhealthy", want: unhealthy},
+			{at: 1, action: "health_status: healthy"},
+			{at: 10.9},
+			{at: 11, want: healthy},
+		}},
+		{"4. a health status says the container runs, even when its start went unseen", []step{
+			{at: 0, action: "die", exit: "1", want: died},
+			{at: 1, action: "health_status: healthy"},
+			{at: 10.9},
+			{at: 11, want: healthy},
+		}},
+
+		{"4. after a break in the stream, a container that started meanwhile", []step{
+			{at: 0, action: "die", exit: "1", want: died},
+			{at: 5, action: listed},
+			{at: 14.9},
+			{at: 15, want: healthy},
+		}},
+		{"4. after a break in the stream, a container that stopped meanwhile", []step{
+			{at: 0, action: "die", exit: "1", want: died},
+			{at: 1, action: "start"},
+			{at: 5, action: notListed},
+			{at: 30},
+		}},
+		{"4. after a break in the stream, a container still unhealthy", []step{
+			{at: 0, action: "health_status: unhealthy", want: unhealthy},
+			{at: 5, action: listedUnhealthy},
+			{at: 30},
+			{at: 31, action: "health_status: healthy"},
+			{at: 41, want: healthy},
+		}},
+		{"4. after a break in the stream, a container that recovered meanwhile", []step{
+			{at: 0, action: "health_status: unhealthy", want: unhealthy},
+			{at: 5, action: listed},
+			{at: 14.9},
+			{at: 15, want: healthy},
+		}},
 	}
 
 	for _, c := range cases {
@@ -133,9 +192,16 @@ func TestTheDockerWatchDecisions(t *testing.T) {
 				at := first.Add(time.Duration(s.at * float64(time.Minute)))
 
 				var out []published
-				if s.action == "" {
+				switch s.action {
+				case "":
 					out = watch.tick(at)
-				} else {
+				case listed, listedUnhealthy, notListed:
+					running := map[string]bool{}
+					if s.action != notListed {
+						running["jarvis-web-1"] = s.action == listedUnhealthy
+					}
+					watch.resume(at, running)
+				default:
 					out = watch.observe(containerEvent{at: at, app: "jarvis", container: "jarvis-web-1", action: s.action, exitCode: s.exit}, s.held)
 				}
 

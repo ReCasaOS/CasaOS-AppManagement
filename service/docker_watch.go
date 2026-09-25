@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen/message_bus"
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/docker/compose/v5/pkg/api"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	client2 "github.com/docker/docker/client"
@@ -127,10 +129,14 @@ func (w *dockerWatch) observe(e containerEvent, held bool) []published {
 		c.unhealthy, c.troubled = true, true
 
 		return []published{containerPublished(common.EventTypeAppContainerUnhealthy, e.app, e.container)}
+	// Docker checks the health of a running container only: a health status says it
+	// runs, even one whose start the watch did not see -- it was forgotten, or ran
+	// before the watch did.
 	case "health_status: healthy":
-		if c.unhealthy {
-			c.unhealthy, c.fineSince = false, e.at
+		if c.unhealthy || !c.running {
+			c.fineSince = e.at
 		}
+		c.running, c.unhealthy = true, false
 	}
 
 	return nil
@@ -152,6 +158,17 @@ func (w *dockerWatch) tick(now time.Time) []published {
 	}
 
 	return out
+}
+
+// resume takes the watch up again at now, after a break in the event stream, from the
+// containers that run: by name, whether each is unhealthy. Nobody watched meanwhile: a
+// container may have stopped, started or recovered, and one that runs has run well
+// since now at best.
+func (w *dockerWatch) resume(now time.Time, running map[string]bool) {
+	for name, c := range w.containers {
+		unhealthy, runs := running[name]
+		c.running, c.unhealthy, c.fineSince = runs, unhealthy, now
+	}
 }
 
 func containerPublished(eventType message_bus.EventType, app, container string) published {
@@ -178,12 +195,6 @@ func WatchDocker(ctx context.Context) {
 		err := watch.follow(ctx)
 		if ctx.Err() != nil {
 			return
-		}
-
-		// Nobody watched while it was broken: a container runs again once it says so,
-		// and none that may have stopped meanwhile is taken for healthy.
-		for _, c := range watch.containers {
-			c.running = false
 		}
 
 		if time.Since(followed) > longestPause {
@@ -220,6 +231,24 @@ func (w *dockerWatch) follow(ctx context.Context) error {
 		filters.Arg("event", string(events.ActionStart)),
 		filters.Arg("event", string(events.ActionHealthStatus)), // a prefix to Docker: every status
 	)})
+
+	// What happened while nobody watched, from the containers that run. Listed once
+	// Docker streams the events, so that nothing happens in between unseen.
+	list, err := cli.ContainerList(ctx, container.ListOptions{Filters: filters.NewArgs(
+		filters.Arg("label", api.ProjectLabel),
+		filters.Arg("status", string(container.StateRunning)),
+	)})
+	if err != nil {
+		return err
+	}
+	running := map[string]bool{}
+	for _, c := range list {
+		for _, name := range c.Names {
+			// Docker's status of an unhealthy container: "Up 2 hours (unhealthy)"
+			running[strings.TrimPrefix(name, "/")] = strings.Contains(c.Status, "(unhealthy)")
+		}
+	}
+	w.resume(time.Now(), running)
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
