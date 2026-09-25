@@ -8,12 +8,13 @@ import (
 	"gotest.tools/v3/assert"
 )
 
-// step is one thing that happens to the container jarvis-web-1 of the app jarvis, at
-// minutes after the first: a Docker event, the listing the watch resumes from after a
-// break in the event stream, or with no action the watch's tick.
+// step is one thing that happens to a container of the app jarvis, at minutes after the
+// first: a Docker event, the listing the watch resumes from after a break in the event
+// stream, or with no action the watch's tick.
 type step struct {
 	at     float64
 	action string
+	on     string // the container, jarvis-web-1 if empty
 	exit   string // of a die
 	held   bool   // an operation holds jarvis
 	want   string // the events published, if any
@@ -157,6 +158,16 @@ func TestTheDockerWatchDecisions(t *testing.T) {
 			{at: 10.9},
 			{at: 11, want: healthy},
 		}},
+		{"4. an app is healthy again once all its containers are", []step{
+			{at: 1, action: "health_status: unhealthy", want: unhealthy},
+			{at: 2, action: "die", on: "jarvis-db-1", exit: "1", want: died},
+			{at: 2.1, action: "start", on: "jarvis-db-1"},
+			{at: 20},
+			{at: 21, action: "health_status: healthy"},
+			{at: 30.9},
+			{at: 31, want: healthy}, // once, for the app
+			{at: 50},
+		}},
 
 		{"4. after a break in the stream, a container that started meanwhile", []step{
 			{at: 0, action: "die", exit: "1", want: died},
@@ -190,6 +201,10 @@ func TestTheDockerWatchDecisions(t *testing.T) {
 			watch := newDockerWatch()
 			for i, s := range c.steps {
 				at := first.Add(time.Duration(s.at * float64(time.Minute)))
+				container := s.on
+				if container == "" {
+					container = "jarvis-web-1"
+				}
 
 				var out []published
 				switch s.action {
@@ -198,11 +213,11 @@ func TestTheDockerWatchDecisions(t *testing.T) {
 				case listed, listedUnhealthy, notListed:
 					running := map[string]bool{}
 					if s.action != notListed {
-						running["jarvis-web-1"] = s.action == listedUnhealthy
+						running[container] = s.action == listedUnhealthy
 					}
 					watch.resume(at, running)
 				default:
-					out = watch.observe(containerEvent{at: at, app: "jarvis", container: "jarvis-web-1", action: s.action, exitCode: s.exit}, s.held)
+					out = watch.observe(containerEvent{at: at, app: "jarvis", container: container, action: s.action, exitCode: s.exit}, s.held)
 				}
 
 				got := ""

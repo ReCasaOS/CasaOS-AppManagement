@@ -32,8 +32,9 @@ import (
 //     ends leaves it unhealthy, and Docker says so only once;
 //  3. more than restartsForALoop starts of a container within watchWindow, none of them
 //     asked for nor an operation's, is app:container-restarting, once an episode;
-//  4. after one of those, the container running and not unhealthy for watchWindow is
-//     app:container-healthy, which ends the episode.
+//  4. after those, every troubled container of the app running and not unhealthy for
+//     watchWindow is app:container-healthy, once for the app, which ends the episode:
+//     the core's alert is the app's, not a container's.
 
 const (
 	// watchWindow is how recent the starts of a restart loop are, and how long a
@@ -142,19 +143,35 @@ func (w *dockerWatch) observe(e containerEvent, held bool) []published {
 	return nil
 }
 
-// tick returns what the time passing publishes at now: 4, for a troubled container that
-// has run well for watchWindow. A container nothing happened to for as long, and that
-// owes nothing, is forgotten.
+// tick returns what the time passing publishes at now: 4, for an app whose troubled
+// containers have all run well for watchWindow. A container nothing happened to for as
+// long, and that owes nothing, is forgotten.
 func (w *dockerWatch) tick(now time.Time) []published {
-	var out []published
+	well := map[string][]string{} // by app, its troubled containers that run well again
+	unwell := map[string]bool{}   // the apps with a troubled container that does not
 	for name, c := range w.containers {
 		switch {
-		case c.troubled && c.running && !c.unhealthy && now.Sub(c.fineSince) >= watchWindow:
-			c.troubled, c.looping = false, false
-			out = append(out, containerPublished(common.EventTypeAppContainerHealthy, c.app, name))
-		case !c.troubled && now.Sub(c.last) >= watchWindow:
-			delete(w.containers, name)
+		case !c.troubled:
+			if now.Sub(c.last) >= watchWindow {
+				delete(w.containers, name)
+			}
+		case c.running && !c.unhealthy && now.Sub(c.fineSince) >= watchWindow:
+			well[c.app] = append(well[c.app], name)
+		default:
+			unwell[c.app] = true
 		}
+	}
+
+	var out []published
+	for app, names := range well {
+		if unwell[app] {
+			continue
+		}
+		for _, name := range names {
+			w.containers[name].troubled, w.containers[name].looping = false, false
+		}
+		// one event for the app, which names one of its containers
+		out = append(out, containerPublished(common.EventTypeAppContainerHealthy, app, slices.Min(names)))
 	}
 
 	return out
