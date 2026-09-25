@@ -65,6 +65,12 @@ var (
 		Description: utils.Ptr("name of the container"),
 		Example:     utils.Ptr("hello-world"),
 	}
+
+	PropertyTypeContainerExitCode = message_bus.PropertyType{
+		Name:        "docker:container:exit-code",
+		Description: utils.Ptr("exit code of the container's main process, as Docker reports it"),
+		Example:     utils.Ptr("1"),
+	}
 )
 
 // image properties
@@ -128,6 +134,7 @@ var EventTypes = []message_bus.EventType{
 	EventTypeAppRestartBegin, EventTypeAppRestartEnd, EventTypeAppRestartError,
 	EventTypeAppGitBuildBegin, EventTypeAppGitBuildProgress, EventTypeAppGitBuildEnd, EventTypeAppGitBuildError,
 	EventTypeAppGitDeployEnd, EventTypeAppGitDeployError,
+	EventTypeAppContainerDied, EventTypeAppContainerUnhealthy, EventTypeAppContainerRestarting, EventTypeAppContainerHealthy,
 
 	// image
 	EventTypeImagePullBegin, EventTypeImagePullProgress, EventTypeImagePullEnd, EventTypeImagePullError,
@@ -440,6 +447,48 @@ var (
 		PropertyTypeList: []message_bus.PropertyType{
 			PropertyTypeAppName,
 			PropertyTypeMessage,
+		},
+	}
+)
+
+// event types for what happens to an app's containers when nobody asked for it, from the
+// Docker watch. A container that crashed, turned unhealthy or keeps restarting says
+// healthy once it has run for ten minutes without being unhealthy.
+var (
+	EventTypeAppContainerDied = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:container-died",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeContainerName,
+			PropertyTypeContainerExitCode,
+		},
+	}
+
+	EventTypeAppContainerUnhealthy = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:container-unhealthy",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeContainerName,
+		},
+	}
+
+	EventTypeAppContainerRestarting = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:container-restarting",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeContainerName,
+		},
+	}
+
+	EventTypeAppContainerHealthy = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:container-healthy",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeContainerName,
 		},
 	}
 )

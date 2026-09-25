@@ -7,8 +7,9 @@ import (
 	"gotest.tools/v3/assert"
 )
 
-// The dashboard listens for these by name: each is registered, with what it carries.
-func TestGitAppEventsAreRegisteredWithTheirProperties(t *testing.T) {
+// The dashboard and the core's alerts listen for these by name: each is registered, with
+// what it carries.
+func TestAppEventsAreRegisteredWithTheirProperties(t *testing.T) {
 	registered := map[string][]string{}
 	for _, eventType := range common.EventTypes {
 		properties := []string{}
@@ -25,6 +26,11 @@ func TestGitAppEventsAreRegisteredWithTheirProperties(t *testing.T) {
 		"app:git-build-error":    {"app:name", "message"},
 		"app:git-deploy-end":     {"app:name"},
 		"app:git-deploy-error":   {"app:name", "message"},
+
+		"app:container-died":       {"app:name", "docker:container:name", "docker:container:exit-code"},
+		"app:container-unhealthy":  {"app:name", "docker:container:name"},
+		"app:container-restarting": {"app:name", "docker:container:name"},
+		"app:container-healthy":    {"app:name", "docker:container:name"},
 	} {
 		assert.DeepEqual(t, registered[name], properties)
 	}
