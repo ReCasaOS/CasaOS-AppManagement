@@ -185,14 +185,18 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 		item.StoreAppID = composeAppStoreInfo.StoreAppID
 		item.Title = &composeAppStoreInfo.Title
 		item.IsUncontrolled = composeAppStoreInfo.IsUncontrolled
+	}
 
-		// not `*composeAppStoreInfo.Main`: store info over an empty service list leaves
-		// Main nil, and that dereference has the same shape as the one that took the
-		// whole service down on a compose file with no `x-casaos`
-		mainApp := composeApp.App(composeApp.MainServiceName())
-		if mainApp != nil {
-			item.Image = &mainApp.Image // Hengxin needs this image property for some reason...
-		}
+	// The image is the compose file's, not the catalogue's, and the dashboard tells
+	// an app by it (the Syncthing widget looks for syncthing/syncthing). Read inside
+	// the block above, a stack written by hand, with no `x-casaos`, had none, and a
+	// running Syncthing was offered for install. Not `*composeAppStoreInfo.Main`:
+	// store info over an empty service list leaves Main nil, and that dereference
+	// has the same shape as the one that took the whole service down on a compose
+	// file with no `x-casaos`.
+	mainApp := composeApp.App(composeApp.MainServiceName())
+	if mainApp != nil {
+		item.Image = &mainApp.Image
 	}
 
 	// item type

@@ -128,6 +128,13 @@ func TestWebAppGridItemCarriesStatusWithoutStoreInfo(t *testing.T) {
 	assert.DeepEqual(t, *gridItem.Title, map[string]string{common.DefaultLanguage: "gluetun-stack"})
 	assert.Assert(t, gridItem.Icon == nil)
 
+	// the image too: it comes from the compose file, and the dashboard recognises an
+	// app by it (the Syncthing widget offered to install a running Syncthing)
+	mainApp := composeApp.App(composeApp.MainServiceName())
+	assert.Assert(t, mainApp != nil && mainApp.Image != "")
+	assert.Assert(t, gridItem.Image != nil, "an app with no store info still has its image")
+	assert.Equal(t, *gridItem.Image, mainApp.Image)
+
 	// a stopped stack still says so rather than falling back to a default
 	stopped, err := v2.WebAppGridItemAdapterV2(&codegen.ComposeAppWithStoreInfo{
 		Compose:   (*codegen.ComposeApp)(composeApp),
