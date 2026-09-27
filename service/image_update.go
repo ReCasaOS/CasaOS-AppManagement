@@ -118,6 +118,10 @@ func CheckImageUpdates(ctx context.Context) (*codegen.ImageUpdateCheckResult, er
 
 	fresh := make(map[string]bool, len(composeApps))
 	for name, composeApp := range composeApps {
+		if publishesNothing(composeApp) {
+			continue
+		}
+
 		updatable, reason := verdict(ctx, cli, composeApp, containers[name], digests)
 		if reason != "" {
 			result.Unchecked[name] = reason
@@ -417,10 +421,20 @@ func verdict(ctx context.Context, cli dockerDaemon, composeApp *ComposeApp, cont
 		return false, firstReason
 	}
 	if !answered {
-		return false, "this app runs no image with a tag to compare"
+		return false, "none of its services runs an image a registry publishes"
 	}
 
 	return false, ""
+}
+
+// publishesNothing is an app whose every service is built on this box, a git app or
+// a compose file of build: sections. No registry publishes what it runs, so a check
+// of the registries has nothing to say about it: its code comes from where it is
+// built from. The check of every app leaves it out, as it leaves out the built
+// services of an app that also pulls some (pulledServiceNames). Listed among the apps
+// it could not check, it read as a failure on every run.
+func publishesNothing(composeApp *ComposeApp) bool {
+	return len(pulledServiceNames(composeApp.Services)) == 0
 }
 
 // registryDigest is what one registry answered for one image, or why it could not be
