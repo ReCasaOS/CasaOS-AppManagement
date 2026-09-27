@@ -202,6 +202,24 @@ func TestVerdictSaysSoWhenTheImageWasBuiltLocally(t *testing.T) {
 	assert.Equal(t, reason, "local/main:1.0: built locally, so there is no published digest to compare")
 }
 
+// An app whose every service is built here has nothing a registry publishes. The
+// check of every app leaves it out instead of listing it, on every run, among the apps
+// it could not check.
+func TestAnAppBuiltHereIsLeftOutOfTheCheck(t *testing.T) {
+	built := &ComposeApp{Services: types.Services{
+		"web": {Name: "web", Image: "jarvis-web", Build: &types.BuildConfig{Context: "."}},
+	}}
+	assert.Assert(t, publishesNothing(built))
+
+	// an app that pulls even one image is still checked, on that image
+	mixed := &ComposeApp{Services: types.Services{
+		"web": {Name: "web", Build: &types.BuildConfig{Context: "."}},
+		"db":  {Name: "db", Image: "postgres:16"},
+	}}
+	assert.Assert(t, !publishesNothing(mixed))
+	assert.Assert(t, !publishesNothing(appWith(map[string]string{"main": "acme/main:1.0"})))
+}
+
 // No container to ask -- the app was never created -- so the tag on disk is all
 // there is. It answers a weaker question, which is why it is a fallback and why the
 // caller logs it rather than letting it pass for the normal path.
