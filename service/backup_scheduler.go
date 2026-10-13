@@ -93,6 +93,10 @@ type backupRunner interface {
 // A schedule's LastRun is written whether the run SUCCEEDED or not. Retrying a
 // failing backup every minute until the disk fills is worse than waiting for
 // tomorrow's slot, and the failure is in the log where somebody can see it.
+//
+// While an operating system upgrade is open nothing runs and nothing is recorded: the
+// slot stays unrun, so what was skipped runs once when the upgrade is closed. The tick
+// says so in one line.
 func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 	schedules, err := BackupSchedules()
 	if err != nil {
@@ -109,14 +113,29 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 		return
 	}
 
-	for _, schedule := range due {
+	ran := false
+	for done, schedule := range due {
+		// Asked before each backup and not once for the tick: a tick can hold hours of
+		// backups, and the upgrade can open between two of them.
+		if open, err := osUpgradeOpen(); open {
+			logBackupsHeld("backups are waiting: an operating system upgrade is open, or whether one is cannot be told",
+				zap.Int("waiting", len(due)-done), zap.Error(err))
+
+			break
+		}
+
 		runScheduled(ctx, now, schedule, runner)
+		ran = true
 
 		for i := range schedules {
 			if schedules[i].App == schedule.App && schedules[i].Destination == schedule.Destination {
 				schedules[i].LastRun = now
 			}
 		}
+	}
+
+	if !ran {
+		return
 	}
 
 	if err := SaveBackupSchedules(schedules); err != nil {

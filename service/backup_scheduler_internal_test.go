@@ -54,6 +54,9 @@ func schedulerInTempDir(t *testing.T) {
 	BackupSchedulePath = filepath.Join(dir, "schedules.json")
 	BackupLogPath = filepath.Join(dir, "runs.json")
 	t.Cleanup(func() { BackupSchedulePath, BackupLogPath = wasSchedules, wasLog })
+
+	// and no operating system upgrade is open, whatever this machine is doing
+	upgradeFlagIn(t)
 }
 
 func TestADueScheduleRunsAndIsRecorded(t *testing.T) {
