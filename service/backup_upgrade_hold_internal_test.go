@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -22,6 +23,8 @@ type upgradeFlag struct {
 	present bool  // the file is there
 	err     error // stat fails with this instead, whatever present says
 	info    os.FileInfo
+	// onAsk, when set, is what happens at the moment the file is looked for
+	onAsk func()
 
 	asked []string
 	said  [][]zap.Field
@@ -29,6 +32,9 @@ type upgradeFlag struct {
 
 func (u *upgradeFlag) stat(name string) (os.FileInfo, error) {
 	u.asked = append(u.asked, name)
+	if u.onAsk != nil {
+		u.onAsk()
+	}
 
 	switch {
 	case u.err != nil:
@@ -326,5 +332,45 @@ func TestATickWithNothingDueSaysNothingOfTheUpgrade(t *testing.T) {
 
 	if len(flag.said) != 0 || len(flag.asked) != 0 {
 		t.Fatalf("said %d, asked %v", len(flag.said), flag.asked)
+	}
+}
+
+// The core writes the flag and then asks what runs; a backup lists itself as running and then
+// looks for the flag. One of the two always sees the other. A backup that looked first and
+// listed itself after would leave a gap in which it has seen no flag and the core has seen no
+// backup, and it would run through the whole upgrade.
+func TestABackupIsListedAsRunningBeforeTheFlagIsLookedFor(t *testing.T) {
+	nextcloud := []AppOperation{{App: "nextcloud", Kind: "backup"}}
+
+	for _, held := range []bool{false, true} {
+		t.Run(map[bool]string{false: "free", true: "held"}[held], func(t *testing.T) {
+			schedulerInTempDir(t)
+			flag := upgradeFlagIn(t)
+			flag.present = held
+
+			var whenAsked []AppOperation
+			flag.onAsk = func() { whenAsked = RunningOperations() }
+			_ = SaveBackupSchedules([]BackupSchedule{daily(time.Time{})})
+
+			var whileRunning []AppOperation
+			runner := newGatedRunner()
+			runner.letGo()
+			runner.during = func(string) { whileRunning = RunningOperations() }
+
+			RunDueBackups(context.Background(), at(10, 7, 0), runner)
+
+			if !reflect.DeepEqual(whenAsked, nextcloud) {
+				t.Fatalf("listed when the flag was looked for: %v", whenAsked)
+			}
+			if held && len(runner.apps()) != 0 {
+				t.Fatalf("nothing runs through an upgrade: %v", runner.apps())
+			}
+			if !held && !reflect.DeepEqual(whileRunning, nextcloud) {
+				t.Fatalf("listed while it runs: %v", whileRunning)
+			}
+			if left := RunningOperations(); len(left) != 0 {
+				t.Fatalf("a backup that is held, or over, is not listed any more: %v", left)
+			}
+		})
 	}
 }

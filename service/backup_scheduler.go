@@ -129,9 +129,16 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 	}
 
 	for done, schedule := range due {
+		// Listed as running BEFORE the flag is looked for. The core writes the flag and then
+		// asks what runs, so with this order one of the two always sees the other; a backup
+		// that looked first and listed itself after could be seen by neither, and run through
+		// the whole upgrade.
+		listed := markInProgress(schedule.App, "backup")
+
 		// Asked before each backup and not once for the tick: a tick can hold hours of
 		// backups, and the upgrade can open between two of them.
 		if open, err := osUpgradeOpen(); open {
+			listed()
 			logBackupsHeld("backups are waiting: an operating system upgrade is open, or whether one is cannot be told",
 				zap.Int("waiting", len(due)-done), zap.Error(err))
 
@@ -139,6 +146,7 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 		}
 
 		runScheduled(ctx, now, schedule, runner)
+		listed()
 
 		if err := recordBackupRun(schedule, now); err != nil {
 			// Worth shouting about: an unrecorded run repeats at the next tick.
