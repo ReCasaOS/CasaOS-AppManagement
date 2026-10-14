@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io/fs"
@@ -13,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // upgradeFlag stands in for the busy file of an operating system upgrade, and for the
@@ -122,13 +125,18 @@ func TestOnlyAMissingBusyFileMeansNoUpgrade(t *testing.T) {
 	}
 }
 
-// What the standard library says about a path that is not there, on this system's own
-// terms, rather than what a fake has been told to say.
+// What the filesystem says about the file, on this system's own terms, with the flag read
+// as production wires it: the test's own is the path, nothing else.
 func TestTheRealFilesystemIsReadTheSameWay(t *testing.T) {
-	upgradeFlagIn(t) // restores the seam; only stat is pointed somewhere real below
+	// the file the core keeps: this is a promise between two services
+	if osUpgradeBusyPath != "/var/lib/casaos/os-upgrade/busy" {
+		t.Fatalf("the core keeps the flag elsewhere: %s", osUpgradeBusyPath)
+	}
 
 	where := filepath.Join(t.TempDir(), "busy")
-	osUpgradeBusyStat = func(string) (os.FileInfo, error) { return os.Stat(where) }
+	wasPath := osUpgradeBusyPath
+	osUpgradeBusyPath = where
+	t.Cleanup(func() { osUpgradeBusyPath = wasPath })
 
 	if open, err := osUpgradeOpen(); open || err != nil {
 		t.Fatalf("nothing there: %v %v", open, err)
@@ -141,14 +149,53 @@ func TestTheRealFilesystemIsReadTheSameWay(t *testing.T) {
 		t.Fatalf("the file is there: %v %v", open, err)
 	}
 
-	// A directory that is a file is not "nothing there". Windows words that answer
-	// differently, and it is not where this runs.
-	if runtime.GOOS != "windows" {
-		osUpgradeBusyStat = func(string) (os.FileInfo, error) { return os.Stat(filepath.Join(where, "busy")) }
+	// Windows words these differently, and it is not where this runs
+	if runtime.GOOS == "windows" {
+		return
+	}
 
-		if open, err := osUpgradeOpen(); !open || err == nil {
-			t.Fatalf("a path through a file is not 'nothing there': %v %v", open, err)
-		}
+	// A path through a file is not "nothing there".
+	osUpgradeBusyPath = filepath.Join(where, "busy")
+	if open, err := osUpgradeOpen(); !open || err == nil {
+		t.Fatalf("a path through a file is not 'nothing there': %v %v", open, err)
+	}
+
+	// A link whose target is gone is something somebody put there, as the core reads it.
+	osUpgradeBusyPath = filepath.Join(t.TempDir(), "busy")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "gone"), osUpgradeBusyPath); err != nil {
+		t.Fatal(err)
+	}
+	if open, err := osUpgradeOpen(); !open || err != nil {
+		t.Fatalf("a dangling link is a flag: %v %v", open, err)
+	}
+}
+
+// A tick that is held says so in the log the service writes, and runs nothing: the flag looked
+// for and the line written both as production wires them. A fail-open default for either
+// passes every test that fakes the seam.
+func TestAHeldTickIsToldInTheRealLogWithTheRealFilesystem(t *testing.T) {
+	schedulesInTempDir(t)
+
+	wasPath := osUpgradeBusyPath
+	osUpgradeBusyPath = filepath.Join(t.TempDir(), "busy")
+	t.Cleanup(func() { osUpgradeBusyPath = wasPath })
+	if err := writeRaw(osUpgradeBusyPath, "{}"); err != nil {
+		t.Fatal(err)
+	}
+
+	var said bytes.Buffer
+	logger.LogInitWithWriterSyncers(zapcore.AddSync(&said))
+	t.Cleanup(func() { logger.LogInitWithWriterSyncers(zapcore.AddSync(os.Stdout)) })
+
+	_ = SaveBackupSchedules(threeDue())
+	runner := &fakeRunner{}
+	RunDueBackups(context.Background(), at(10, 7, 0), runner)
+
+	if len(runner.ran) != 0 {
+		t.Fatalf("nothing runs through an upgrade: %v", runner.ran)
+	}
+	if line := said.String(); !strings.Contains(line, "backups are waiting") || !strings.Contains(line, `"waiting": 3`) {
+		t.Fatalf("the log says what waits: %q", line)
 	}
 }
 

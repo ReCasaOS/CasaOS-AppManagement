@@ -45,6 +45,17 @@ func (f *fakeRunner) Purge(_ context.Context, _, remotePath string) error {
 func schedulerInTempDir(t *testing.T) {
 	t.Helper()
 
+	schedulesInTempDir(t)
+
+	// and no operating system upgrade is open, whatever this machine is doing
+	upgradeFlagIn(t)
+}
+
+// schedulesInTempDir is schedulerInTempDir with the flag of an operating system upgrade left
+// as production reads it: for the test that does not fake it.
+func schedulesInTempDir(t *testing.T) {
+	t.Helper()
+
 	// the scheduler reports failures through the shared logger, which main
 	// initialises in production and a test has to ask for
 	logger.LogInitConsoleOnly()
@@ -54,9 +65,6 @@ func schedulerInTempDir(t *testing.T) {
 	BackupSchedulePath = filepath.Join(dir, "schedules.json")
 	BackupLogPath = filepath.Join(dir, "runs.json")
 	t.Cleanup(func() { BackupSchedulePath, BackupLogPath = wasSchedules, wasLog })
-
-	// and no operating system upgrade is open, whatever this machine is doing
-	upgradeFlagIn(t)
 }
 
 func TestADueScheduleRunsAndIsRecorded(t *testing.T) {

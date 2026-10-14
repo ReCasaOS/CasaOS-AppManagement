@@ -18,14 +18,16 @@ import (
 // it is there needs no more than the right to look into its directory, which a service
 // that is not root has.
 
-// osUpgradeBusyPath is the file; the core and this service agree on the name.
-const osUpgradeBusyPath = "/var/lib/casaos/os-upgrade/busy"
+// osUpgradeBusyPath is the file; the core and this service agree on the name. A variable
+// so a test can look at a file of its own with everything else as production wires it.
+var osUpgradeBusyPath = "/var/lib/casaos/os-upgrade/busy"
 
 // osUpgradeBusyStat and logBackupsHeld are variables so a test can answer with an error
 // a temporary directory cannot give (a denied directory, a failing disk) and count what
-// was said.
+// was said. The file is looked at, not what it points to: a link whose target is gone is
+// still something put there, and the core reads it the same way.
 var (
-	osUpgradeBusyStat = os.Stat
+	osUpgradeBusyStat = os.Lstat
 	logBackupsHeld    = logger.Warn
 )
 
