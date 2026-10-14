@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io/fs"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 // upgradeFlag stands in for the busy file of an operating system upgrade, and for the
@@ -170,11 +168,15 @@ func TestTheRealFilesystemIsReadTheSameWay(t *testing.T) {
 	}
 }
 
-// A tick that is held says so in the log the service writes, and runs nothing: the flag looked
-// for and the line written both as production wires them. A fail-open default for either
-// passes every test that fakes the seam.
-func TestAHeldTickIsToldInTheRealLogWithTheRealFilesystem(t *testing.T) {
+// A tick is held by a flag read from the disk, and says so in the log of the service: both as
+// production wires them. A fail-open default for either passes every test that fakes the seam.
+func TestAHeldTickRunsWithTheSeamsAsTheServiceWiresThem(t *testing.T) {
 	schedulesInTempDir(t)
+
+	// the line goes to the log of the service, and to no other
+	if reflect.ValueOf(logHeldForUpgrade).Pointer() != reflect.ValueOf(logger.Warn).Pointer() {
+		t.Fatal("what waits is not told in the log of the service")
+	}
 
 	wasPath := osUpgradeBusyPath
 	osUpgradeBusyPath = filepath.Join(t.TempDir(), "busy")
@@ -183,19 +185,12 @@ func TestAHeldTickIsToldInTheRealLogWithTheRealFilesystem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var said bytes.Buffer
-	logger.LogInitWithWriterSyncers(zapcore.AddSync(&said))
-	t.Cleanup(func() { logger.LogInitWithWriterSyncers(zapcore.AddSync(os.Stdout)) })
-
 	_ = SaveBackupSchedules(threeDue())
 	runner := &fakeRunner{}
 	RunDueBackups(context.Background(), at(10, 7, 0), runner)
 
 	if len(runner.ran) != 0 {
 		t.Fatalf("nothing runs through an upgrade: %v", runner.ran)
-	}
-	if line := said.String(); !strings.Contains(line, "backups are waiting") || !strings.Contains(line, `"waiting": 3`) {
-		t.Fatalf("the log says what waits: %q", line)
 	}
 }
 

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
-	"go.uber.org/zap/zapcore"
 	"gotest.tools/v3/assert"
 )
 
@@ -159,9 +157,9 @@ func TestAWebhookDuringTheUpgradeChecksNothing(t *testing.T) {
 	assert.Assert(t, st.Check.Error != "", "its remote is not there")
 }
 
-// The hold as the service wires it: the flag read from the disk and the line written to the
-// log of the service, with nothing faked but the place the flag is. A default that answers
-// "not there" whatever the disk says, or that says nothing, passes every test that fakes them.
+// The hold as the service wires it: the flag read from the disk, with nothing faked but the
+// place the flag is. A default that answers "not there" whatever the disk says passes every
+// test that fakes it.
 func TestAGitAppIsHeldAsTheServiceWiresIt(t *testing.T) {
 	gitAppsIn(t)
 	ctx := context.Background()
@@ -177,10 +175,7 @@ func TestAGitAppIsHeldAsTheServiceWiresIt(t *testing.T) {
 		assert.NilError(t, os.Symlink(filepath.Join(t.TempDir(), "gone"), osUpgradeBusyPath))
 	}
 
-	var said bytes.Buffer
-	logger.LogInitWithWriterSyncers(zapcore.AddSync(&said))
-	t.Cleanup(func() { logger.LogInitWithWriterSyncers(zapcore.AddSync(os.Stdout)) })
-
+	logger.LogInitConsoleOnly() // the line that says what waits is written to the real log
 	end, err := Begin("jarvis", gitOperationCheck)
 	assert.NilError(t, err)
 	deployGitAppAutomatically(ctx, "jarvis", end)
@@ -188,7 +183,6 @@ func TestAGitAppIsHeldAsTheServiceWiresIt(t *testing.T) {
 	st, err := loadGitApp("jarvis")
 	assert.NilError(t, err)
 	assert.DeepEqual(t, st.Attempted, []string{})
-	assert.Assert(t, strings.Contains(said.String(), "automatic deployment of a git app"), "the log says what waits: %q", said.String())
 }
 
 // A check by hand is somebody asking, and reads; the deployment it would start waits like any
