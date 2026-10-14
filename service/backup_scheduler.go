@@ -139,7 +139,7 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 		// backups, and the upgrade can open between two of them.
 		if open, err := osUpgradeOpen(); open {
 			listed()
-			logBackupsHeld("backups are waiting: an operating system upgrade is open, or whether one is cannot be told",
+			logHeldForUpgrade("backups are waiting: an operating system upgrade is open, or whether one is cannot be told",
 				zap.Int("waiting", len(due)-done), zap.Error(err))
 
 			break

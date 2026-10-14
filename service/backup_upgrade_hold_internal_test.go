@@ -76,9 +76,9 @@ func upgradeFlagIn(t *testing.T) *upgradeFlag {
 	}
 
 	flag := &upgradeFlag{info: info}
-	wasStat, wasLog := osUpgradeBusyStat, logBackupsHeld
-	osUpgradeBusyStat, logBackupsHeld = flag.stat, flag.log
-	t.Cleanup(func() { osUpgradeBusyStat, logBackupsHeld = wasStat, wasLog })
+	wasStat, wasLog := osUpgradeBusyStat, logHeldForUpgrade
+	osUpgradeBusyStat, logHeldForUpgrade = flag.stat, flag.log
+	t.Cleanup(func() { osUpgradeBusyStat, logHeldForUpgrade = wasStat, wasLog })
 
 	return flag
 }

@@ -31,8 +31,10 @@ const (
 	GitWebhookChecking  = "checking"
 	GitWebhookCoalesced = "coalesced"
 	GitWebhookQueued    = "queued"
-	GitWebhookIgnored   = "ignored"
-	GitWebhookPong      = "pong"
+	// GitWebhookHeld is a push that started no check: an operating system upgrade is open.
+	GitWebhookHeld    = "held"
+	GitWebhookIgnored = "ignored"
+	GitWebhookPong    = "pong"
 )
 
 // gitWebhookEventCap is as much of an event's name as is logged and kept.

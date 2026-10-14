@@ -557,9 +557,21 @@ func keepGitCommits(ctx context.Context, st *gitApp) {
 // when the app's automatic rebuild may act on it. The check's hold passes to the
 // deployment under the deployment's name, so nothing starts in between and what is refused
 // meanwhile is told a deployment runs; end is released either way.
+//
+// Not while an operating system upgrade is open: a build and a start under dpkg's hands
+// would fail, and a deployment that fails is a commit the automatic rebuild never tries
+// again. The commit is left untried, and the first check after the upgrade is closed
+// deploys it. This is the one funnel a check by hand, a push and the periodic check all end
+// in. The app was taken before the flag is looked at, and the core asks what runs after it
+// writes the flag, so one of the two always sees the other.
 func deployGitAppAutomatically(ctx context.Context, name string, end func()) {
 	st, err := loadGitApp(name)
 	if err != nil || !gitMayDeployAutomatically(st) {
+		end()
+		return
+	}
+
+	if heldForUpgrade("an automatic deployment of a git app", zap.String("app", name), zap.String("commit", st.Check.RemoteCommit)) {
 		end()
 		return
 	}

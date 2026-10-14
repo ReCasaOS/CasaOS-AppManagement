@@ -55,6 +55,7 @@ func TestAGitWebhookIsAnsweredWithItsStatus(t *testing.T) {
 		{service.GitWebhookChecking, nil, http.StatusAccepted, "checking"},
 		{service.GitWebhookCoalesced, nil, http.StatusAccepted, "coalesced"},
 		{service.GitWebhookQueued, nil, http.StatusAccepted, "queued"},
+		{service.GitWebhookHeld, nil, http.StatusAccepted, "held"},
 		{service.GitWebhookIgnored, nil, http.StatusAccepted, "ignored"},
 		{"", service.ErrGitWebhookSignature, http.StatusUnauthorized, "invalid signature"},
 		{"", service.ErrGitWebhookNotFound, http.StatusNotFound, "not found"},
