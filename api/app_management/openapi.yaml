@@ -1401,8 +1401,10 @@ paths:
         that tag for an app that follows tags, and validates its compose files. A
         clone without a compose file is removed, `check.error` says so and `compose_example`
         holds a compose file to add. When the automatic rebuild may act on a new commit, its
-        deployment starts once the check has ended. Adopts an adoptable app: 400 when its folder
-        is in detached HEAD or has no remote.
+        deployment starts once the check has ended, except while an operating system upgrade of
+        the box is open: the check reads, the deployment waits for the first check after the
+        upgrade is closed. Adopts an adoptable app: 400 when its folder is in detached HEAD or
+        has no remote.
       operationId: checkGitApp
       tags:
         - Git methods
@@ -1494,8 +1496,10 @@ paths:
         10 seconds after the last check a webhook started, or while one is queued, answers 202
         `coalesced`; a push to an app another operation holds queues one check that runs once
         the app is free, waiting up to 30 minutes, and answers 202 `queued`. GitHub's `ping`
-        answers 200 `pong`; any other event 202 `ignored`. 404 alike for an app that does not
-        exist and a webhook that is off.
+        answers 200 `pong`; any other event 202 `ignored`. While an operating system upgrade of
+        the box is open a push starts no check and answers 202 `held`: the app is checked, and
+        its new commit deployed when the automatic rebuild may, by the first check after the
+        upgrade is closed. 404 alike for an app that does not exist and a webhook that is off.
       operationId: receiveGitWebhook
       security: []
       tags:
@@ -3569,8 +3573,8 @@ components:
         result:
           type: string
           description: |
-            One of `checked`, `coalesced`, `queued`, `ignored`, `pong`. Not declared as an enum,
-            for the reason given on `GitAppState`.
+            One of `checked`, `coalesced`, `queued`, `held`, `ignored`, `pong`. Not declared as an
+            enum, for the reason given on `GitAppState`.
           example: checked
 
     GitAppHead:

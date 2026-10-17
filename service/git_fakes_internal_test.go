@@ -41,6 +41,10 @@ func withFakeGitDocker(t *testing.T) *fakeGitRuntime {
 	gitDocker = fake
 	t.Cleanup(func() { gitDocker = previous })
 
+	// and no operating system upgrade is open, whatever this machine is doing: what a git
+	// app does by itself waits for one
+	upgradeFlagIn(t)
+
 	return fake
 }
 

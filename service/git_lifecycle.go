@@ -19,6 +19,11 @@ import (
 
 // CheckGitApps checks every registered git app, one after another, and starts what the
 // automatic rebuild may deploy. An app busy with another operation is checked next time.
+//
+// Nothing is checked while an operating system upgrade is open, looked at before each app
+// rather than once: a tick is as long as its checks, and the upgrade can open between two of
+// them. A check only reads, but with the git binary the upgrade replaces, and what it would
+// write down is an error about that.
 func CheckGitApps(ctx context.Context) {
 	names, err := GitAppNames()
 	if err != nil {
@@ -26,7 +31,11 @@ func CheckGitApps(ctx context.Context) {
 		return
 	}
 
-	for _, name := range names {
+	for done, name := range names {
+		if heldForUpgrade("the check of the git apps", zap.Int("waiting", len(names)-done)) {
+			return
+		}
+
 		st, end, err := beginGitCheck(ctx, name)
 		if err != nil {
 			if !errors.As(err, new(ErrAppBusy)) {

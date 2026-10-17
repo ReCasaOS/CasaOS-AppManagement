@@ -114,6 +114,13 @@ func ReceiveGitWebhook(app string, header http.Header, body io.Reader) (string, 
 // started one less than gitWebhookDebounce ago, so that a push landing after that check
 // asked the remote is still seen. One check waits at most: the pushes meanwhile join it.
 func scheduleGitWebhookCheck(app string) (string, error) {
+	// Nothing is checked while an operating system upgrade is open, and the push does not use
+	// up the window of the debounce: the five minute poll finds the commit once the upgrade is
+	// closed. A check queued before the upgrade opened still reads; its deployment waits.
+	if heldForUpgrade("the check a git webhook asked for", zap.String("app", app)) {
+		return GitWebhookHeld, nil
+	}
+
 	if gitWebhookRuns.pending[app] {
 		return GitWebhookCoalesced, nil
 	}

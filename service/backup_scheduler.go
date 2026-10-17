@@ -92,8 +92,27 @@ type backupRunner interface {
 //
 // A schedule's LastRun is written whether the run SUCCEEDED or not. Retrying a
 // failing backup every minute until the disk fills is worse than waiting for
-// tomorrow's slot, and the failure is in the log where somebody can see it.
+// tomorrow's slot, and the failure is in the log where somebody can see it. It is written
+// when that backup ends, in the file as it is then, not for all of them when the tick does:
+// a tick can last hours, the schedules can be saved meanwhile, and a process that stops
+// half way owes only what it did not do.
+//
+// One tick at a time. Cron starts one every minute whether the last is over or not, and a
+// tick that finds another running leaves its backups to it: what falls due meanwhile is
+// found by the tick after that one ends. Otherwise the backups owed after a hold, which can
+// take longer than a minute, would be started again by every tick until they were recorded.
+//
+// While an operating system upgrade is open nothing runs and nothing is recorded: the
+// slot stays unrun, so what was skipped runs once when the upgrade is closed. The tick
+// says so in one line.
 func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
+	// ponytail: one tick for the whole box, so a long backup holds up the slots that fall due
+	// behind it; a tick per destination if that is ever felt.
+	if !backupTick.TryLock() {
+		return
+	}
+	defer backupTick.Unlock()
+
 	schedules, err := BackupSchedules()
 	if err != nil {
 		logger.Error("could not read the backup schedules, so none ran", zap.Error(err))
@@ -109,20 +128,56 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 		return
 	}
 
-	for _, schedule := range due {
-		runScheduled(ctx, now, schedule, runner)
+	for done, schedule := range due {
+		// Listed as running BEFORE the flag is looked for. The core writes the flag and then
+		// asks what runs, so with this order one of the two always sees the other; a backup
+		// that looked first and listed itself after could be seen by neither, and run through
+		// the whole upgrade.
+		listed := markInProgress(schedule.App, "backup")
 
-		for i := range schedules {
-			if schedules[i].App == schedule.App && schedules[i].Destination == schedule.Destination {
-				schedules[i].LastRun = now
-			}
+		// Asked before each backup and not once for the tick: a tick can hold hours of
+		// backups, and the upgrade can open between two of them.
+		if open, err := osUpgradeOpen(); open {
+			listed()
+			logHeldForUpgrade("backups are waiting: an operating system upgrade is open, or whether one is cannot be told",
+				zap.Int("waiting", len(due)-done), zap.Error(err))
+
+			break
+		}
+
+		runScheduled(ctx, now, schedule, runner)
+		listed()
+
+		if err := recordBackupRun(schedule, now); err != nil {
+			// Worth shouting about: an unrecorded run repeats at the next tick.
+			logger.Error("could not record when a backup ran, so it may run again",
+				zap.Error(err), zap.String("app", schedule.App), zap.String("destination", schedule.Destination))
+		}
+	}
+}
+
+// backupTick is held by the tick that is running: see RunDueBackups.
+var backupTick sync.Mutex
+
+// recordBackupRun writes down that a schedule's slot is spent, in the file as it is now. The
+// owner may have saved the schedules while the backup ran, and the list the tick read when it
+// began would undo what they saved.
+func recordBackupRun(schedule BackupSchedule, now time.Time) error {
+	backupScheduleLock.Lock()
+	defer backupScheduleLock.Unlock()
+
+	schedules, err := readSchedules()
+	if err != nil {
+		return err
+	}
+
+	for i := range schedules {
+		if schedules[i].App == schedule.App && schedules[i].Destination == schedule.Destination {
+			schedules[i].LastRun = now
 		}
 	}
 
-	if err := SaveBackupSchedules(schedules); err != nil {
-		// Worth shouting about: unrecorded runs repeat at the next tick.
-		logger.Error("could not record when the backups ran, so they may run again", zap.Error(err))
-	}
+	return writeSchedules(schedules)
 }
 
 func runScheduled(ctx context.Context, now time.Time, schedule BackupSchedule, runner backupRunner) {
