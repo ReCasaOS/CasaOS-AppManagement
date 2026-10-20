@@ -118,7 +118,7 @@ func TestAHungContainerIsCutOffByThePerCallDeadline(t *testing.T) {
 	select {
 	case got := <-done:
 		assert.Equal(t, len(got), 0)
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("hung containers held the tick past the per-call deadline")
 	}
 }

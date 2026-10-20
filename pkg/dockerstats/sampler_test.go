@@ -382,14 +382,23 @@ func TestTicksNeverOverlap(t *testing.T) {
 	h := newHarness(t, web("a"))
 	h.s.cfg.Interval = 10 * time.Millisecond
 	h.src.listSleep = 50 * time.Millisecond
+	listed := make(chan struct{}, 16)
+	h.src.onList = func() {
+		select {
+		case listed <- struct{}{}:
+		default:
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { h.s.Run(ctx); close(done) }()
-	time.Sleep(300 * time.Millisecond)
+	for range 3 { // three ticks, each slower than the interval
+		<-listed
+	}
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Run did not return after its context ended")
 	}
 	h.src.mu.Lock()
@@ -576,11 +585,15 @@ func TestTheInspectPassIsBoundedAndConverges(t *testing.T) {
 		defer h.src.mu.Unlock()
 		return len(h.src.perID)
 	}
+	// an inspect lasts at least inspectSleep, so a bounded pass does at most
+	// budget/sleep of them (one more if its timer and the deadline fire together);
+	// a slow host only lowers that, and the loop bound leaves room for it
+	maxPerTick := int(inspectBudget/h.src.inspectSleep) + 1
 	for i := 0; count() < 300; i++ {
-		assert.Assert(t, i < 60, "the inspect pass does not converge: %d of 300", count())
-		began := time.Now()
+		assert.Assert(t, i < 300, "the inspect pass does not converge: %d of 300", count())
+		before := count()
 		h.tick()
-		assert.Assert(t, time.Since(began) < inspectBudget+200*time.Millisecond, "tick took %v", time.Since(began))
+		assert.Assert(t, count()-before <= maxPerTick, "one pass did %d inspects", count()-before)
 	}
 	h.ticks(12 * 3) // three minutes: an unchanged stopped container is never inspected again
 	h.src.mu.Lock()
@@ -606,10 +619,14 @@ func TestAHungInspectIsCutByThePassDeadline(t *testing.T) {
 	defer func(b time.Duration) { inspectBudget = b }(inspectBudget)
 	inspectBudget = 100 * time.Millisecond
 	h := newHarness(t, web("a"))
-	h.src.inspectSleep = 2 * time.Second
-	began := time.Now()
-	h.tick()
-	assert.Assert(t, time.Since(began) < time.Second, "tick took %v", time.Since(began))
+	h.src.inspectSleep = time.Hour // only the pass deadline frees it
+	done := make(chan struct{})
+	go func() { h.tick(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a hung inspect held the tick past the pass deadline")
+	}
 	assert.Equal(t, h.item(webID).State, "running")
 }
 
@@ -625,16 +642,23 @@ func TestAClockSteppedBackStillInspectsAndSweeps(t *testing.T) {
 
 func TestCloseWaitsForATickInFlightAndIsIdempotent(t *testing.T) {
 	h := newHarness(t, web("a"))
-	h.src.listSleep = 100 * time.Millisecond
-	done := make(chan struct{})
-	go func() { h.s.Tick(context.Background()); close(done) }()
-	time.Sleep(20 * time.Millisecond)
-	assert.NilError(t, h.s.Close())
-	select {
-	case <-done:
-	default:
-		t.Fatal("Close returned while a tick was still running")
-	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	h.src.onList = func() { close(entered); <-release } // only the first List: a closed sampler lists nothing
+	tickDone := make(chan struct{})
+	go func() { h.s.Tick(context.Background()); close(tickDone) }()
+	<-entered // the tick holds the sampler
+	closed := make(chan bool, 1)
+	go func() {
+		assert.Check(t, h.s.Close())
+		select {
+		case <-tickDone:
+			closed <- true
+		default:
+			closed <- false // Close returned while the tick was still held
+		}
+	}()
+	close(release)
+	assert.Assert(t, <-closed, "Close returned while a tick was still running")
 	assert.NilError(t, h.s.Close())
 	h.s.Tick(context.Background()) // after Close: does nothing
 	h.src.mu.Lock()

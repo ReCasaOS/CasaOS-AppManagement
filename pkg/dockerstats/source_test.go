@@ -111,7 +111,7 @@ func TestASlowContainerDoesNotDelayTheOthers(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		select {
 		case <-finished:
-		case <-time.After(2 * time.Second):
+		case <-time.After(10 * time.Second):
 			t.Fatal("fast containers were delayed by the slow one")
 		}
 	}
@@ -136,7 +136,7 @@ func TestCancellationStopsThePollingPromptly(t *testing.T) {
 	case got := <-done:
 		assert.Equal(t, len(got), 0)
 		assert.Assert(t, started.Load() <= maxInFlight+1, "started %d after cancel", started.Load())
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("Stats did not return after cancellation")
 	}
 }

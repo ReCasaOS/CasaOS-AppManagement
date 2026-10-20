@@ -43,14 +43,19 @@ type fakeSource struct {
 	perID     map[string]int // inspects per Docker id
 	// inspectSleep is how long one Inspect takes; it gives up when ctx ends
 	inspectSleep time.Duration
+	// onList, when set, runs at the start of every List, outside the lock
+	onList func()
 }
 
 func (f *fakeSource) List(ctx context.Context) ([]container.Summary, error) {
 	f.mu.Lock()
 	f.lists++
 	f.peakLists = max(f.peakLists, f.lists)
-	sleep := f.listSleep
+	sleep, hook := f.listSleep, f.onList
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	time.Sleep(sleep)
 	f.mu.Lock()
 	defer f.mu.Unlock()
