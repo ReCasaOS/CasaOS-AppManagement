@@ -703,3 +703,22 @@ func TestAContainerWithoutCPUCountersIsRecordedEveryTick(t *testing.T) {
 	h.ticks(12) // 12:00:00 .. 12:00:55, the last one included
 	assert.Equal(t, len(values(h.live(webID, "memory/rss"))), 12)
 }
+
+func TestDockerBeingAwayResolvesNothingAndForgetsNothing(t *testing.T) {
+	h, c := firing(t)
+	h.src.set(func() { h.src.listErr = errors.New("connection refused") })
+	h.ticks(12 * 3) // three minutes of fake time: well past missedTicks
+	assert.DeepEqual(t, h.states(), []string{"firing"})
+	assert.Equal(t, h.active(), 1)
+	assert.DeepEqual(t, h.s.store.Items(), []string{webID})
+	h.src.set(func() { h.src.listErr = nil })
+	before := len(values(h.live(webID, "memory/rss")))
+	h.ticks(12 * 3)
+	assert.DeepEqual(t, h.states(), []string{"firing"})
+	assert.Equal(t, h.active(), 1)
+	assert.Equal(t, h.item(webID).State, "running")
+	assert.Assert(t, len(values(h.live(webID, "memory/rss"))) > before, "recording went on after Docker returned")
+	h.src.set(func() { c.Cores = 0.1 })
+	h.ticks(12 * 3)
+	assert.DeepEqual(t, h.states(), []string{"firing", "resolved"})
+}
