@@ -68,6 +68,8 @@ github.com/ProtonMail/go-crypto v1.4.1/go.mod h1:e1OaTyu5SYVrO9gKOEhTc+5UcXtTUa+
 github.com/RaveNoX/go-jsoncommentstrip v1.0.0/go.mod h1:78ihd09MekBnJnxpICcwzCMzGrKSKYe4AqU6PDYYpjk=
 github.com/ReCasaOS/CasaOS-Common v0.4.27 h1:7V3rAZj77wII/tqJeu9eqxEvAYln0kpaeK1GTuzTXSk=
 github.com/ReCasaOS/CasaOS-Common v0.4.27/go.mod h1:HjYCcRAVDa0c/IncJDof1sddCpze2esCTZt941Sk7LI=
+github.com/ReCasaOS/CasaOS-Common v0.4.28 h1:uN35hcPxMD23NeBnRix+kdpNxi0O0O2DR4OXO4Zso8E=
+github.com/ReCasaOS/CasaOS-Common v0.4.28/go.mod h1:HjYCcRAVDa0c/IncJDof1sddCpze2esCTZt941Sk7LI=
 github.com/STARRY-S/zip v0.2.3 h1:luE4dMvRPDOWQdeDdUxUoZkzUIpTccdKdhHHsQJ1fm4=
 github.com/STARRY-S/zip v0.2.3/go.mod h1:lqJ9JdeRipyOQJrYSOtpNAiaesFO6zVDsE8GIGFaoSk=
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d h1:licZJFw2RwpHMqeKTCYkitsPqHNxTmd4SNR5r94FGM8=
