@@ -84,6 +84,10 @@ loop:
 	for _, id := range ids {
 		select {
 		case sem <- struct{}{}:
+			if ctx.Err() != nil { // a free slot and a done context are both ready: select picks at random
+				<-sem
+				break loop
+			}
 		case <-ctx.Done():
 			break loop
 		}

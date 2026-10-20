@@ -130,12 +130,14 @@ func TestCancellationStopsThePollingPromptly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan map[string]*container.StatsResponse)
 	go func() { done <- (&DockerSource{api: f}).Stats(ctx, ids(100)) }()
-	time.Sleep(20 * time.Millisecond)
+	for started.Load() < maxInFlight { // every slot is held: the loop waits for one to free
+		time.Sleep(time.Millisecond)
+	}
 	cancel()
 	select {
 	case got := <-done:
 		assert.Equal(t, len(got), 0)
-		assert.Assert(t, started.Load() <= maxInFlight+1, "started %d after cancel", started.Load())
+		assert.Equal(t, started.Load(), int32(maxInFlight), "calls started after the cancel")
 	case <-time.After(10 * time.Second):
 		t.Fatal("Stats did not return after cancellation")
 	}
@@ -214,4 +216,17 @@ func TestNewDockerSourceBuildsOneClient(t *testing.T) {
 	assert.Assert(t, s.api != nil)
 	assert.NilError(t, s.Close())
 	assert.NilError(t, s.Close())
+}
+
+func TestACancelledContextStartsNoCall(t *testing.T) {
+	var started atomic.Int32
+	f := &fakeAPI{stats: func(ctx context.Context, id string) (container.StatsResponseReader, error) {
+		started.Add(1)
+		return container.StatsResponseReader{}, ctx.Err()
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got := (&DockerSource{api: f}).Stats(ctx, ids(100)) // every slot is free and the context is done
+	assert.Equal(t, len(got), 0)
+	assert.Equal(t, started.Load(), int32(0))
 }
