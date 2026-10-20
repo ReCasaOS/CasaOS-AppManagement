@@ -28,6 +28,7 @@ type fakeCtr struct {
 	Mem                     uint64
 	Nets                    map[string]container.NetworkStats
 	NoStats                 bool // the Stats call fails for it
+	NoCPU                   bool // Docker reports no CPU counters for it
 }
 
 type fakeSource struct {
@@ -39,6 +40,9 @@ type fakeSource struct {
 	peakLists int
 	asked     []string // every id Stats was asked for
 	inspects  int
+	perID     map[string]int // inspects per Docker id
+	// inspectSleep is how long one Inspect takes; it gives up when ctx ends
+	inspectSleep time.Duration
 }
 
 func (f *fakeSource) List(ctx context.Context) ([]container.Summary, error) {
@@ -51,6 +55,9 @@ func (f *fakeSource) List(ctx context.Context) ([]container.Summary, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lists--
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -63,8 +70,22 @@ func (f *fakeSource) List(ctx context.Context) ([]container.Summary, error) {
 
 func (f *fakeSource) Inspect(ctx context.Context, id string) (container.InspectResponse, error) {
 	f.mu.Lock()
+	sleep := f.inspectSleep
+	f.mu.Unlock()
+	if sleep > 0 {
+		select {
+		case <-time.After(sleep):
+		case <-ctx.Done():
+			return container.InspectResponse{}, ctx.Err()
+		}
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inspects++
+	if f.perID == nil {
+		f.perID = map[string]int{}
+	}
+	f.perID[id]++
 	for _, c := range f.ctrs {
 		if c.ID == id {
 			return container.InspectResponse{
@@ -92,6 +113,9 @@ func (f *fakeSource) Stats(ctx context.Context, ids []string) map[string]*contai
 		s := &container.StatsResponse{}
 		s.CPUStats.CPUUsage.TotalUsage = c.User + 1
 		s.CPUStats.CPUUsage.UsageInUsermode = c.User + 1
+		if c.NoCPU {
+			s.CPUStats.CPUUsage = container.CPUUsage{}
+		}
 		s.CPUStats.OnlineCPUs = 4
 		s.MemoryStats.Usage = c.Mem
 		s.MemoryStats.Limit = 8 << 30

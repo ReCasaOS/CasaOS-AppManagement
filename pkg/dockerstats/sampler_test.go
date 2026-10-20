@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -406,7 +407,8 @@ func TestAnUnreadableStoreMakesSeriesUnavailable(t *testing.T) {
 	})
 	t.Run("ring skipped at open", func(t *testing.T) {
 		other := &fakeCtr{ID: "o", Name: "other", State: "running", Status: "Up", Mem: 1 << 20}
-		h := newHarness(t, web("a"), other)
+		w := web("a")
+		h := newHarness(t, w, other)
 		h.ticks(2)
 		assert.NilError(t, h.s.Close())
 		rings, _ := filepath.Glob(filepath.Join(h.dir, "*.ring"))
@@ -417,17 +419,30 @@ func TestAnUnreadableStoreMakesSeriesUnavailable(t *testing.T) {
 				webRing = r
 			}
 		}
-		assert.Assert(t, webRing != "")
+		assert.Equal(t, filepath.Base(webRing), ringName(webID), "Common's ring file name")
 		assert.NilError(t, os.Remove(webRing))
 		if err := os.Symlink(filepath.Join(h.dir, "nowhere"), webRing); err != nil {
 			t.Skipf("no symlinks here: %v", err)
 		}
+		var logged int
+		logError = func(string, error) { logged++ }
+		defer func() { logError = func(string, error) {} }()
 		h.open()
-		h.ticks(2) // never crashes, the other container is still recorded
+		h.ticks(3) // never crashes, the other container is still recorded
+		assert.Equal(t, logged, 2, "once at Open, once for the item")
 		_, err := h.s.Series(webID, stats.RangeLive)
 		assert.Assert(t, errors.Is(err, ErrUnavailable), "%v", err)
-		assert.Equal(t, len(values(h.live("container:other", "memory/rss"))), 2)
+		assert.Equal(t, len(values(h.live("container:other", "memory/rss"))), 3)
 		assert.Equal(t, len(h.items()), 2)
+		// stopped (never recorded again), then gone: still unavailable, not unknown
+		h.src.set(func() { w.State, w.Status = "exited", "Exited (0) 1 second ago" })
+		h.tick()
+		_, err = h.s.Series(webID, stats.RangeLive)
+		assert.Assert(t, errors.Is(err, ErrUnavailable), "stopped: %v", err)
+		h.src.set(func() { h.src.ctrs = []*fakeCtr{other} })
+		h.ticks(2)
+		_, err = h.s.Series(webID, stats.RangeLive)
+		assert.Assert(t, errors.Is(err, ErrUnavailable), "gone: %v", err)
 		fi, err := os.Lstat(webRing)
 		assert.NilError(t, err)
 		assert.Assert(t, fi.Mode()&os.ModeSymlink != 0, "the unreadable file was replaced")
@@ -508,4 +523,159 @@ func TestOverTheItemCapContainersAreListedAndAForgottenOneFreesItsSlot(t *testin
 	h.ticks(3) // gone after two missed ticks; its slot is free on the next
 	assert.Assert(t, gone != "")
 	assert.Equal(t, len(h.s.store.Items()), stats.MaxItems+1, "the forgotten one is kept, and the last one is now recorded")
+}
+
+// pointAt is the live point of key at the time at, nil when absent.
+func (h *harness) pointAt(id, key string, at time.Time) *float64 {
+	for _, p := range h.live(id, key) {
+		if p.T == at.Unix() {
+			return p.Avg
+		}
+	}
+	return nil
+}
+
+func TestAGapEndingInTheLastTickOfAMinuteDoesNotResolve(t *testing.T) {
+	for _, end := range []int{0, 25, 50, 55} {
+		t.Run(strconv.Itoa(end), func(t *testing.T) {
+			h, c := firing(t)
+			h.src.set(func() { c.NoStats = true })
+			start := h.clock.Now()
+			for h.clock.Now().Sub(start) < 70*time.Second || h.clock.Now().Second() != end {
+				h.tick()
+			}
+			h.src.set(func() { c.NoStats = false })
+			first := h.clock.Now()
+			h.tick()
+			if end == 55 {
+				assert.Assert(t, h.pointAt(webID, "memory/rss", first) == nil, "alone in its minute: not recorded")
+				h.tick()
+				assert.Assert(t, h.pointAt(webID, "cpu/user", first.Add(5*time.Second)) != nil, "the skipped reading is the next baseline")
+			} else {
+				assert.Assert(t, h.pointAt(webID, "memory/rss", first) != nil, "recorded")
+			}
+			h.ticks(12 * 3)
+			assert.DeepEqual(t, h.states(), []string{"firing"})
+			assert.Equal(t, h.active(), 1)
+		})
+	}
+}
+
+func TestTheInspectPassIsBoundedAndConverges(t *testing.T) {
+	defer func(b time.Duration) { inspectBudget = b }(inspectBudget)
+	inspectBudget = 100 * time.Millisecond
+	var ctrs []*fakeCtr
+	for i := range 300 {
+		n := "s" + strconv.Itoa(i)
+		ctrs = append(ctrs, &fakeCtr{ID: n, Name: n, State: "exited", Status: "Exited (0) 1 day ago", Image: "img"})
+	}
+	h := newHarness(t, ctrs...)
+	h.src.inspectSleep = 5 * time.Millisecond
+	count := func() int {
+		h.src.mu.Lock()
+		defer h.src.mu.Unlock()
+		return len(h.src.perID)
+	}
+	for i := 0; count() < 300; i++ {
+		assert.Assert(t, i < 60, "the inspect pass does not converge: %d of 300", count())
+		began := time.Now()
+		h.tick()
+		assert.Assert(t, time.Since(began) < inspectBudget+200*time.Millisecond, "tick took %v", time.Since(began))
+	}
+	h.ticks(12 * 3) // three minutes: an unchanged stopped container is never inspected again
+	h.src.mu.Lock()
+	for id, n := range h.src.perID {
+		assert.Equal(t, n, 1, id)
+	}
+	h.src.mu.Unlock()
+	for _, it := range h.items() {
+		assert.Equal(t, it.Detail, "img", it.ID)
+	}
+	h.src.set(func() {
+		ctrs[0].State, ctrs[0].Status = "running", "Up 1 second"
+		ctrs[1].State, ctrs[1].Status = "dead", "Dead"
+	})
+	h.tick()
+	h.src.mu.Lock()
+	defer h.src.mu.Unlock()
+	assert.Equal(t, h.src.perID["s0"], 2, "a container that starts is read again")
+	assert.Equal(t, h.src.perID["s1"], 2, "a stopped container whose state changed is read again")
+}
+
+func TestAHungInspectIsCutByThePassDeadline(t *testing.T) {
+	defer func(b time.Duration) { inspectBudget = b }(inspectBudget)
+	inspectBudget = 100 * time.Millisecond
+	h := newHarness(t, web("a"))
+	h.src.inspectSleep = 2 * time.Second
+	began := time.Now()
+	h.tick()
+	assert.Assert(t, time.Since(began) < time.Second, "tick took %v", time.Since(began))
+	assert.Equal(t, h.item(webID).State, "running")
+}
+
+func TestAClockSteppedBackStillInspectsAndSweeps(t *testing.T) {
+	h := newHarness(t, web("a"))
+	h.tick()
+	assert.Equal(t, h.src.inspects, 1)
+	h.clock.t = t0.Add(-2 * time.Hour)
+	h.tick()
+	assert.Equal(t, h.src.inspects, 2)
+	assert.Equal(t, h.s.lastSweep, t0.Add(-2*time.Hour))
+}
+
+func TestCloseWaitsForATickInFlightAndIsIdempotent(t *testing.T) {
+	h := newHarness(t, web("a"))
+	h.src.listSleep = 100 * time.Millisecond
+	done := make(chan struct{})
+	go func() { h.s.Tick(context.Background()); close(done) }()
+	time.Sleep(20 * time.Millisecond)
+	assert.NilError(t, h.s.Close())
+	select {
+	case <-done:
+	default:
+		t.Fatal("Close returned while a tick was still running")
+	}
+	assert.NilError(t, h.s.Close())
+	h.s.Tick(context.Background()) // after Close: does nothing
+	h.src.mu.Lock()
+	defer h.src.mu.Unlock()
+	assert.Equal(t, len(h.src.asked), 1)
+}
+
+func TestTwoConcurrentTicksDoNotOverlap(t *testing.T) {
+	h := newHarness(t, web("a"))
+	h.src.listSleep = 50 * time.Millisecond
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() { defer wg.Done(); h.s.Tick(context.Background()) }()
+	}
+	wg.Wait()
+	assert.Equal(t, h.src.peakLists, 1)
+}
+
+func TestAShutdownIsNotAnOutage(t *testing.T) {
+	h := newHarness(t, web("a"))
+	h.tick()
+	var logged int
+	logError = func(string, error) { logged++ }
+	defer func() { logError = func(string, error) {} }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.s.Tick(ctx)
+	assert.Equal(t, logged, 0)
+	_, err := h.s.Items()
+	assert.NilError(t, err)
+}
+
+func TestFormatCharactersAreStrippedFromTheDetail(t *testing.T) {
+	assert.Equal(t, cleanDetail("evil\u202egnp.exe\u200b\ufeff"), "evilgnp.exe")
+}
+
+func TestAContainerWithoutCPUCountersIsRecordedEveryTick(t *testing.T) {
+	c := web("a")
+	c.NoCPU = true
+	h := newHarness(t, c)
+	h.ticks(12) // 12:00:00 .. 12:00:55, the last one included
+	assert.Equal(t, len(values(h.live(webID, "memory/rss"))), 12)
 }

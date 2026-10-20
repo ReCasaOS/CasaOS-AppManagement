@@ -3,6 +3,8 @@ package dockerstats
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"slices"
@@ -35,6 +37,10 @@ const (
 	// at most this many interfaces are recorded (3 keys each).
 	maxInterfaces = 8
 )
+
+// inspectBudget bounds the whole inspect pass of a tick; what is left waits
+// for the next tick. A variable only so tests can shorten it.
+var inspectBudget = 2 * time.Second
 
 // ifName is what Linux accepts as an interface name (IFNAMSIZ 15); it keeps
 // network keys well under Common's 63-byte key limit.
@@ -83,13 +89,14 @@ type row struct {
 	cores     float64 // machine cores as Docker last reported them; 0 unknown
 	startedAt *time.Time
 	detail    string
-	skipped   bool // its ring file could not be read at Open: never written
 }
 
 // entry is the sampler's own state of a container; only Tick touches it.
 type entry struct {
 	row
 	dockerID    string
+	dockerState string // Docker's raw state at the last list
+	skipLogged  bool   // its ring file was skipped and that was logged
 	health      float64
 	healthOK    bool
 	inspectedAt time.Time // zero: inspect again
@@ -105,9 +112,11 @@ type Sampler struct {
 	store *stats.Store
 	ev    *stats.Evaluator
 
-	tick      sync.Mutex        // Tick never runs twice at once
+	tick      sync.Mutex        // Tick never runs twice at once; Close waits for it
+	closed    bool              // under tick
 	reg       map[string]*entry // Tick only
 	lastSweep time.Time
+	skipped   map[string]bool // ring files Open could not read; set once in New
 
 	mu       sync.Mutex // guards the fields below
 	view     map[string]row
@@ -133,8 +142,12 @@ func New(cfg Config) (*Sampler, error) {
 	}
 	s.ev = ev
 	st.SetOnMinute(ev.OnMinute)
+	s.skipped = map[string]bool{}
 	if sk := st.Skipped(); len(sk) > 0 {
 		logError("some stats history files could not be read and are left untouched", errors.New(strings.Join(sk, ", ")))
+		for _, name := range sk {
+			s.skipped[name] = true
+		}
 	}
 	for _, id := range st.Items() {
 		ev.Rebuild(id)
@@ -178,11 +191,17 @@ func (s *Sampler) Run(ctx context.Context) {
 func (s *Sampler) Tick(ctx context.Context) {
 	s.tick.Lock()
 	defer s.tick.Unlock()
+	if s.closed {
+		return
+	}
 	now := s.cfg.Clock.Now()
 
 	lctx, cancel := context.WithTimeout(ctx, callTimeout)
 	list, err := s.cfg.Source.List(lctx)
 	cancel()
+	if err != nil && ctx.Err() != nil {
+		return // shutting down, not an outage
+	}
 	s.mu.Lock()
 	if err != nil {
 		// a gap: nothing recorded, nothing resolved (Docker away is not evidence the alerts ended)
@@ -211,6 +230,8 @@ func (s *Sampler) Tick(ctx context.Context) {
 
 	var running []string
 	byDocker := map[string]*entry{}
+	ictx, icancel := context.WithTimeout(ctx, inspectBudget)
+	defer icancel()
 	for key, c := range seen {
 		e := s.reg[key]
 		if e == nil {
@@ -222,10 +243,15 @@ func (s *Sampler) Tick(ctx context.Context) {
 		if e.dockerID != c.ID { // new or recreated: its counters and settings start over
 			e.dockerID, e.snap, e.inspectedAt = c.ID, nil, time.Time{}
 		}
+		if e.dockerState != string(c.State) { // started, stopped, paused: read it again
+			e.dockerState, e.inspectedAt = string(c.State), time.Time{}
+		}
 		e.state = StateOf(c)
 		e.health, e.healthOK = HealthOf(c.Status)
-		if e.inspectedAt.IsZero() || now.Sub(e.inspectedAt) >= inspectEvery {
-			s.inspect(ctx, e, now)
+		// an unchanged stopped container is never inspected again
+		due := e.inspectedAt.IsZero() || (c.State == "running" && elapsed(now, e.inspectedAt, inspectEvery))
+		if due && ictx.Err() == nil {
+			s.inspect(ictx, e, now)
 		}
 		if string(c.State) == "running" {
 			e.resolved = false
@@ -267,7 +293,7 @@ func (s *Sampler) Tick(ctx context.Context) {
 		delete(s.reg, key)
 	}
 
-	if now.Sub(s.lastSweep) >= time.Hour {
+	if elapsed(now, s.lastSweep, time.Hour) {
 		if err := s.store.Sweep(now); err != nil {
 			logError("stats sweep failed", err)
 		}
@@ -284,10 +310,14 @@ func (s *Sampler) Tick(ctx context.Context) {
 	s.mu.Unlock()
 }
 
+// elapsed: d has passed since then, or the clock stepped back before it.
+func elapsed(now, then time.Time, d time.Duration) bool {
+	return now.Sub(then) >= d || now.Before(then)
+}
+
+// inspect runs under the pass's shared deadline (inspectBudget).
 func (s *Sampler) inspect(ctx context.Context, e *entry, now time.Time) {
-	ictx, cancel := context.WithTimeout(ctx, callTimeout)
-	resp, err := s.cfg.Source.Inspect(ictx, e.dockerID)
-	cancel()
+	resp, err := s.cfg.Source.Inspect(ctx, e.dockerID)
 	if err != nil {
 		return // tried again next tick
 	}
@@ -307,10 +337,11 @@ func (s *Sampler) inspect(ctx context.Context, e *entry, now time.Time) {
 	}
 }
 
-// cleanDetail drops control characters and invalid UTF-8, then cuts to 200 characters.
+// cleanDetail drops control and format characters (bidi overrides included)
+// and invalid UTF-8, then cuts to 200 characters.
 func cleanDetail(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || r == unicode.ReplacementChar {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == unicode.ReplacementChar {
 			return -1
 		}
 		return r
@@ -326,6 +357,14 @@ func (s *Sampler) measure(e *entry, st *container.StatsResponse, now time.Time) 
 	cp.Networks = keepInterfaces(st.Networks)
 	smp, snap := Measure(e.snap, &cp, now, e.alloc, MaxGapFactor*s.cfg.Interval)
 	e.snap = &snap
+	// The first reading after a gap has no CPU rate. Alone in its minute (the
+	// next tick falls in the next minute) it would write a minute without
+	// alert/cpu_high, which ends an active cpu_high; so it is not recorded (a
+	// minute without any Record keeps the alert). Cost: one 5 s live point per
+	// gap. Its snapshot is the baseline of the next tick.
+	_, rate := smp["alert/cpu_high"]
+	_, cpu := snap.counters["total"]
+	skip := !rate && cpu && now.Add(s.cfg.Interval).Unix()/60 != now.Unix()/60
 	if e.hasRestarts {
 		smp["restarts/count"] = float64(e.restarts)
 	}
@@ -342,14 +381,17 @@ func (s *Sampler) measure(e *entry, st *container.StatsResponse, now time.Time) 
 	if e.alloc.CPULimit == 0 {
 		e.cores = e.alloc.CPUCores(st)
 	}
+	if skip {
+		return
+	}
 	switch err := s.store.Record(e.id.ID, now, smp); {
 	case err == nil:
 	case errors.Is(err, stats.ErrRingSkipped):
 		// its history could not be read at Open: never overwritten, reported by Series
-		if !e.skipped {
+		if !e.skipLogged {
 			logError("a stats history file is unreadable; that container is not recorded", err)
 		}
-		e.skipped = true
+		e.skipLogged = true
 	default: // partial errors included: the other keys were stored, no retry
 		s.noteRecordError(err, now)
 	}
@@ -358,8 +400,8 @@ func (s *Sampler) measure(e *entry, st *container.StatsResponse, now time.Time) 
 // keepInterfaces keeps the valid interface names, shortest then lexical
 // first (eth2 before eth10), at most maxInterfaces; the others are dropped,
 // not summed: a sum over a changing set would fake a spike.
-// ponytail: a reconnect that renumbers the interfaces still takes new keys over
-// the item's life; Common's 48-key cap (a partial error) is the backstop.
+// Docker names them ethN inside the container, so a reconnect reuses the same
+// keys; Common's 48-key cap (a partial error) bounds anything else.
 func keepInterfaces(in map[string]container.NetworkStats) map[string]container.NetworkStats {
 	var names []string
 	for n := range in {
@@ -456,11 +498,11 @@ func (s *Sampler) Series(id string, r stats.Range) (SeriesView, error) {
 	res, err := s.store.Query(id, r)
 	switch {
 	case errors.Is(err, stats.ErrUnknownItem):
+		if s.skipped[ringName(id)] { // history exists but is unreadable
+			return SeriesView{}, ErrUnavailable
+		}
 		if !live {
 			return SeriesView{}, ErrUnknownItem
-		}
-		if rw.skipped {
-			return SeriesView{}, ErrUnavailable
 		}
 		res = stats.Result{Range: r, Series: []stats.SeriesData{}} // listed, nothing stored yet
 	case err != nil:
@@ -511,4 +553,19 @@ func (s *Sampler) SetRules(id string, rules []stats.Rule) error {
 	return s.ev.SetRules(id, rules)
 }
 
-func (s *Sampler) Close() error { return s.store.Close() }
+// ringName is Common's file name of an item's ring (pinned by a test).
+func ringName(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])[:32] + ".ring"
+}
+
+// Close waits for a tick in flight, then closes the store; later calls return nil.
+func (s *Sampler) Close() error {
+	s.tick.Lock()
+	defer s.tick.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	return s.store.Close()
+}
