@@ -173,7 +173,9 @@ func (a *AppManagement) SetStatsAlerts(ctx echo.Context, id codegen.StatsItemID)
 	rules := make([]stats.Rule, len(body.Rules))
 	for i, m := range body.Rules {
 		// each field present (an absent one is empty, which Unmarshal refuses) and
-		// of its type; the values are the Evaluator's to judge
+		// of its type; the values are the Evaluator's to judge. A null decodes to
+		// nothing: refused here for enabled and threshold (key and minutes would
+		// be refused by Common with the same message anyway).
 		for _, f := range []struct {
 			name string
 			to   any

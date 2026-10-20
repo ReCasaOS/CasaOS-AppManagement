@@ -1635,15 +1635,17 @@ paths:
           $ref: "#/components/responses/ResponseServiceUnavailable"
 
     put:
-      summary: Replace the alert rules of one container
+      summary: Update the alert rules sent for one container
       description: |
         Answers like the GET. Each rule carries its four properties; the rules not
         sent keep their current values. A bad rule is 400 with `message` naming the
         field, `bad_rules: rules[0].threshold` (also for a property of the wrong type
         or missing); a body that is not JSON, not an object, has no `rules` list or
         is over 64 KiB is `bad_rules: rules`. The handler checks the body itself:
-        the request validator skips this route. Errors: 404 `unknown_item`,
-        503 `stats_unavailable`.
+        the request validator skips this route. Errors: 404 `unknown_item` (also for
+        a listed container with no history yet: its rules would not be kept),
+        503 `stats_unavailable` (also when the rules were applied in memory but
+        could not be written to disk: they are not durable).
       operationId: setStatsAlerts
       tags:
         - Stats methods

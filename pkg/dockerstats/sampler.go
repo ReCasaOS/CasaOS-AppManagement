@@ -553,12 +553,22 @@ func (s *Sampler) Alerts(id string) ([]stats.Rule, []stats.Event, error) {
 	return s.ev.Rules(id), s.ev.Active(id), nil
 }
 
-// SetRules replaces the rules of id; the Evaluator's *stats.RuleError on a bad value.
+// SetRules updates the rules sent for id; the Evaluator's *stats.RuleError on a
+// bad value. Only an item with history takes rules: Prune drops the rules of any
+// other within the hour. nil means the rules are in alerts.json; an error after
+// they were applied means they are only in memory until the next good write.
 func (s *Sampler) SetRules(id string, rules []stats.Rule) error {
-	if err := s.lookup(id); err != nil {
+	switch {
+	case slices.Contains(s.store.Items(), id):
+	case s.skipped[ringName(id)]:
+		return ErrUnavailable
+	default:
+		return ErrUnknownItem
+	}
+	if err := s.ev.SetRules(id, rules); err != nil {
 		return err
 	}
-	return s.ev.SetRules(id, rules)
+	return s.ev.LastError()
 }
 
 // ringName is Common's file name of an item's ring (pinned by a test).

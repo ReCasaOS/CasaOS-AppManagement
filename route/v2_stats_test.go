@@ -349,14 +349,14 @@ func TestAnUnknownItemIs404WithACode(t *testing.T) {
 func TestWithoutASamplerEveryStatsRouteIs503(t *testing.T) {
 	r := newStatsRig(t)
 	service.SetStats(nil)
-	for _, path := range []string{"/stats", "/stats/container:my.db_1", "/stats/container:my.db_1?range=2h", "/stats/container:my.db_1/alerts", "PUT"} {
+	for _, path := range []string{"/stats", "/stats/container:my.db_1", "/stats/container:my.db_1?range=2h", "/stats/container:my.db_1/alerts"} {
 		recorder := r.do(http.MethodGet, path)
-		if path == "PUT" {
-			recorder = r.send(http.MethodPut, "/stats/container:my.db_1/alerts", `{"rules":[]}`)
-		}
 		assert.Equal(t, recorder.Code, http.StatusServiceUnavailable, path)
 		assert.Equal(t, strings.TrimSpace(recorder.Body.String()), `{"message":"stats_unavailable"}`, path)
 	}
+	recorder := r.send(http.MethodPut, "/stats/container:my.db_1/alerts", `{"rules":[]}`)
+	assert.Equal(t, recorder.Code, http.StatusServiceUnavailable)
+	assert.Equal(t, strings.TrimSpace(recorder.Body.String()), `{"message":"stats_unavailable"}`)
 }
 
 func TestWhenDockerIsDownTheListIs503ButHistoryIsStillServed(t *testing.T) {
@@ -635,15 +635,48 @@ func TestAlertsAreAvailableWhileDockerIsDown(t *testing.T) {
 	assert.Equal(t, r.send(http.MethodPut, "/stats/app:jarvis:web:1/alerts", `{"rules":[]}`).Code, http.StatusOK)
 }
 
-// A listed container that never ran has no history; its rules are still taken.
-func TestRulesOfAnItemWithoutHistoryAreKept(t *testing.T) {
+// A listed container that never ran has no history: the hourly Prune would drop
+// its rules, so they are refused rather than lost after a 200.
+func TestRulesOfAnItemWithoutHistoryAreRefused(t *testing.T) {
 	r := newStatsRig(t)
 	r.src.ctrs[1].State = "exited"
 	r.ticks(1)
 	recorder := r.send(http.MethodPut, "/stats/container:my.db_1/alerts", `{"rules":[{"key":"mem_high","enabled":true,"threshold":70,"minutes":2}]}`)
+	assert.Equal(t, recorder.Code, http.StatusNotFound, recorder.Body.String())
+	assert.Equal(t, strings.TrimSpace(recorder.Body.String()), `{"message":"unknown_item"}`)
+	assert.Equal(t, string(r.get("/stats/container:my.db_1/alerts", http.StatusOK)["rules"]), defaultRules, "still listed, with the defaults")
+}
+
+// More than an hour of ticks goes through the hourly Sweep and Prune.
+func TestRulesOfAnItemWithHistoryOutliveTheHourlyPrune(t *testing.T) {
+	r := newStatsRig(t)
+	r.ticks(2)
+	recorder := r.send(http.MethodPut, "/stats/container:my.db_1/alerts", `{"rules":[{"key":"mem_high","enabled":true,"threshold":70,"minutes":2}]}`)
 	assert.Equal(t, recorder.Code, http.StatusOK, recorder.Body.String())
-	r.ticks(1)
+	r.ticks(721)
 	assert.Assert(t, strings.Contains(string(r.get("/stats/container:my.db_1/alerts", http.StatusOK)["rules"]), `"threshold":70`))
+}
+
+// Rules applied but not written to alerts.json are not durable: 503, and the
+// next good write makes them so.
+func TestAFailedSaveOfTheRulesIs503(t *testing.T) {
+	r := newStatsRig(t)
+	r.ticks(1)
+	tmp := filepath.Join(r.dir, "alerts.json.tmp")
+	assert.NilError(t, os.Mkdir(tmp, 0o755)) // the atomic write cannot open it, even as root
+	put := func(threshold string) *httptest.ResponseRecorder {
+		return r.send(http.MethodPut, "/stats/container:my.db_1/alerts", `{"rules":[{"key":"mem_high","enabled":true,"threshold":`+threshold+`,"minutes":2}]}`)
+	}
+	recorder := put("70")
+	assert.Equal(t, recorder.Code, http.StatusServiceUnavailable, recorder.Body.String())
+	assert.Equal(t, strings.TrimSpace(recorder.Body.String()), `{"message":"stats_unavailable"}`)
+	assert.Assert(t, !strings.Contains(recorder.Body.String(), "alerts.json"))
+
+	assert.NilError(t, os.Remove(tmp))
+	assert.Equal(t, put("60").Code, http.StatusOK)
+	b, err := os.ReadFile(filepath.Join(r.dir, "alerts.json"))
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(b), `"threshold":60`), string(b))
 }
 
 // The history of a container that is gone could not be read at start: its
