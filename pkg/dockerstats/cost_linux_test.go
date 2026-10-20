@@ -69,9 +69,29 @@ func sumTicks(m map[string]float64) (n float64) {
 	return n
 }
 
-// measure runs fn for costWindow and returns the CPU used, as percent of one core. A
-// shim that exits during the window (a container removed) can only lower the stack
-// figure; the containers live for the whole window.
+// costIdle is the CPU of the Docker stack with the 30 containers running and nothing
+// reading their stats, as percent of one core; measure subtracts it, so the figure it
+// returns is the growth the sampling causes.
+var costIdle float64
+
+// stackPercent is the growth of the stack's CPU over a window of wall seconds.
+func stackPercent(before, after map[string]float64, wall float64) float64 {
+	return (sumTicks(after) - sumTicks(before)) / clockTicks / wall * 100
+}
+
+// idleBaseline measures costIdle over costWindow.
+func idleBaseline(t *testing.T) {
+	before := stackTicks(t)
+	start := time.Now()
+	time.Sleep(costWindow)
+	costIdle = stackPercent(before, stackTicks(t), time.Since(start).Seconds())
+	t.Logf("idle: the stack uses %.3f %% of one core with the %d containers running and nothing reading them", costIdle, costContainers)
+}
+
+// measure runs fn for costWindow and returns the CPU it costs, as percent of one core:
+// this process plus the growth of the stack over the idle baseline (never below 0). The
+// gross figures are logged too. A shim that exits during the window (a container
+// removed) can only lower the stack figure; the containers live for the whole window.
 func measure(t *testing.T, name string, fn func(ctx context.Context)) float64 {
 	self0, stack0 := selfCPUTicks(), stackTicks(t)
 	ctx, cancel := context.WithTimeout(context.Background(), costWindow)
@@ -81,14 +101,15 @@ func measure(t *testing.T, name string, fn func(ctx context.Context)) float64 {
 	wall := time.Since(start).Seconds()
 	self := selfCPUTicks() - self0
 	stack1 := stackTicks(t)
-	var stack float64
 	for comm, v := range stack1 {
-		d := (v - stack0[comm]) / clockTicks / wall * 100
-		t.Logf("%s: %-16s %.3f %% of one core", name, comm, d)
-		stack += v - stack0[comm]
+		t.Logf("%s: %-16s %.3f %% of one core (gross)", name, comm, (v-stack0[comm])/clockTicks/wall*100)
 	}
-	t.Logf("%s: %-16s %.3f %% of one core", name, "test process", self/clockTicks/wall*100)
-	return (self + stack) / clockTicks / wall * 100
+	gross := stackPercent(stack0, stack1, wall)
+	net := max(0, gross-costIdle)
+	selfPct := self / clockTicks / wall * 100
+	t.Logf("%s: %-16s %.3f %% of one core", name, "test process", selfPct)
+	t.Logf("%s: stack gross %.3f %%, idle %.3f %%, growth %.3f %% of one core", name, gross, costIdle, net)
+	return selfPct + net
 }
 
 func TestCost(t *testing.T) {
@@ -106,6 +127,7 @@ func TestCost(t *testing.T) {
 		}
 	}
 	time.Sleep(10 * time.Second)
+	idleBaseline(t)
 
 	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
 	if err != nil {

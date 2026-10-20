@@ -11,7 +11,7 @@ On Linux, as root (or a member of the docker group), with a reachable Docker, `d
 ```sh
 STATS_COST=1 go test ./pkg/dockerstats -run TestCost -v -timeout 10m
 STATS_PROOF=1 go test ./pkg/dockerstats -run TestProof -v -timeout 10m
-go test -race ./...
+go test -race ./...   # needs cgo and a C compiler (gcc); the script checks and fails clearly without
 ```
 
 or all three, with PASS/FAIL per step and the numbers: `sh scripts/stats-proof.sh` (installs nothing; logs in `$STATS_PROOF_LOGS` or a temp dir; exit 0 only when every step passes).
@@ -24,7 +24,7 @@ or all three, with PASS/FAIL per step and the numbers: `sh scripts/stats-proof.s
 - `TestCost/Strategies`, B, streams: one `ContainerStats(stream=true)` goroutine per container, every frame decoded (one per second). This sub-test fails only when A and B are both over the budget.
 - `TestCost/Sampler`: the finished `Sampler` (real `DockerSource`, real store in a temp dir) with `Tick` every 5 s. It fails when it is over 0.5 % of one core or when it did not measure all 30 containers.
 
-The cost is the CPU of the test process (`getrusage`, user plus system) plus the growth of the CPU of `dockerd`, `containerd` and every `containerd-shim*` process (`/proc/<pid>/stat` fields 14 and 15, in USER_HZ ticks of 100 per second), as percent of one core. A stats call goes dockerd, containerd, shim, cgroup files, so dockerd alone would undercount. Processes are found by scanning the comm names in `/proc` rather than reading cgroup counters: it needs no knowledge of the cgroup version or of systemd unit names. Each measure logs its per-process breakdown; the parser is covered without Docker by `proccpu_test.go`.
+Before the first measure the test reads an idle baseline: the CPU of `dockerd`, `containerd` and every `containerd-shim*` process (`/proc/<pid>/stat` fields 14 and 15, in USER_HZ ticks of 100 per second) over 60 s with the 30 containers running and nothing reading them. The cost of a measure is then the CPU of the test process (`getrusage`, user plus system) plus the growth of that stack over the idle baseline (never below 0), as percent of one core. The gross stack figure, the idle figure and the growth are all logged. A stats call goes dockerd, containerd, shim, cgroup files, so dockerd alone would undercount. Processes are found by scanning the comm names in `/proc` rather than reading cgroup counters: it needs no knowledge of the cgroup version or of systemd unit names. Each measure logs its per-process breakdown; the parser is covered without Docker by `proccpu_test.go`.
 
 Leftover containers of a killed run are removed before the start; the containers are removed at the end, even on failure.
 

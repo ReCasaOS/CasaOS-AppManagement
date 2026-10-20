@@ -43,10 +43,19 @@ grep -E -- '^ *--- (PASS|FAIL)|minutes kept' "$logs/proof.log"
 grep -q -- '--- SKIP' "$logs/proof.log" && rc=1
 report "proof (TestProof)" "$rc" "$logs/proof.log"
 
-go test -race -count=1 ./... >"$logs/race.log" 2>&1
-rc=$?
-grep -E '^(ok|FAIL|---)' "$logs/race.log" | grep -v '^ok' | head -n 40
-report "go test -race ./..." "$rc" "$logs/race.log"
+# -race needs cgo, hence a C compiler
+if [ "$(go env CGO_ENABLED)" != "1" ] || ! command -v "$(go env CC)" >/dev/null 2>&1; then
+	echo "FAIL go test -race needs CGO_ENABLED=1 and a C compiler (install gcc); not run"
+	failed=1
+else
+	go generate ./... >"$logs/generate.log" 2>&1
+	rc=$?
+	report "go generate ./..." "$rc" "$logs/generate.log"
+	go test -race -count=1 ./... >"$logs/race.log" 2>&1
+	rc=$?
+fi
+[ -f "$logs/race.log" ] && grep -E '^(ok|FAIL|---)' "$logs/race.log" | grep -v '^ok' | head -n 40
+[ -f "$logs/race.log" ] && report "go test -race ./..." "$rc" "$logs/race.log"
 
 echo "logs: $logs"
 if [ "$failed" -ne 0 ]; then
