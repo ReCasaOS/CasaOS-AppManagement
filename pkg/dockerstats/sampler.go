@@ -530,25 +530,33 @@ func (s *Sampler) Series(id string, r stats.Range) (SeriesView, error) {
 	return v, nil
 }
 
-func (s *Sampler) known(id string) bool {
+// lookup: nil for an item listed or on disk, ErrUnavailable for one whose
+// history could not be read at start, ErrUnknownItem otherwise.
+func (s *Sampler) lookup(id string) error {
 	s.mu.Lock()
 	_, ok := s.view[id]
 	s.mu.Unlock()
-	return ok || slices.Contains(s.store.Items(), id)
+	switch {
+	case ok || slices.Contains(s.store.Items(), id):
+		return nil
+	case s.skipped[ringName(id)]:
+		return ErrUnavailable
+	}
+	return ErrUnknownItem
 }
 
 // Alerts returns the rules and the firing alerts of id.
 func (s *Sampler) Alerts(id string) ([]stats.Rule, []stats.Event, error) {
-	if !s.known(id) {
-		return nil, nil, ErrUnknownItem
+	if err := s.lookup(id); err != nil {
+		return nil, nil, err
 	}
 	return s.ev.Rules(id), s.ev.Active(id), nil
 }
 
 // SetRules replaces the rules of id; the Evaluator's *stats.RuleError on a bad value.
 func (s *Sampler) SetRules(id string, rules []stats.Rule) error {
-	if !s.known(id) {
-		return ErrUnknownItem
+	if err := s.lookup(id); err != nil {
+		return err
 	}
 	return s.ev.SetRules(id, rules)
 }

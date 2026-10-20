@@ -53,6 +53,12 @@ func isGitWebhook(c echo.Context) bool {
 	return c.Request().Method == http.MethodPost && c.Path() == V2APIPath+"/git/:app/webhook"
 }
 
+// isStatsRulesPut: the handler bounds and checks this body itself, so that any
+// fault is the contract's bad_rules and an oversized body is never read whole.
+func isStatsRulesPut(c echo.Context) bool {
+	return c.Request().Method == http.MethodPut && c.Path() == V2APIPath+"/stats/:id/alerts"
+}
+
 func InitV2Router() http.Handler {
 	appManagement := v2Route.NewAppManagement()
 
@@ -124,7 +130,7 @@ func InitV2Router() http.Handler {
 			// (ReCasaOS/CasaOS#7).
 			ExcludeReadOnlyValidations: true,
 		},
-		Skipper: isGitWebhook,
+		Skipper: func(c echo.Context) bool { return isGitWebhook(c) || isStatsRulesPut(c) },
 	}))
 
 	codegen.RegisterHandlersWithBaseURL(e, appManagement, V2APIPath)
