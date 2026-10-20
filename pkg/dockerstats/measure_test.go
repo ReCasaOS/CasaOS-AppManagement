@@ -11,6 +11,7 @@ package dockerstats
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -257,4 +258,105 @@ func TestTwoReadingsOfTheSameInstantGiveNoRate(t *testing.T) {
 	c.CPUStats.CPUUsage.UsageInUsermode += 1_000_000_000
 	s, _ := Measure(&snap, c, p.Read, Allocation{}, gap)
 	lacks(t, s, "cpu/user", "network/rx:eth0", "alert/cpu_high")
+}
+
+func finite(t *testing.T, m stats.Sample) {
+	t.Helper()
+	for k, v := range m {
+		assert.Assert(t, !math.IsInf(v, 0) && !math.IsNaN(v), "%s = %v", k, v)
+	}
+}
+
+func TestNoZeroDenominatorEverGivesAMemoryAlertOrANonFiniteValue(t *testing.T) {
+	// usage but no limit anywhere
+	nolimit := func(c *container.StatsResponse) { c.MemoryStats.Limit = 0 }
+	f, s := step(t, "stats-cgroup2.json", Allocation{}, nolimit, nil)
+	lacks(t, f, "alert/mem_high")
+	lacks(t, s, "alert/mem_high")
+	// a limit but no usage
+	nousage := func(c *container.StatsResponse) { c.MemoryStats.Usage = 0 }
+	f, s = step(t, "stats-cgroup2.json", Allocation{MemLimit: 1 << 30}, nousage, nil)
+	lacks(t, f, "alert/mem_high")
+	lacks(t, s, "alert/mem_high")
+	// neither
+	f, s = step(t, "stats-cgroup2.json", Allocation{}, func(c *container.StatsResponse) {
+		c.MemoryStats.Limit, c.MemoryStats.Usage = 0, 0
+	}, nil)
+	lacks(t, f, "alert/mem_high")
+	for _, fx := range []string{"stats-cgroup2.json", "stats-cgroup1.json"} {
+		for _, a := range []Allocation{{}, {CPULimit: 1, MemLimit: 1 << 30}} {
+			f, s := step(t, fx, a, nil, func(c *container.StatsResponse) { c.CPUStats.CPUUsage.TotalUsage += 1e9 })
+			finite(t, f)
+			finite(t, s)
+		}
+	}
+}
+
+func TestNoCPUSplitWhenDockerReportsNoUserOrKernelTime(t *testing.T) {
+	base := func(c *container.StatsResponse) {
+		c.CPUStats.CPUUsage.UsageInUsermode, c.CPUStats.CPUUsage.UsageInKernelmode = 0, 0
+	}
+	_, s := step(t, "stats-cgroup2.json", Allocation{}, base, func(c *container.StatsResponse) {
+		c.CPUStats.CPUUsage.TotalUsage += 1e9
+	})
+	lacks(t, s, "cpu/user", "cpu/system")
+	assert.Assert(t, has(s, "alert/cpu_high", "cpu/throttled"))
+}
+
+func TestTheGapBoundaryIsInclusive(t *testing.T) {
+	for _, c := range []struct {
+		d    time.Duration
+		rate bool
+	}{{gap, true}, {gap + time.Nanosecond, false}} {
+		p := load(t, "stats-cgroup2.json")
+		p.Read = t0
+		_, snap := Measure(nil, p, t0, Allocation{}, gap)
+		n := load(t, "stats-cgroup2.json")
+		n.Read = t0.Add(c.d)
+		n.CPUStats.CPUUsage.UsageInUsermode += 1_000_000_000
+		s, _ := Measure(&snap, n, n.Read, Allocation{}, gap)
+		_, ok := s["cpu/user"]
+		assert.Equal(t, ok, c.rate, c.d)
+	}
+}
+
+func TestACgroupV1AnswerWithEveryKeyItCarriesIsMeasuredTheSame(t *testing.T) {
+	f, s := step(t, "stats-cgroup1.json", Allocation{}, nil, func(c *container.StatsResponse) {
+		for i := range c.BlkioStats.IoServiceBytesRecursive {
+			c.BlkioStats.IoServiceBytesRecursive[i].Value += 5000
+		}
+	})
+	assert.Equal(t, f["memory/rss"], 12582912.0)
+	assert.Equal(t, f["memory/cache"], 16777216.0)
+	assert.Equal(t, f["memory/swap"], 2097152.0)
+	// working set: usage minus the inactive file pages
+	assert.Equal(t, f["alert/mem_high"], float64(31457280-8388608)/8318783488*100)
+	// Sync, Async, Discard and Total are not read or write
+	assert.Equal(t, s["disk/read"], 1000.0)
+	assert.Equal(t, s["disk/write"], 1000.0)
+}
+
+func TestAReadingWithoutReadOnlyPairsWithAnotherOne(t *testing.T) {
+	use := func(c *container.StatsResponse) { c.CPUStats.CPUUsage.UsageInUsermode += 1_000_000_000 }
+	measure := func(prevHasRead, curHasRead bool) stats.Sample {
+		p := load(t, "stats-cgroup2.json")
+		if !prevHasRead {
+			p.Read = time.Time{}
+		} else {
+			p.Read = t0
+		}
+		_, snap := Measure(nil, p, t0, Allocation{}, gap)
+		c := load(t, "stats-cgroup2.json")
+		use(c)
+		c.Read = time.Time{}
+		if curHasRead {
+			c.Read = t0.Add(5 * time.Second)
+		}
+		s, _ := Measure(&snap, c, t0.Add(5*time.Second), Allocation{}, gap)
+		return s
+	}
+	assert.Equal(t, measure(false, false)["cpu/user"], 20.0)
+	assert.Equal(t, measure(true, true)["cpu/user"], 20.0)
+	lacks(t, measure(true, false), "cpu/user")
+	lacks(t, measure(false, true), "cpu/user")
 }

@@ -61,6 +61,7 @@ func (a Allocation) CPUCores(s *container.StatsResponse) float64 {
 // and the cumulative counters rates are computed from.
 type Snapshot struct {
 	At       time.Time
+	read     bool // At came from Docker's own Read, not from the caller's clock
 	counters map[string]uint64
 }
 
@@ -69,7 +70,8 @@ type Snapshot struct {
 // (container recreated) drops its own series, not the others.
 func Measure(prev *Snapshot, s *container.StatsResponse, now time.Time, a Allocation, maxGap time.Duration) (stats.Sample, Snapshot) {
 	at := s.Read
-	if at.IsZero() {
+	hasRead := !at.IsZero()
+	if !hasRead {
 		at = now
 	}
 	cur := map[string]uint64{}
@@ -116,12 +118,13 @@ func Measure(prev *Snapshot, s *container.StatsResponse, now time.Time, a Alloca
 		}
 	}
 
-	snap := Snapshot{At: at, counters: cur}
+	snap := Snapshot{At: at, read: hasRead, counters: cur}
 	if prev == nil {
 		return smp, snap
 	}
 	dt := at.Sub(prev.At)
-	if dt <= 0 || dt > maxGap {
+	// two clocks must not be mixed: a reading without Read only pairs with another one
+	if prev.read != hasRead || dt <= 0 || dt > maxGap {
 		return smp, snap
 	}
 	delta := func(key string) (float64, bool) {
