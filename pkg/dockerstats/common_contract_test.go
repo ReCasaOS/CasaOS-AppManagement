@@ -246,3 +246,39 @@ func TestTheUnitsOfTheSeriesThisServiceWrites(t *testing.T) {
 		assert.Equal(t, stats.Unit(chart, name), unit, key)
 	}
 }
+
+// An emit that calls back into the Evaluator (as Sampler.emit does with Rules) neither
+// deadlocks nor loses events, and a re-entrant SetRules emits after the current emit returns.
+func TestEmitMayReenterTheEvaluator(t *testing.T) {
+	clock := &fakeClock{t0}
+	dir := t.TempDir()
+	store, err := stats.Open(dir, clock)
+	assert.NilError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	var (
+		eval    *stats.Evaluator
+		got     []string
+		rulesIn []int // window seen through Rules inside emit
+		inEmit  bool
+	)
+	eval, err = stats.NewEvaluator(store, dir, func(e stats.Event) {
+		assert.Assert(t, !inEmit, "emits never overlap")
+		inEmit = true
+		defer func() { inEmit = false }()
+		got = append(got, e.State)
+		for _, r := range eval.Rules(e.Item) {
+			if r.Key == e.Key {
+				rulesIn = append(rulesIn, r.Minutes)
+			}
+		}
+		if e.State == "firing" {
+			assert.NilError(t, eval.SetRules(alertItem, []stats.Rule{{Key: "cpu_high", Enabled: false, Threshold: 90, Minutes: 3}}))
+		}
+	})
+	assert.NilError(t, err)
+	store.SetOnMinute(eval.OnMinute)
+	assert.NilError(t, eval.SetRules(alertItem, []stats.Rule{cpuRule(2)}))
+	high(t, store, t0, 4*time.Minute)
+	assert.DeepEqual(t, got, []string{"firing", "resolved"})
+	assert.DeepEqual(t, rulesIn, []int{2, 3})
+}
