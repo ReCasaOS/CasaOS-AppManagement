@@ -505,8 +505,8 @@ var (
 	}
 	PropertyTypeResourceName = message_bus.PropertyType{
 		Name:        "name",
-		Description: utils.Ptr("name of the container"),
-		Example:     utils.Ptr("web"),
+		Description: utils.Ptr("what to call the container: `<application> / <service>` for an app container, its name for any other"),
+		Example:     utils.Ptr("jarvis / web"),
 	}
 	PropertyTypeResourceKind = message_bus.PropertyType{
 		Name:        "kind",
@@ -530,7 +530,7 @@ var (
 	}
 	PropertyTypeResourceSince = message_bus.PropertyType{
 		Name:        "since",
-		Description: utils.Ptr("when the alert fired or resolved, RFC 3339"),
+		Description: utils.Ptr("when the alert fired, RFC 3339; a resolved event carries the time it fired"),
 		Example:     utils.Ptr("2026-10-20T10:00:00Z"),
 	}
 	PropertyTypeResourceSource = message_bus.PropertyType{

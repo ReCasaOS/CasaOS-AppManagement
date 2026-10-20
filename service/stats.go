@@ -26,6 +26,7 @@ var (
 	statsCancel context.CancelFunc
 	statsDone   chan struct{}
 	statsSource *dockerstats.DockerSource
+	statsBus    *alertPublisher
 )
 
 // Stats is the running sampler, nil when it is not running.
@@ -52,17 +53,19 @@ func StartStats(ctx context.Context) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	bus := startAlertPublisher(alertQueueSize)
 	sampler, err := dockerstats.New(dockerstats.Config{
 		Dir:      StatsDir,
 		Source:   source,
 		Clock:    stats.SystemClock{},
 		Interval: 5 * time.Second,
 		Emit: func(e stats.Event, who dockerstats.Identity, minutes int) {
-			emitAlert(ctx, e, who, minutes)
+			emitAlert(ctx, bus, e, who, minutes)
 		},
 	})
 	if err != nil {
 		cancel()
+		bus.stop()
 		_ = source.Close()
 		return err
 	}
@@ -72,7 +75,7 @@ func StartStats(ctx context.Context) error {
 		defer close(done)
 		sampler.Run(ctx)
 	}()
-	statsCancel, statsDone, statsSource = cancel, done, source
+	statsCancel, statsDone, statsSource, statsBus = cancel, done, source, bus
 	statsSampler.Store(sampler)
 	return nil
 }
@@ -90,24 +93,92 @@ func StopStats() {
 	if s := statsSampler.Swap(nil); s != nil {
 		_ = s.Close()
 	}
+	statsBus.stop() // what is queued is still published, in order
 	_ = statsSource.Close()
-	statsCancel, statsDone, statsSource = nil, nil, nil
+	statsCancel, statsDone, statsSource, statsBus = nil, nil, nil, nil
 }
 
-// publishAlert never holds the sampler up on the bus, as the Docker watch; replaced by tests.
-var publishAlert = func(ctx context.Context, eventType message_bus.EventType, properties map[string]string) {
-	go PublishEventWrapper(ctx, eventType, properties)
+// alertQueueSize bounds the events waiting for the bus. Full means the bus has been
+// stuck for longer than any burst of alerts: the NEWEST event is dropped and logged, so
+// what is already queued keeps its order.
+const alertQueueSize = 64
+
+// publishAlert sends one event and returns when the bus has answered; replaced by tests.
+var publishAlert = PublishEventWrapper
+
+type alertJob struct {
+	ctx        context.Context
+	eventType  message_bus.EventType
+	properties map[string]string
 }
 
-// emitAlert publishes an alert of an item the sampler can name; an event without a kind
+// alertPublisher is one goroutine fed by a bounded channel, so that a firing and the
+// resolved that follows it reach the bus in the order the sampler emitted them, and the
+// sampler never waits on the bus.
+type alertPublisher struct {
+	mu     sync.Mutex
+	closed bool
+	jobs   chan alertJob
+	done   chan struct{}
+}
+
+func startAlertPublisher(size int) *alertPublisher {
+	p := &alertPublisher{jobs: make(chan alertJob, size), done: make(chan struct{})}
+	go func() {
+		defer close(p.done)
+		for j := range p.jobs {
+			publishAlert(j.ctx, j.eventType, j.properties)
+		}
+	}()
+	return p
+}
+
+// submit never blocks; false when the event was dropped (queue full or publisher stopped).
+func (p *alertPublisher) submit(j alertJob) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return false
+	}
+	select {
+	case p.jobs <- j:
+		return true
+	default:
+		return false
+	}
+}
+
+// stop publishes what is queued, then ends the goroutine; calling it again does nothing.
+func (p *alertPublisher) stop() {
+	p.mu.Lock()
+	if !p.closed {
+		p.closed = true
+		close(p.jobs)
+	}
+	p.mu.Unlock()
+	<-p.done
+}
+
+// emitAlert queues an alert of an item the sampler can name; an event without a kind
 // and a name would mean nothing to its reader.
-func emitAlert(ctx context.Context, e stats.Event, who dockerstats.Identity, minutes int) {
+func emitAlert(ctx context.Context, bus *alertPublisher, e stats.Event, who dockerstats.Identity, minutes int) {
 	if who.Kind == "" {
 		logger.Error("a resource alert of an unidentified item is not published", zap.String("item", e.Item), zap.String("situation", e.Key))
 		return
 	}
 	eventType, properties := resourceAlertEvent(e, who, minutes)
-	publishAlert(ctx, eventType, properties)
+	if !bus.submit(alertJob{ctx, eventType, properties}) {
+		logger.Error("a resource alert was dropped, the message bus queue is full or stopped", zap.String("item", e.Item), zap.String("situation", e.Key), zap.String("state", e.State))
+	}
+}
+
+// alertName is the name an alert carries: "<app> / <service>" for a compose container
+// ("web-2" for its second replica), the container's name for any other.
+func alertName(who dockerstats.Identity) string {
+	if who.Kind == "app-container" && who.App != "" {
+		return who.App + " / " + who.Name
+	}
+	return who.Name
 }
 
 // resourceAlertEvent is the message bus event of an alert that fired or resolved. minutes
@@ -119,7 +190,7 @@ func resourceAlertEvent(e stats.Event, who dockerstats.Identity, minutes int) (m
 	}
 	properties := map[string]string{
 		"item":      e.Item,
-		"name":      who.Name,
+		"name":      alertName(who),
 		"kind":      who.Kind,
 		"situation": e.Key,
 		"minutes":   strconv.Itoa(minutes),
