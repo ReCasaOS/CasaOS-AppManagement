@@ -87,10 +87,7 @@ func StateOf(c container.Summary) string {
 	case "created":
 		return "stopped"
 	case "exited":
-		if strings.HasPrefix(c.Status, "Exited (") && !strings.HasPrefix(c.Status, "Exited (0)") {
-			return "crashed"
-		}
-		return "stopped"
+		return exitedState(c.Status)
 	}
 	return "unknown"
 }
@@ -105,4 +102,22 @@ func HealthOf(status string) (float64, bool) {
 		return 1, true
 	}
 	return 0, false
+}
+
+// exitedState: a non-zero exit code is a crash, except 137 and 143 (SIGKILL
+// and SIGTERM): the usual cause is a user stop (`docker stop` on a process
+// that ignores SIGTERM ends in 137). An OOM kill is also 137 and is not told
+// apart here; the app:container-died event reports it. No parseable code
+// means stopped.
+func exitedState(status string) string {
+	rest, ok := strings.CutPrefix(status, "Exited (")
+	if !ok {
+		return "stopped"
+	}
+	num, _, _ := strings.Cut(rest, ")")
+	switch code, err := strconv.Atoi(num); {
+	case err != nil, code == 0, code == 137, code == 143:
+		return "stopped"
+	}
+	return "crashed"
 }

@@ -104,7 +104,12 @@ func TestStateOf(t *testing.T) {
 		{"restarting", "Restarting (1) 5 seconds ago", "crashed"},
 		{"dead", "Dead", "crashed"},
 		{"exited", "Exited (0) 3 hours ago", "stopped"},
-		{"exited", "Exited (137) 2 minutes ago", "crashed"},
+		{"exited", "Exited (1) 2 minutes ago", "crashed"},
+		{"exited", "Exited (139) 2 minutes ago", "crashed"},
+		{"exited", "Exited (137) 2 minutes ago", "stopped"},
+		{"exited", "Exited (143) 2 minutes ago", "stopped"},
+		{"exited", "", "stopped"},
+		{"exited", "Exited (x) now", "stopped"},
 		{"created", "Created", "stopped"},
 		{"removing", "Removing", "unknown"},
 		{"", "", "unknown"},
@@ -122,4 +127,17 @@ func TestHealthOf(t *testing.T) {
 	assert.Assert(t, !ok)
 	_, ok = HealthOf("Up 2 hours")
 	assert.Assert(t, !ok)
+}
+
+func TestTheOneOffLabelIsReadWhateverItsCase(t *testing.T) {
+	for _, v := range []string{"True", "true", "TRUE"} {
+		l := compose("jarvis", "web", "1")
+		l[api.OneoffLabel] = v
+		id, _ := Identify(l, []string{"/x"})
+		assert.Equal(t, id.ID, "container:x", v)
+	}
+	l := compose("jarvis", "web", "1")
+	l[api.OneoffLabel] = "False"
+	id, _ := Identify(l, []string{"/x"})
+	assert.Equal(t, id.ID, "app:jarvis:web:1")
 }
