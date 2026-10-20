@@ -36,6 +36,10 @@ tags:
     description: |-
       methods for apps deployed from their git repository
 
+  - name: Stats methods
+    description: |-
+      resource history of every container, sampled every five seconds and kept seven days
+
   - name: Internal methods
     description: |-
       methods for internal use ONLY
@@ -101,6 +105,7 @@ x-tagGroups:
       - Container methods
       - Image methods
       - Git methods
+      - Stats methods
 
   - name: Schemas
     tags:
@@ -1556,6 +1561,108 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /stats:
+    get:
+      summary: List the containers and their latest resource use
+      description: |
+        Every container Docker knows, and those whose history is still within seven
+        days (state `stopped`, no numbers). The body is bare: no `data` envelope.
+
+        `cpu_percent` is a percentage of one core (200 is two cores), `null` until two
+        samples exist; `memory_limit` is `null` when the container declares no limit.
+        `notes` carries codes the page translates (`stats_capacity`: some containers
+        are listed but not measured).
+
+        Docker down gives 503 `stats_unavailable` on this route only: the history
+        routes keep answering from disk.
+      operationId: statsList
+      tags:
+        - Stats methods
+      responses:
+        "200":
+          $ref: "#/components/responses/StatsListOK"
+        "503":
+          $ref: "#/components/responses/ResponseServiceUnavailable"
+
+  /stats/{id}:
+    get:
+      summary: The resource history of one container
+      description: |
+        Series over `range` (`live` when absent). The body is bare: no `data` envelope.
+
+        Each point is `[t, avg, min, max]`, t in Unix seconds; `null` values are a gap
+        (nothing was measured), never a zero. `scale.cpu` is `percent_of_one_core`;
+        `scale.cpu_allocation` is the container's CPU limit in cores, or the machine's
+        cores with the note `no_cpu_limit`; `scale.memory_limit` is the declared limit
+        in bytes, or `null` with the note `no_memory_limit`.
+
+        Errors: 400 `bad_range`, 404 `unknown_item`, 503 `stats_unavailable` (the
+        sampler is not running or the history is unreadable). Docker being down is
+        not an error here: the outage is a gap.
+      operationId: statsSeries
+      tags:
+        - Stats methods
+      parameters:
+        - $ref: "#/components/parameters/StatsItemID"
+        - $ref: "#/components/parameters/StatsRange"
+      responses:
+        "200":
+          $ref: "#/components/responses/StatsSeriesOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "503":
+          $ref: "#/components/responses/ResponseServiceUnavailable"
+
+  /stats/{id}/alerts:
+    get:
+      summary: The alert rules of one container and its firing alerts
+      description: |
+        The body is bare: no `data` envelope. Errors: 404 `unknown_item`,
+        503 `stats_unavailable`.
+      operationId: statsAlerts
+      tags:
+        - Stats methods
+      parameters:
+        - $ref: "#/components/parameters/StatsItemID"
+      responses:
+        "200":
+          $ref: "#/components/responses/StatsAlertsOK"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "503":
+          $ref: "#/components/responses/ResponseServiceUnavailable"
+
+    put:
+      summary: Update the alert rules sent for one container
+      description: |
+        Answers like the GET. Each rule carries its four properties; the rules not
+        sent keep their current values. A bad rule is 400 with `message` naming the
+        field, `bad_rules: rules[0].threshold` (also for a property of the wrong type
+        or missing); a body that is not JSON, not an object, has no `rules` list or
+        is over 64 KiB is `bad_rules: rules`. The handler checks the body itself:
+        the request validator skips this route. Errors: 404 `unknown_item` (also for
+        a listed container with no history yet: its rules would not be kept),
+        503 `stats_unavailable` (also when the rules were applied in memory but
+        could not be written to disk: they are not durable).
+      operationId: setStatsAlerts
+      tags:
+        - Stats methods
+      parameters:
+        - $ref: "#/components/parameters/StatsItemID"
+      requestBody:
+        $ref: "#/components/requestBodies/RequestStatsRules"
+      responses:
+        "200":
+          $ref: "#/components/responses/StatsAlertsOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "503":
+          $ref: "#/components/responses/ResponseServiceUnavailable"
+
 components:
   securitySchemes:
     access_token:
@@ -1750,6 +1857,28 @@ components:
         type: boolean
         example: false
 
+    StatsItemID:
+      name: id
+      description: |
+        A container's stats identity, encoded for a URL as one path segment:
+        `app:<application>:<service>:<n>` or `container:<name>`.
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        example: "app:jarvis:web:1"
+
+    StatsRange:
+      name: range
+      description: |
+        One of `live` (15 minutes at 5 s, the default when absent), `15m`, `1h`, `24h`,
+        `7d`. Any other value is 400 `bad_range`.
+      in: query
+      schema:
+        type: string
+        example: "1h"
+
   requestBodies:
     RequestGitAppCreate:
       required: true
@@ -1872,6 +2001,19 @@ components:
               - "start"
               - "restart"
               - "stop"
+
+    RequestStatsRules:
+      description: The whole set of rules of one container
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              rules:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StatsRule"
 
   responses:
     ResponseOK:
@@ -2377,6 +2519,28 @@ components:
                     type: array
                     items:
                       $ref: "#/components/schemas/WebAppGridItem"
+
+    StatsListOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StatsList"
+
+    StatsSeriesOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StatsSeries"
+
+    StatsAlertsOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StatsAlerts"
+
   schemas:
     BaseResponse:
       properties:
@@ -3953,3 +4117,219 @@ components:
         is_uncontrolled:
           type: boolean
           example: false
+
+    StatsItem:
+      type: object
+      required:
+        - id
+        - name
+        - kind
+        - group
+        - state
+        - started_at
+        - detail
+        - cpu_percent
+        - memory_used
+        - memory_limit
+        - alerts
+      properties:
+        id:
+          type: string
+          example: "app:jarvis:web:1"
+        name:
+          type: string
+          example: web
+        kind:
+          description: "`app-container` or `container`"
+          type: string
+        group:
+          type: string
+          example: Conteneurs
+        app:
+          description: The application of a compose container, absent for any other
+          type: string
+          example: jarvis
+        state:
+          description: "`running`, `stopped`, `paused`, `crashed` or `unknown`"
+          type: string
+        started_at:
+          description: When the container started, `null` when unknown
+          type: string
+          format: date-time
+          nullable: true
+        detail:
+          description: The container's image, text only, `null` when unknown
+          type: string
+          maxLength: 200
+          nullable: true
+          example: "nginx:1.27"
+        cpu_percent:
+          description: Percent of one core, `null` before two samples
+          type: number
+          format: double
+          nullable: true
+        memory_used:
+          description: Working set in bytes
+          type: integer
+          format: int64
+          nullable: true
+        memory_limit:
+          description: Declared limit in bytes, `null` without one
+          type: integer
+          format: int64
+          nullable: true
+        alerts:
+          description: Number of firing alerts
+          type: integer
+
+    StatsList:
+      type: object
+      required:
+        - items
+        - notes
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatsItem"
+        notes:
+          type: array
+          items:
+            type: string
+          example: []
+
+    StatsScale:
+      type: object
+      required:
+        - cpu
+        - cpu_allocation
+        - memory_limit
+      properties:
+        cpu:
+          type: string
+          example: percent_of_one_core
+        cpu_allocation:
+          description: Cores the container may use
+          type: number
+          format: double
+          nullable: true
+        memory_limit:
+          description: Declared limit in bytes, `null` without one
+          type: integer
+          format: int64
+          nullable: true
+
+    StatsSeriesChart:
+      type: object
+      required:
+        - chart
+        - name
+        - unit
+        - points
+      properties:
+        chart:
+          type: string
+          example: cpu
+        name:
+          type: string
+          example: user
+        unit:
+          type: string
+          example: percent
+        points:
+          description: "`[t, avg, min, max]`, t in Unix seconds; `null` is a gap"
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+              format: double
+              nullable: true
+
+    StatsSeries:
+      type: object
+      required:
+        - id
+        - range
+        - step_seconds
+        - from
+        - to
+        - scale
+        - series
+        - notes
+      properties:
+        id:
+          type: string
+          example: "app:jarvis:web:1"
+        range:
+          type: string
+          example: "1h"
+        step_seconds:
+          type: integer
+          example: 60
+        from:
+          type: integer
+          format: int64
+        to:
+          type: integer
+          format: int64
+        scale:
+          $ref: "#/components/schemas/StatsScale"
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatsSeriesChart"
+        notes:
+          type: array
+          items:
+            type: string
+          example: ["no_cpu_limit"]
+
+    StatsRule:
+      type: object
+      properties:
+        key:
+          type: string
+          example: cpu_high
+        enabled:
+          type: boolean
+        threshold:
+          description: Percent
+          type: number
+          format: double
+          example: 90
+        minutes:
+          type: integer
+          example: 10
+
+    StatsAlert:
+      type: object
+      required:
+        - key
+        - since
+        - value
+      properties:
+        key:
+          type: string
+          example: cpu_high
+        since:
+          type: string
+          format: date-time
+        value:
+          type: number
+          format: double
+
+    StatsAlerts:
+      type: object
+      required:
+        - rules
+        - active
+      properties:
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatsRule"
+        active:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatsAlert"

@@ -1,0 +1,260 @@
+//go:build linux
+
+package dockerstats
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/ReCasaOS/CasaOS-Common/pkg/stats"
+	"github.com/docker/docker/api/types/container"
+	client2 "github.com/docker/docker/client"
+	"golang.org/x/sync/errgroup"
+)
+
+const (
+	costContainers = 30
+	costLabel      = "stats-cost=1"
+	costWindow     = 60 * time.Second
+	costBudget     = 0.5 // percent of one core
+)
+
+func costCleanup() {
+	out, _ := exec.Command("docker", "ps", "-aq", "--filter", "label="+costLabel).Output()
+	if ids := strings.Fields(string(out)); len(ids) > 0 {
+		_ = exec.Command("docker", append([]string{"rm", "-f"}, ids...)...).Run()
+	}
+}
+
+// clockTicks is the kernel's USER_HZ, the unit of /proc/<pid>/stat times. It is 100 on
+// every Linux architecture Docker supports (it is fixed in the userspace ABI, not the
+// kernel's internal HZ).
+const clockTicks = 100
+
+// selfCPUTicks is the CPU time of this process, in clock ticks.
+func selfCPUTicks() float64 {
+	var ru syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
+	return float64(ru.Utime.Nano()+ru.Stime.Nano()) / 1e9 * clockTicks
+}
+
+// stackTicks is the CPU of dockerd, containerd and every containerd shim, per process
+// name. A stats call goes dockerd -> containerd -> shim -> cgroup files, so counting
+// dockerd alone would undercount both strategies. Processes are found by scanning /proc
+// comm names, which is independent of cgroup version and of how systemd names the units.
+func stackTicks(t *testing.T) map[string]float64 {
+	m, err := procCPUTicks("/proc", dockerStackProc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m["dockerd"] == 0 && len(m) == 0 {
+		t.Fatal("no dockerd, containerd or shim process found in /proc")
+	}
+	return m
+}
+
+func sumTicks(m map[string]float64) (n float64) {
+	for _, v := range m {
+		n += v
+	}
+	return n
+}
+
+// costIdle is the CPU of the Docker stack with the 30 containers running and nothing
+// reading their stats, as percent of one core; measure subtracts it, so the figure it
+// returns is the growth the sampling causes.
+var costIdle float64
+
+// stackPercent is the growth of the stack's CPU over a window of wall seconds.
+func stackPercent(before, after map[string]float64, wall float64) float64 {
+	return (sumTicks(after) - sumTicks(before)) / clockTicks / wall * 100
+}
+
+// idleBaseline measures costIdle over costWindow.
+func idleBaseline(t *testing.T) {
+	before := stackTicks(t)
+	start := time.Now()
+	time.Sleep(costWindow)
+	costIdle = stackPercent(before, stackTicks(t), time.Since(start).Seconds())
+	t.Logf("idle: the stack uses %.3f %% of one core with the %d containers running and nothing reading them", costIdle, costContainers)
+}
+
+// measure runs fn for costWindow and returns the CPU it costs, as percent of one core:
+// this process plus the growth of the stack over the idle baseline (never below 0). The
+// gross figures are logged too. A shim that exits during the window (a container
+// removed) can only lower the stack figure; the containers live for the whole window.
+func measure(t *testing.T, name string, fn func(ctx context.Context)) float64 {
+	self0, stack0 := selfCPUTicks(), stackTicks(t)
+	ctx, cancel := context.WithTimeout(context.Background(), costWindow)
+	defer cancel()
+	start := time.Now()
+	fn(ctx)
+	wall := time.Since(start).Seconds()
+	self := selfCPUTicks() - self0
+	stack1 := stackTicks(t)
+	for comm, v := range stack1 {
+		t.Logf("%s: %-16s %.3f %% of one core (gross)", name, comm, (v-stack0[comm])/clockTicks/wall*100)
+	}
+	gross := stackPercent(stack0, stack1, wall)
+	net := max(0, gross-costIdle)
+	selfPct := self / clockTicks / wall * 100
+	t.Logf("%s: %-16s %.3f %% of one core", name, "test process", selfPct)
+	t.Logf("%s: stack gross %.3f %%, idle %.3f %%, growth %.3f %% of one core", name, gross, costIdle, net)
+	return selfPct + net
+}
+
+func TestCost(t *testing.T) {
+	if os.Getenv("STATS_COST") != "1" {
+		t.Skip("set STATS_COST=1 (needs Docker and busybox)")
+	}
+	costCleanup() // leftovers of an earlier killed run
+	defer costCleanup()
+	t.Cleanup(costCleanup)
+
+	for i := 0; i < costContainers; i++ {
+		name := fmt.Sprintf("statscost-%d", i)
+		if out, err := exec.Command("docker", "run", "-d", "--label", costLabel, "--name", name, "busybox", "sleep", "3600").CombinedOutput(); err != nil {
+			t.Fatalf("start %s: %v: %s", name, err, out)
+		}
+	}
+	time.Sleep(10 * time.Second)
+	idleBaseline(t)
+
+	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	list, err := cli.ContainerList(context.Background(), container.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, c := range list {
+		if c.Labels["stats-cost"] == "1" {
+			ids = append(ids, c.ID)
+		}
+	}
+
+	if len(ids) != costContainers {
+		t.Fatalf("%d labelled containers running, want %d", len(ids), costContainers)
+	}
+
+	t.Run("Strategies", func(t *testing.T) { costStrategies(t, cli, ids) })
+	t.Run("Sampler", costSampler)
+}
+
+// costStrategies compares the two ways of reading the stats: one fails only when
+// both are over the budget.
+func costStrategies(t *testing.T, cli *client2.Client, ids []string) {
+	// A: a one-shot per container every 5 s, 8 in flight at most, one list per tick.
+	a := measure(t, "A", func(ctx context.Context) {
+		tick := time.NewTicker(5 * time.Second)
+		defer tick.Stop()
+		for {
+			_, _ = cli.ContainerList(ctx, container.ListOptions{All: true})
+			var g errgroup.Group
+			g.SetLimit(8)
+			for _, id := range ids {
+				g.Go(func() error {
+					r, err := cli.ContainerStatsOneShot(ctx, id)
+					if err != nil {
+						return nil
+					}
+					defer r.Body.Close()
+					_, _ = io.Copy(io.Discard, r.Body)
+					return nil
+				})
+			}
+			_ = g.Wait()
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	})
+
+	// B: one streaming call per container, every frame decoded.
+	b := measure(t, "B", func(ctx context.Context) {
+		var wg sync.WaitGroup
+		for _, id := range ids {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				r, err := cli.ContainerStats(ctx, id, true)
+				if err != nil {
+					return
+				}
+				defer r.Body.Close()
+				dec := json.NewDecoder(r.Body)
+				for {
+					var s container.StatsResponse
+					if dec.Decode(&s) != nil {
+						return
+					}
+				}
+			}()
+		}
+		wg.Wait()
+	})
+
+	t.Logf("A poll: %.3f %% of one core; B streams: %.3f %% of one core (%d containers)", a, b, len(ids))
+	if a >= costBudget && b >= costBudget {
+		t.Fatalf("both strategies are over %.1f %% (A %.3f, B %.3f)", costBudget, a, b)
+	}
+}
+
+// costSampler measures the finished Sampler (real source and store, Tick every
+// 5 s) over the labelled containers; it fails over the budget.
+func costSampler(t *testing.T) {
+	src, err := NewDockerSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	s, err := New(Config{Dir: t.TempDir(), Source: src, Clock: stats.SystemClock{}, Interval: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Tick(context.Background()) // the first pass inspects every container; at rest it is once a minute
+	got := measure(t, "Sampler", func(ctx context.Context) {
+		tick := time.NewTicker(5 * time.Second)
+		defer tick.Stop()
+		for {
+			s.Tick(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	})
+	items, err := s.Items()
+	if err != nil {
+		t.Fatal(err)
+	}
+	measured := 0
+	for _, it := range items {
+		if strings.HasPrefix(it.Name, "statscost-") && it.CPUPercent != nil {
+			measured++
+		}
+	}
+	t.Logf("Sampler: %.3f %% of one core (%d containers measured)", got, measured)
+	if measured != costContainers {
+		t.Fatalf("%d of %d containers measured", measured, costContainers)
+	}
+	if got > costBudget {
+		t.Fatalf("the sampler is over %.1f %% of one core: %.3f", costBudget, got)
+	}
+}

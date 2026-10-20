@@ -191,6 +191,14 @@ func main() {
 		}
 	}
 
+	// Every container's CPU, memory, network and disk, every five seconds, and the
+	// resource alerts on the message bus. Started once the event types are registered:
+	// the events rebuilt from the history at start are published at once. A stop loses
+	// at most the minute in progress: the history files are crash-safe.
+	if err := service.StartStats(ctx); err != nil {
+		logger.Error("the stats sampler did not start, the stats routes answer 503", zap.Error(err))
+	}
+
 	// setup listener
 	listener, err := net.Listen("tcp", net.JoinHostPort(common.Localhost, "0"))
 	if err != nil {
