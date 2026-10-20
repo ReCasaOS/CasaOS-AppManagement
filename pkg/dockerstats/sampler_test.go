@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -658,18 +659,16 @@ func TestCloseWaitsForATickInFlightAndIsIdempotent(t *testing.T) {
 	tickDone := make(chan struct{})
 	go func() { h.s.Tick(context.Background()); close(tickDone) }()
 	<-entered // the tick holds the sampler
+	var released atomic.Bool
 	closed := make(chan bool, 1)
 	go func() {
 		assert.Check(t, h.s.Close())
-		select {
-		case <-tickDone:
-			closed <- true
-		default:
-			closed <- false // Close returned while the tick was still held
-		}
+		closed <- released.Load() // false: Close returned while the tick was still held
 	}()
+	released.Store(true) // set before the release: only a Close that waited can see it
 	close(release)
 	assert.Assert(t, <-closed, "Close returned while a tick was still running")
+	<-tickDone
 	assert.NilError(t, h.s.Close())
 	h.s.Tick(context.Background()) // after Close: does nothing
 	h.src.mu.Lock()
