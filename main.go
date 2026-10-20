@@ -174,6 +174,13 @@ func main() {
 		// a crash is news the moment it happens.
 		go service.WatchDocker(ctx)
 
+		// Every container's CPU, memory, network and disk, every five seconds, and the
+		// resource alerts on the message bus. A stop loses at most the minute in progress:
+		// the history files are crash-safe.
+		if err := service.StartStats(ctx); err != nil {
+			logger.Error("the stats sampler did not start, the stats routes answer 503", zap.Error(err))
+		}
+
 		crontab.Start()
 		defer crontab.Stop()
 

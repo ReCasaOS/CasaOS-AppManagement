@@ -136,6 +136,9 @@ var EventTypes = []message_bus.EventType{
 	EventTypeAppGitDeployEnd, EventTypeAppGitDeployError,
 	EventTypeAppContainerDied, EventTypeAppContainerUnhealthy, EventTypeAppContainerRestarting, EventTypeAppContainerHealthy,
 
+	// resources
+	EventTypeResourceAlertFiring, EventTypeResourceAlertResolved,
+
 	// image
 	EventTypeImagePullBegin, EventTypeImagePullProgress, EventTypeImagePullEnd, EventTypeImagePullError,
 
@@ -490,6 +493,71 @@ var (
 			PropertyTypeAppName,
 			PropertyTypeContainerName,
 		},
+	}
+)
+
+// resource alert properties: plain names, the same in every service that publishes them
+var (
+	PropertyTypeResourceItem = message_bus.PropertyType{
+		Name:        "item",
+		Description: utils.Ptr("stats id of the container"),
+		Example:     utils.Ptr("app:jarvis:web:1"),
+	}
+	PropertyTypeResourceName = message_bus.PropertyType{
+		Name:        "name",
+		Description: utils.Ptr("name of the container"),
+		Example:     utils.Ptr("web"),
+	}
+	PropertyTypeResourceKind = message_bus.PropertyType{
+		Name:        "kind",
+		Description: utils.Ptr("`app-container` or `container`"),
+		Example:     utils.Ptr("app-container"),
+	}
+	PropertyTypeResourceSituation = message_bus.PropertyType{
+		Name:        "situation",
+		Description: utils.Ptr("`cpu_high` or `mem_high`"),
+		Example:     utils.Ptr("cpu_high"),
+	}
+	PropertyTypeResourceValue = message_bus.PropertyType{
+		Name:        "value",
+		Description: utils.Ptr("percent that fired the alert, an integer; absent when resolved"),
+		Example:     utils.Ptr("93"),
+	}
+	PropertyTypeResourceMinutes = message_bus.PropertyType{
+		Name:        "minutes",
+		Description: utils.Ptr("window of the rule in minutes"),
+		Example:     utils.Ptr("10"),
+	}
+	PropertyTypeResourceSince = message_bus.PropertyType{
+		Name:        "since",
+		Description: utils.Ptr("when the alert fired or resolved, RFC 3339"),
+		Example:     utils.Ptr("2026-10-20T10:00:00Z"),
+	}
+	PropertyTypeResourceSource = message_bus.PropertyType{
+		Name:        "source",
+		Description: utils.Ptr("service that measured it: `app_management`"),
+		Example:     utils.Ptr("app_management"),
+	}
+
+	resourceAlertProperties = []message_bus.PropertyType{
+		PropertyTypeResourceItem, PropertyTypeResourceName, PropertyTypeResourceKind, PropertyTypeResourceSituation,
+		PropertyTypeResourceValue, PropertyTypeResourceMinutes, PropertyTypeResourceSince, PropertyTypeResourceSource,
+	}
+)
+
+// event types for a container's resources held too high for too long, from the stats
+// sampler: one firing, then one resolved.
+var (
+	EventTypeResourceAlertFiring = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "resource:alert-firing",
+		PropertyTypeList: resourceAlertProperties,
+	}
+
+	EventTypeResourceAlertResolved = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "resource:alert-resolved",
+		PropertyTypeList: resourceAlertProperties,
 	}
 )
 
