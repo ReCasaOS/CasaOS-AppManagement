@@ -429,7 +429,6 @@ func TestAnUnreadableStoreMakesSeriesUnavailable(t *testing.T) {
 				webRing = r
 			}
 		}
-		assert.Equal(t, filepath.Base(webRing), ringName(webID), "Common's ring file name")
 		assert.NilError(t, os.Remove(webRing))
 		if err := os.Symlink(filepath.Join(h.dir, "nowhere"), webRing); err != nil {
 			t.Skipf("no symlinks here: %v", err)
@@ -438,6 +437,17 @@ func TestAnUnreadableStoreMakesSeriesUnavailable(t *testing.T) {
 		logError = func(string, error) { logged++ }
 		defer func() { logError = func(string, error) {} }()
 		h.open()
+		_, err0 := h.s.Series(webID, stats.RangeLive)
+		assert.Assert(t, errors.Is(err0, ErrUnavailable), "skipped ring, before any tick: %v", err0)
+		assert.Assert(t, errors.Is(h.s.SetRules(webID, nil), ErrUnavailable), "SetRules of a skipped item")
+		_, _, errA := h.s.Alerts(webID)
+		assert.Assert(t, errors.Is(errA, ErrUnavailable), "Alerts of a skipped item: %v", errA)
+		_, errU := h.s.Series("container:never-seen", stats.RangeLive)
+		assert.Assert(t, errors.Is(errU, ErrUnknownItem), "an unknown item is not unavailable: %v", errU)
+		assert.Assert(t, errors.Is(h.s.SetRules("container:never-seen", nil), ErrUnknownItem))
+		_, errO := h.s.Series("container:other", stats.RangeLive)
+		assert.NilError(t, errO, "a healthy item is not unavailable")
+		assert.NilError(t, h.s.SetRules("container:other", nil))
 		h.ticks(3) // never crashes, the other container is still recorded
 		assert.Equal(t, logged, 2, "once at Open, once for the item")
 		_, err := h.s.Series(webID, stats.RangeLive)

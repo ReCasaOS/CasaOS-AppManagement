@@ -3,8 +3,6 @@ package dockerstats
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"regexp"
 	"runtime"
@@ -117,7 +115,6 @@ type Sampler struct {
 	closed    bool              // under tick
 	reg       map[string]*entry // Tick only
 	lastSweep time.Time
-	skipped   map[string]bool // ring files Open could not read; set once in New
 
 	mu       sync.Mutex // guards the fields below
 	view     map[string]row
@@ -143,12 +140,8 @@ func New(cfg Config) (*Sampler, error) {
 	}
 	s.ev = ev
 	st.SetOnMinute(ev.OnMinute)
-	s.skipped = map[string]bool{}
 	if sk := st.Skipped(); len(sk) > 0 {
 		logError("some stats history files could not be read and are left untouched", errors.New(strings.Join(sk, ", ")))
-		for _, name := range sk {
-			s.skipped[name] = true
-		}
 	}
 	for _, id := range st.Items() {
 		ev.Rebuild(id)
@@ -499,7 +492,7 @@ func (s *Sampler) Series(id string, r stats.Range) (SeriesView, error) {
 	res, err := s.store.Query(id, r)
 	switch {
 	case errors.Is(err, stats.ErrUnknownItem):
-		if s.skipped[ringName(id)] { // history exists but is unreadable
+		if s.store.Unreadable(id) { // history exists but is unreadable
 			return SeriesView{}, ErrUnavailable
 		}
 		if !live {
@@ -564,7 +557,7 @@ func (s *Sampler) lookup(id string) error {
 	switch {
 	case ok || slices.Contains(s.store.Items(), id):
 		return nil
-	case s.skipped[ringName(id)]:
+	case s.store.Unreadable(id):
 		return ErrUnavailable
 	}
 	return ErrUnknownItem
@@ -585,7 +578,7 @@ func (s *Sampler) Alerts(id string) ([]stats.Rule, []stats.Event, error) {
 func (s *Sampler) SetRules(id string, rules []stats.Rule) error {
 	switch {
 	case slices.Contains(s.store.Items(), id):
-	case s.skipped[ringName(id)]:
+	case s.store.Unreadable(id):
 		return ErrUnavailable
 	default:
 		return ErrUnknownItem
@@ -594,12 +587,6 @@ func (s *Sampler) SetRules(id string, rules []stats.Rule) error {
 		return err
 	}
 	return s.ev.LastError()
-}
-
-// ringName is Common's file name of an item's ring (pinned by a test).
-func ringName(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return hex.EncodeToString(sum[:])[:32] + ".ring"
 }
 
 // Close waits for a tick in flight, then closes the store; later calls return nil.
