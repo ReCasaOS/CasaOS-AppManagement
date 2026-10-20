@@ -55,6 +55,8 @@ Verified: unit tests with a fake Docker source and an injected clock (identities
 - `StopStats` is not wired to a shutdown path; the history files are crash-safe, so a stop loses at most the minute in progress.
 - A listed container with no history answers an empty series; the page must tolerate it.
 
-## Upgrade note
+## Requires CasaOS-Common v0.4.29
 
-CasaOS-Common will get a follow-up release, v0.4.29, adding `Store.Unreadable(item) bool` and creating its directory with mode 0750 and its files with 0640. AppManagement will then drop its own copy of the ring file-name rule (`ringName` and the `skipped` set in `pkg/dockerstats/sampler.go`) in favour of `Unreadable`, and bump Common. Not done in this release.
+- `Store.Unreadable(item)` tells the sampler that an item's history file was left in place at `Open` because it could not be read: the item is reported unavailable and its file is never overwritten. The sampler keeps no copy of Common's ring file naming rule.
+- `/var/lib/casaos/stats` is created with mode 0750 and its files (`*.ring`, `alerts.json`) with 0640, since they hold container names; Common narrows an existing directory and files at start.
+- The evaluator queues its events and emits them in the order of the state changes, one drainer at a time, and `emit` may call back into the evaluator. The sampler's `emit` only reads the rules to give the window, and the alert publisher in `service/stats.go` stays its own ordered, bounded goroutine fed by a non-blocking `submit`, so a slow bus delays later alerts only.
