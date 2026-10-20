@@ -47,6 +47,12 @@ func (e *events) states() []string {
 	return s
 }
 
+func (e *events) first() stats.Event {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.all[0]
+}
+
 // wired opens a store and an evaluator in one directory, hooked the only way services do it.
 func wired(t *testing.T, clock stats.Clock, rules ...stats.Rule) (*stats.Store, *stats.Evaluator, *events, string) {
 	t.Helper()
@@ -143,7 +149,7 @@ func TestTheHookFiresOncePerWrittenMinute(t *testing.T) {
 	assert.Equal(t, len(ev.states()), 0, "minute 12:00 is not written before 12:01 arrives")
 	assert.NilError(t, store.Record(alertItem, t0.Add(65*time.Second), stats.Sample{"alert/cpu_high": 100}))
 	assert.DeepEqual(t, ev.states(), []string{"firing"})
-	assert.Equal(t, ev.all[0].Since.UTC(), t0)
+	assert.Equal(t, ev.first().Since.UTC(), t0)
 }
 
 func TestAPointMarshalsAsAnArrayWithNulls(t *testing.T) {
@@ -215,10 +221,28 @@ func TestAnEvaluatorStateSurvivesReopening(t *testing.T) {
 	assert.DeepEqual(t, ev.states(), []string{"firing"})
 	assert.Equal(t, len(eval.Active(alertItem)), 1)
 	items := store.Items()
+	rules := eval.Rules(alertItem)
 
 	again, err := stats.NewEvaluator(store, dir, nil)
 	assert.NilError(t, err)
 	assert.Equal(t, len(again.Active(alertItem)), 1)
 	assert.Equal(t, again.Active(alertItem)[0].Key, "cpu_high")
+	assert.DeepEqual(t, again.Rules(alertItem), rules)
 	assert.DeepEqual(t, store.Items(), items)
+}
+
+func TestTheUnitsOfTheSeriesThisServiceWrites(t *testing.T) {
+	for key, unit := range map[string]string{
+		"cpu/user": "percent", "cpu/system": "percent", "cpu/throttled": "percent",
+		"memory/rss": "bytes", "memory/cache": "bytes", "memory/swap": "bytes", "memory/limit": "bytes",
+		"network/rx:eth0": "bytes_per_second", "network/tx:eth0": "bytes_per_second",
+		"network/dropped:eth0": "packets_per_second",
+		"disk/read":            "bytes_per_second", "disk/write": "bytes_per_second",
+		"disk/iops_read": "ops_per_second", "disk/iops_write": "ops_per_second",
+		"pids/count": "count", "restarts/count": "count", "health/ok": "flag",
+		"alert/cpu_high": "percent", "alert/mem_high": "percent",
+	} {
+		chart, name := stats.SplitKey(key)
+		assert.Equal(t, stats.Unit(chart, name), unit, key)
+	}
 }
