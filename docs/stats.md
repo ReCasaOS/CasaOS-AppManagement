@@ -34,7 +34,7 @@ Compose container: `app:<application>:<service>:<n>` (n is `com.docker.compose.c
 | `cpu_high` | 90 % for 10 min | the container's CPU limit, else the machine's cores (note `no_cpu_limit`) |
 | `mem_high` | 90 % for 5 min | the container's memory limit, else the machine's RAM (note `no_memory_limit`) |
 
-Evaluated on per-minute averages. One `resource:alert-firing` when a rule trips, one `resource:alert-resolved` when it ends or the container stops being measured. Properties: `item`, `name`, `kind` (`app-container` or `container`), `situation`, `value` (integer percent, absent when resolved), `minutes`, `since` (RFC 3339), `source` (`app_management`). A failed stats call for a running container is a gap and resolves nothing.
+Evaluated on per-minute averages. One `resource:alert-firing` when a rule trips, one `resource:alert-resolved` when it ends or the container stops being measured. Properties: `item`, `name` (`<application> / <service>` for an app container, e.g. `immich / server`, the container's name for any other), `kind` (`app-container` or `container`), `situation`, `value` (integer percent, absent when resolved), `minutes`, `since` (RFC 3339: when the alert fired; a resolved event carries the same time), `source` (`app_management`). Events go through one queue of 64 and one publisher, so a firing and its resolved reach the bus in order; if the bus is stuck and the queue is full, the newest event is dropped and logged. A failed stats call for a running container is a gap and resolves nothing.
 
 Notes codes: `no_cpu_limit`, `no_memory_limit`, `container_gone`; the list can carry `stats_capacity` (more than 256 live containers: the rest are listed, not measured; logged once an hour).
 
@@ -47,6 +47,13 @@ Verified: unit tests with a fake Docker source and an injected clock (identities
 - **The sampler's CPU cost.** The budget is 0.5 % of one core with 30 containers; it has not been measured on a real Docker. See [stats-sampling-cost.md](stats-sampling-cost.md) for the method and the decision rule.
 - **`go test -race`.** Never run on the development host (no C compiler). CI runs it, and `scripts/stats-proof.sh` runs it on a Linux machine.
 - **The end-to-end proof** (`TestProof`, `linux` build tag) and the full-service proof, which run later on a QEMU machine with a real Docker.
+
+## Known limits
+
+- The sampler skips the first reading of a minute after a gap when it cannot be given a CPU rate; the prediction of that minute boundary can be a tick late.
+- If Docker comes back at :50 and the call at :55 fails, an alert can be resolved by mistake (rare).
+- `StopStats` is not wired to a shutdown path; the history files are crash-safe, so a stop loses at most the minute in progress.
+- A listed container with no history answers an empty series; the page must tolerate it.
 
 ## Upgrade note
 
