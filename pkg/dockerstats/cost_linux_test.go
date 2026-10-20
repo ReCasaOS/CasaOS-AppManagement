@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-Common/pkg/stats"
 	"github.com/docker/docker/api/types/container"
 	client2 "github.com/docker/docker/client"
 	"golang.org/x/sync/errgroup"
@@ -126,6 +127,13 @@ func TestCost(t *testing.T) {
 		t.Fatalf("%d labelled containers running, want %d", len(ids), costContainers)
 	}
 
+	t.Run("Strategies", func(t *testing.T) { costStrategies(t, cli, ids) })
+	t.Run("Sampler", costSampler)
+}
+
+// costStrategies compares the two ways of reading the stats: one fails only when
+// both are over the budget.
+func costStrategies(t *testing.T, cli *client2.Client, ids []string) {
 	// A: a one-shot per container every 5 s, 8 in flight at most, one list per tick.
 	a := measure(t, "A", func(ctx context.Context) {
 		tick := time.NewTicker(5 * time.Second)
@@ -181,5 +189,50 @@ func TestCost(t *testing.T) {
 	t.Logf("A poll: %.3f %% of one core; B streams: %.3f %% of one core (%d containers)", a, b, len(ids))
 	if a >= costBudget && b >= costBudget {
 		t.Fatalf("both strategies are over %.1f %% (A %.3f, B %.3f)", costBudget, a, b)
+	}
+}
+
+// costSampler measures the finished Sampler (real source and store, Tick every
+// 5 s) over the labelled containers; it fails over the budget.
+func costSampler(t *testing.T) {
+	src, err := NewDockerSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	s, err := New(Config{Dir: t.TempDir(), Source: src, Clock: stats.SystemClock{}, Interval: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Tick(context.Background()) // the first pass inspects every container; at rest it is once a minute
+	got := measure(t, "Sampler", func(ctx context.Context) {
+		tick := time.NewTicker(5 * time.Second)
+		defer tick.Stop()
+		for {
+			s.Tick(ctx)
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	})
+	items, err := s.Items()
+	if err != nil {
+		t.Fatal(err)
+	}
+	measured := 0
+	for _, it := range items {
+		if strings.HasPrefix(it.Name, "statscost-") && it.CPUPercent != nil {
+			measured++
+		}
+	}
+	t.Logf("Sampler: %.3f %% of one core (%d containers measured)", got, measured)
+	if measured != costContainers {
+		t.Fatalf("%d of %d containers measured", measured, costContainers)
+	}
+	if got > costBudget {
+		t.Fatalf("the sampler is over %.1f %% of one core: %.3f", costBudget, got)
 	}
 }
