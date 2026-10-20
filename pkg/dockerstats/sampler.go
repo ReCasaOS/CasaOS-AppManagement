@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -504,7 +505,7 @@ func (s *Sampler) Series(id string, r stats.Range) (SeriesView, error) {
 		if !live {
 			return SeriesView{}, ErrUnknownItem
 		}
-		res = stats.Result{Range: r, Series: []stats.SeriesData{}} // listed, nothing stored yet
+		res = emptyResult(r, s.cfg.Clock.Now()) // listed, nothing stored yet
 	case err != nil:
 		return SeriesView{}, ErrUnavailable
 	}
@@ -517,9 +518,11 @@ func (s *Sampler) Series(id string, r stats.Range) (SeriesView, error) {
 	case rw.alloc.CPULimit > 0:
 		v.CPUAllocation = &rw.alloc.CPULimit
 	default:
-		if rw.cores > 0 {
-			v.CPUAllocation = &rw.cores
+		cores := rw.cores
+		if cores <= 0 { // never measured (stopped since the start): the machine's own cores
+			cores = float64(runtime.NumCPU())
 		}
+		v.CPUAllocation = &cores
 		v.Notes = append(v.Notes, "no_cpu_limit")
 	}
 	if rw.alloc.MemLimit > 0 {
@@ -528,6 +531,28 @@ func (s *Sampler) Series(id string, r stats.Range) (SeriesView, error) {
 		v.Notes = append(v.Notes, "no_memory_limit")
 	}
 	return v, nil
+}
+
+// emptyResult is what Common's Query answers for the range when there is nothing
+// stored: the range's step and window at now, no series.
+func emptyResult(r stats.Range, now time.Time) stats.Result {
+	step, n := int64(5), int64(stats.LiveSlots)
+	switch r {
+	case stats.Range15m:
+		step, n = 60, 15
+	case stats.Range1h:
+		step, n = 60, 60
+	case stats.Range24h:
+		step, n = 300, 288
+	case stats.Range7d:
+		step, n = 1800, 336
+	}
+	floor := func(x, m int64) int64 { return x - x%m }
+	to := floor(now.Unix(), step)
+	if r != stats.RangeLive {
+		to = floor(floor(now.Unix(), 60)-60, step)
+	}
+	return stats.Result{Range: r, StepSeconds: int(step), From: to - (n-1)*step, To: to, Series: []stats.SeriesData{}}
 }
 
 // lookup: nil for an item listed or on disk, ErrUnavailable for one whose

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -721,4 +722,26 @@ func TestDockerBeingAwayResolvesNothingAndForgetsNothing(t *testing.T) {
 	h.src.set(func() { c.Cores = 0.1 })
 	h.ticks(12 * 3)
 	assert.DeepEqual(t, h.states(), []string{"firing", "resolved"})
+}
+
+func TestAListedContainerWithoutHistoryAnswersTheRangeAndTheMachineCores(t *testing.T) {
+	c := web("a")
+	c.NoStats = true // listed, never measured
+	h := newHarness(t, c)
+	h.ticks(2)
+	assert.Equal(t, len(h.s.store.Items()), 0)
+	for _, tc := range []struct {
+		r    stats.Range
+		step int
+		n    int64
+	}{{stats.RangeLive, 5, 180}, {stats.Range15m, 60, 15}, {stats.Range1h, 60, 60}, {stats.Range24h, 300, 288}, {stats.Range7d, 1800, 336}} {
+		v, err := h.s.Series(webID, tc.r)
+		assert.NilError(t, err)
+		assert.Equal(t, v.Result.StepSeconds, tc.step, tc.r)
+		assert.Equal(t, v.Result.To-v.Result.From, (tc.n-1)*int64(tc.step), tc.r)
+		assert.Assert(t, v.Result.To > 0 && v.Result.To <= h.clock.Now().Unix(), tc.r)
+		assert.Equal(t, len(v.Result.Series), 0)
+		assert.Assert(t, v.CPUAllocation != nil && *v.CPUAllocation == float64(runtime.NumCPU()), "cores unknown: the machine's")
+		assert.DeepEqual(t, v.Notes, []string{"no_cpu_limit", "no_memory_limit"})
+	}
 }
