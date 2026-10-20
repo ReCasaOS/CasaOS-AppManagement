@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	client2 "github.com/docker/docker/client"
@@ -22,6 +23,10 @@ const (
 	// maxStatsBody bounds what is read of one stats answer; a real one is a few KB.
 	maxStatsBody = 1 << 20
 )
+
+// statsCallTimeout bounds one container's call, so hung containers cannot hold the
+// 8 slots until the caller's own deadline. A variable only so tests can shorten it.
+var statsCallTimeout = 2 * time.Second
 
 // Source is where the sampler reads the containers from.
 type Source interface {
@@ -99,6 +104,8 @@ loop:
 var errStatsTooBig = errors.New("stats answer too large")
 
 func (d *DockerSource) one(ctx context.Context, id string) (*container.StatsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, statsCallTimeout)
+	defer cancel()
 	r, err := d.api.ContainerStatsOneShot(ctx, id)
 	if err != nil {
 		return nil, err

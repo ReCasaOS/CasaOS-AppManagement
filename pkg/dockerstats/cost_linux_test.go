@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -35,48 +34,67 @@ func costCleanup() {
 	}
 }
 
-// selfCPUTicks is the CPU time of this process, in clock ticks (100 per second).
+// clockTicks is the kernel's USER_HZ, the unit of /proc/<pid>/stat times. It is 100 on
+// every Linux architecture Docker supports (it is fixed in the userspace ABI, not the
+// kernel's internal HZ).
+const clockTicks = 100
+
+// selfCPUTicks is the CPU time of this process, in clock ticks.
 func selfCPUTicks() float64 {
 	var ru syscall.Rusage
 	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
-	d := time.Duration(ru.Utime.Nano()+ru.Stime.Nano()) * time.Nanosecond
-	return d.Seconds() * 100
+	return float64(ru.Utime.Nano()+ru.Stime.Nano()) / 1e9 * clockTicks
 }
 
-// dockerdCPUTicks reads utime and stime (fields 14 and 15) of dockerd.
-func dockerdCPUTicks(t *testing.T) float64 {
-	out, err := exec.Command("pidof", "dockerd").Output()
-	if err != nil {
-		t.Fatalf("dockerd pid: %v", err)
-	}
-	pid := strings.Fields(string(out))[0]
-	raw, err := os.ReadFile("/proc/" + pid + "/stat")
+// stackTicks is the CPU of dockerd, containerd and every containerd shim, per process
+// name. A stats call goes dockerd -> containerd -> shim -> cgroup files, so counting
+// dockerd alone would undercount both strategies. Processes are found by scanning /proc
+// comm names, which is independent of cgroup version and of how systemd names the units.
+func stackTicks(t *testing.T) map[string]float64 {
+	m, err := procCPUTicks("/proc", dockerStackProc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(raw)
-	f := strings.Fields(s[strings.LastIndex(s, ")")+2:]) // field 3 onwards
-	u, _ := strconv.ParseFloat(f[11], 64)                // field 14
-	k, _ := strconv.ParseFloat(f[12], 64)                // field 15
-	return u + k
+	if m["dockerd"] == 0 && len(m) == 0 {
+		t.Fatal("no dockerd, containerd or shim process found in /proc")
+	}
+	return m
 }
 
-// measure runs fn for costWindow and returns the CPU used, as percent of one core.
-func measure(t *testing.T, fn func(ctx context.Context)) float64 {
-	self0, d0 := selfCPUTicks(), dockerdCPUTicks(t)
+func sumTicks(m map[string]float64) (n float64) {
+	for _, v := range m {
+		n += v
+	}
+	return n
+}
+
+// measure runs fn for costWindow and returns the CPU used, as percent of one core. A
+// shim that exits during the window (a container removed) can only lower the stack
+// figure; the containers live for the whole window.
+func measure(t *testing.T, name string, fn func(ctx context.Context)) float64 {
+	self0, stack0 := selfCPUTicks(), stackTicks(t)
 	ctx, cancel := context.WithTimeout(context.Background(), costWindow)
 	defer cancel()
 	start := time.Now()
 	fn(ctx)
 	wall := time.Since(start).Seconds()
-	ticks := (selfCPUTicks() - self0) + (dockerdCPUTicks(t) - d0)
-	return ticks / 100 / wall * 100
+	self := selfCPUTicks() - self0
+	stack1 := stackTicks(t)
+	var stack float64
+	for comm, v := range stack1 {
+		d := (v - stack0[comm]) / clockTicks / wall * 100
+		t.Logf("%s: %-16s %.3f %% of one core", name, comm, d)
+		stack += v - stack0[comm]
+	}
+	t.Logf("%s: %-16s %.3f %% of one core", name, "test process", self/clockTicks/wall*100)
+	return (self + stack) / clockTicks / wall * 100
 }
 
 func TestCost(t *testing.T) {
 	if os.Getenv("STATS_COST") != "1" {
 		t.Skip("set STATS_COST=1 (needs Docker and busybox)")
 	}
+	costCleanup() // leftovers of an earlier killed run
 	defer costCleanup()
 	t.Cleanup(costCleanup)
 
@@ -104,8 +122,12 @@ func TestCost(t *testing.T) {
 		}
 	}
 
+	if len(ids) != costContainers {
+		t.Fatalf("%d labelled containers running, want %d", len(ids), costContainers)
+	}
+
 	// A: a one-shot per container every 5 s, 8 in flight at most, one list per tick.
-	a := measure(t, func(ctx context.Context) {
+	a := measure(t, "A", func(ctx context.Context) {
 		tick := time.NewTicker(5 * time.Second)
 		defer tick.Stop()
 		for {
@@ -133,7 +155,7 @@ func TestCost(t *testing.T) {
 	})
 
 	// B: one streaming call per container, every frame decoded.
-	b := measure(t, func(ctx context.Context) {
+	b := measure(t, "B", func(ctx context.Context) {
 		var wg sync.WaitGroup
 		for _, id := range ids {
 			wg.Add(1)
