@@ -66,8 +66,8 @@ github.com/Netflix/go-expect v0.0.0-20220104043353-73e0943537d2/go.mod h1:HBCaDe
 github.com/ProtonMail/go-crypto v1.4.1 h1:9RfcZHqEQUvP8RzecWEUafnZVtEvrBVL9BiF67IQOfM=
 github.com/ProtonMail/go-crypto v1.4.1/go.mod h1:e1OaTyu5SYVrO9gKOEhTc+5UcXtTUa+P3uLudwcgPqo=
 github.com/RaveNoX/go-jsoncommentstrip v1.0.0/go.mod h1:78ihd09MekBnJnxpICcwzCMzGrKSKYe4AqU6PDYYpjk=
-github.com/ReCasaOS/CasaOS-Common v0.4.31 h1:j0+PVY2suHW/StJ69MnDwBk+1rdS19ysxBuOsedK8Tc=
-github.com/ReCasaOS/CasaOS-Common v0.4.31/go.mod h1:HjYCcRAVDa0c/IncJDof1sddCpze2esCTZt941Sk7LI=
+github.com/ReCasaOS/CasaOS-Common v0.4.32 h1:iKLxWtv55O1QHN+e5gxm7oCQItr2CtjsU5fW3meNKOQ=
+github.com/ReCasaOS/CasaOS-Common v0.4.32/go.mod h1:3iJ+emX/eN9F3NMi5vPqZM+EB1vPNIpZOPOuD1qsOt4=
 github.com/STARRY-S/zip v0.2.3 h1:luE4dMvRPDOWQdeDdUxUoZkzUIpTccdKdhHHsQJ1fm4=
 github.com/STARRY-S/zip v0.2.3/go.mod h1:lqJ9JdeRipyOQJrYSOtpNAiaesFO6zVDsE8GIGFaoSk=
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d h1:licZJFw2RwpHMqeKTCYkitsPqHNxTmd4SNR5r94FGM8=
