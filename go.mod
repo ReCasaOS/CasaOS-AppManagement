@@ -14,7 +14,7 @@ require (
 	github.com/go-resty/resty/v2 v2.7.0
 	github.com/hashicorp/go-getter v1.8.9
 	github.com/labstack/echo-jwt/v4 v4.4.0
-	github.com/labstack/echo/v4 v4.15.4
+	github.com/labstack/echo/v4 v4.16.1
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.1
@@ -76,7 +76,7 @@ require (
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
 	github.com/containerd/console v1.0.5 // indirect
 	github.com/containerd/containerd/api v1.11.1 // indirect
-	github.com/containerd/containerd/v2 v2.3.5 // indirect
+	github.com/containerd/containerd/v2 v2.3.6 // indirect
 	github.com/containerd/continuity v0.5.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
@@ -233,7 +233,7 @@ require (
 	go.uber.org/goleak v1.3.0
 	go.uber.org/zap v1.24.0
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/ini.v1 v1.67.3
