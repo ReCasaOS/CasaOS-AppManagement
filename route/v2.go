@@ -93,7 +93,7 @@ func InitV2Router() http.Handler {
 		},
 		TokenLookupFuncs: []echo_middleware.ValuesExtractor{
 			func(c echo.Context) ([]string, error) {
-				return []string{c.Request().Header.Get(echo.HeaderAuthorization)}, nil
+				return []string{jwt.TokenFromAuthorization(c.Request().Header.Get(echo.HeaderAuthorization))}, nil
 			},
 		},
 	}))
