@@ -331,7 +331,7 @@ type gitComposeService struct {
 // ponytail: `extends` and `include` are not followed; follow them when a repository
 // relies on them for what it runs.
 func gitComposeSummary(root string) (*GitComposeView, error) {
-	files, err := gitComposeFiles(root)
+	files, err := gitComposeFiles(root, filepath.Join(root, ".env"))
 	if err != nil {
 		return nil, err
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/compose-spec/compose-go/v2/cli"
+	"github.com/compose-spec/compose-go/v2/dotenv"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/command"
@@ -28,14 +29,19 @@ import (
 // drives it.
 
 // ErrGitNoComposeFile is a repository `docker compose up` would refuse at its root.
-var ErrGitNoComposeFile = errors.New("the repository has no compose.yaml, compose.yml, docker-compose.yaml or docker-compose.yml at its root")
+var ErrGitNoComposeFile = errors.New("the repository has no compose.yaml, compose.yml, docker-compose.yaml or docker-compose.yml at its root, and the app's .env names none in COMPOSE_FILE")
 
 // gitComposeFileNames are the files `docker compose up` looks for, in its order.
 var gitComposeFileNames = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
 
-// gitComposeFiles is what `docker compose up` reads at root: the first compose file found
-// and its .override counterpart when there is one.
-func gitComposeFiles(root string) ([]string, error) {
+// gitComposeFiles is what `docker compose up` reads at root: the files COMPOSE_FILE names in
+// envFile (the app's .env), as docker compose takes them from there; otherwise the first
+// compose file found and its .override counterpart when there is one.
+func gitComposeFiles(root, envFile string) ([]string, error) {
+	if named, err := gitComposeFileEnv(root, envFile); named != nil || err != nil {
+		return named, err
+	}
+
 	for _, name := range gitComposeFileNames {
 		main := filepath.Join(root, name)
 		if _, err := os.Stat(main); err != nil {
@@ -52,6 +58,41 @@ func gitComposeFiles(root string) ([]string, error) {
 	}
 
 	return nil, ErrGitNoComposeFile
+}
+
+// gitComposeFileEnv is the files COMPOSE_FILE names in envFile, each in root, separated by
+// COMPOSE_PATH_SEPARATOR or ":"; nil when there is no envFile or it names none. A name that
+// leads out of the repository, or that it does not have, is refused.
+func gitComposeFileEnv(root, envFile string) ([]string, error) {
+	if !pathExists(envFile) {
+		return nil, nil
+	}
+	env, err := dotenv.Read(envFile)
+	if err != nil {
+		return nil, err
+	}
+	separator := env["COMPOSE_PATH_SEPARATOR"]
+	if separator == "" {
+		separator = string(os.PathListSeparator)
+	}
+
+	var files []string
+	for _, name := range strings.Split(env["COMPOSE_FILE"], separator) {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		clean := filepath.Clean(name)
+		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("COMPOSE_FILE names %s, outside the repository", name)
+		}
+		file := filepath.Join(root, clean)
+		if !pathExists(file) {
+			return nil, fmt.Errorf("COMPOSE_FILE names %s, which the repository does not have", name)
+		}
+		files = append(files, file)
+	}
+
+	return files, nil
 }
 
 // gitImageTag is where a deployment keeps the image of a service: the repository of the
@@ -78,11 +119,11 @@ func builtServiceNames(services types.Services) []string {
 }
 
 // loadGitProject loads the compose files at root under the app's name, interpolated from
-// envFile when it exists. The environment of the services is not resolved: a worktree
-// has no untracked file, so an `env_file: .env` would fail to load there, and nothing a
-// build or a tag needs comes from it.
+// envFile when it exists, with the profiles its COMPOSE_PROFILES turns on. The environment
+// of the services is not resolved: a worktree has no untracked file, so an
+// `env_file: .env` would fail to load there, and nothing a build or a tag needs comes from it.
 func loadGitProject(ctx context.Context, app, root, envFile string) (*types.Project, error) {
-	files, err := gitComposeFiles(root)
+	files, err := gitComposeFiles(root, envFile)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +137,8 @@ func loadGitProject(ctx context.Context, app, root, envFile string) (*types.Proj
 	if pathExists(envFile) {
 		fns = append(fns, cli.WithEnvFiles(envFile), cli.WithDotEnv)
 	}
-	fns = append(fns, cli.WithEnv(env), cli.WithName(app), cli.WithoutEnvironmentResolution)
+	// profiles last: COMPOSE_PROFILES is read from what the options above gathered
+	fns = append(fns, cli.WithEnv(env), cli.WithName(app), cli.WithoutEnvironmentResolution, cli.WithDefaultProfiles())
 
 	options, err := cli.NewProjectOptions(files, fns...)
 	if err != nil {
@@ -304,7 +346,8 @@ func (composeGitRuntime) TagRunning(ctx context.Context, app, dir, commit string
 }
 
 func (composeGitRuntime) Start(ctx context.Context, app, dir string) error {
-	files, err := gitComposeFiles(dir)
+	// the app's own loader then reads COMPOSE_PROFILES from the same .env, as docker compose does
+	files, err := gitComposeFiles(dir, filepath.Join(dir, ".env"))
 	if err != nil {
 		return err
 	}
