@@ -1628,6 +1628,7 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 	// a quoted number where the specification wants an integer is a number to
 	// everyone but compose-go's schema; see compose_numeric_strings.go
 	yaml = coerceNumericStrings(yaml)
+	fallbacks := variablesWithFallback(yaml)
 
 	project, err := loader.LoadWithContext(context.Background(),
 		types.ConfigDetails{
@@ -1670,9 +1671,14 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 				value, ok := os.LookupEnv(key)
 				if ok {
 					return value, true
-				} else {
-					return fmt.Sprintf("$%s", key), true
 				}
+				// ${KEY:-default} and ${KEY:?message} mean something when KEY has no value: say so, and the
+				// default (or the message) applies. Any other unknown KEY stays $KEY, for the app's settings,
+				// and the settings pipeline (keep) keeps every reference as it is written.
+				if keep == nil && fallbacks[key] {
+					return "", false
+				}
+				return fmt.Sprintf("$%s", key), true
 			}
 
 			if getNameFrom(yaml) != "" {
