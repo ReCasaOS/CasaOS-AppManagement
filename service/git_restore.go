@@ -152,7 +152,7 @@ func installGitAppFromBackup(ctx context.Context, name string, origin BackupGit,
 		return nil, fmt.Errorf("`%s` could not be deployed at %s: %s", name, origin.Commit[:12], st.History[0].Reason)
 	}
 
-	files, err := gitComposeFiles(st.Dir)
+	files, err := gitComposeFiles(st.Dir, filepath.Join(st.Dir, ".env"))
 	if err != nil {
 		return nil, err
 	}
