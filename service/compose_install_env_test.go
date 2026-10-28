@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -85,8 +88,9 @@ func TestAnEnvThatMissesAKeyOrSetsOneOfCasaOSIsRefused(t *testing.T) {
 	assert.ErrorContains(t, err, "TZ is set by CasaOS")
 }
 
-// COMPOSE_PROFILES in the .env turns a profile on: its service is installed, the others are not
-func TestComposeProfilesInTheEnvInstallTheirServices(t *testing.T) {
+// COMPOSE_PROFILES in the .env chooses what runs, and the file written keeps every service with its
+// profiles: turning a profile on later in the .env is then enough, nothing has to be installed again
+func TestComposeProfilesInTheEnvChooseWhatRunsAndTheFileKeepsEveryService(t *testing.T) {
 	const stack = `name: vecto
 services:
   web:
@@ -98,18 +102,88 @@ services:
     profiles: ["tls"]
     image: caddy:2
 `
-	resolved, kept, err := NewComposeAppWithEnv([]byte(stack), []byte("A=1\n"))
-	assert.NilError(t, err)
-	assert.DeepEqual(t, sortedServiceNames(resolved.Services), []string{"web"})
-	assert.DeepEqual(t, sortedServiceNames(kept.Services), []string{"web"})
+	for env, running := range map[string][]string{
+		"A=1\n":                         {"web"},
+		"COMPOSE_PROFILES=engine\n":     {"engine", "web"},
+		"COMPOSE_PROFILES=engine,tls\n": {"engine", "proxy", "web"},
+	} {
+		resolved, kept, err := NewComposeAppWithEnv([]byte(stack), []byte(env))
+		assert.NilError(t, err)
+		assert.DeepEqual(t, sortedServiceNames(resolved.Services), running) // what the checks look at
+		assert.DeepEqual(t, sortedServiceNames(kept.Services), []string{"engine", "proxy", "web"})
 
-	resolved, kept, err = NewComposeAppWithEnv([]byte(stack), []byte("COMPOSE_PROFILES=engine\n"))
+		// what is written, and what docker compose then runs from it with that .env
+		text, err := GenerateYAMLFromComposeApp(*kept)
+		assert.NilError(t, err)
+		dir := t.TempDir()
+		file := filepath.Join(dir, "docker-compose.yml")
+		assert.NilError(t, os.WriteFile(file, text, 0o600))
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600))
+		runtime, err := LoadComposeAppFromConfigFile("vecto", file)
+		assert.NilError(t, err)
+		assert.DeepEqual(t, sortedServiceNames(runtime.Services), running)
+	}
+}
+
+// the editing view and a save keep a service behind a profile that is off: an engine did not
+// show in the editor, and the first save, update or refresh took it out of the file
+func TestAServiceBehindAProfileThatIsOffSurvivesEditingAndSaving(t *testing.T) {
+	const stack = `name: vecto
+services:
+  web:
+    image: nginx
+  proxy:
+    profiles: ["tls"]
+    image: caddy:2
+`
+	dir := t.TempDir()
+	file := filepath.Join(dir, "docker-compose.yml")
+	assert.NilError(t, os.WriteFile(file, []byte(stack), 0o600))
+
+	editing, err := LoadComposeAppForEditing("vecto", file, nil)
 	assert.NilError(t, err)
-	assert.DeepEqual(t, sortedServiceNames(resolved.Services), []string{"engine", "web"})
-	text, err := GenerateYAMLFromComposeApp(*kept)
+	assert.DeepEqual(t, sortedServiceNames(editing.Services), []string{"proxy", "web"})
+
+	saved, err := ComposeAppFromSettingsYAML([]byte(stack), nil)
 	assert.NilError(t, err)
-	assert.Assert(t, strings.Contains(string(text), "vecto-engine"), string(text))
-	assert.Assert(t, !strings.Contains(string(text), "caddy"), string(text))
+	assert.DeepEqual(t, sortedServiceNames(saved.Services), []string{"proxy", "web"})
+	text, err := GenerateYAMLFromComposeApp(*saved)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(text), "tls"), string(text)) // its profile too
+}
+
+// the ports of a service behind a profile that is off are no conflict: a proxy that is not
+// installed here does not take 80 and 443
+func TestThePortsOfAServiceBehindAProfileThatIsOffAreNoConflict(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	assert.NilError(t, err)
+	t.Cleanup(func() { listener.Close() })
+	busy := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+
+	// the text of a save: every profile, as the settings parse reads it
+	app, err := ComposeAppFromSettingsYAML([]byte(`name: p
+services:
+  web:
+    image: nginx
+  proxy:
+    image: caddy
+    profiles: ["tls"]
+    ports:
+      - "`+busy+`:80"
+`), nil)
+	assert.NilError(t, err)
+
+	off, err := app.GetPortsInUseFor(nil)
+	assert.NilError(t, err)
+	assert.Assert(t, off == nil, "a profile that is off")
+
+	on, err := app.GetPortsInUseFor([]string{"tls"})
+	assert.NilError(t, err)
+	assert.Assert(t, on != nil && len(*on.PortsInUse.TCP) == 1)
+
+	all, err := app.GetPortsInUseFor([]string{"*"})
+	assert.NilError(t, err)
+	assert.Assert(t, all != nil)
 }
 
 // a service started by systemd has no HOME: ${HOME} is still the user's home, as for docker compose
