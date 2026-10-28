@@ -1674,6 +1674,13 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 				if value, ok := values[key]; ok {
 					return value, true
 				}
+				// a service started by systemd has no HOME, where docker compose gives ${HOME} the
+				// user's home: without it ${HOME}/.docker/config.json is the name of a volume
+				if key == "HOME" {
+					if dir, err := userHome(); err == nil {
+						return dir, true
+					}
+				}
 				// the function may can to replace the above code.
 				value, ok := os.LookupEnv(key)
 				if ok {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -46,6 +47,19 @@ func SplitInstallEnv(text []byte) ([]byte, []byte, error) {
 	return text, nil, nil
 }
 
+// undefinedVolume is what compose says of a volume whose source starts with a variable that has
+// no value: "$KEY/path" is then taken for the name of a volume.
+var undefinedVolume = regexp.MustCompile(`undefined volume \$\{?([A-Za-z_][A-Za-z0-9_]*)`)
+
+// withUndefinedVariableHint says what is wrong when a volume path starts with a variable the
+// .env does not define, which compose words as an undefined volume.
+func withUndefinedVariableHint(err error) error {
+	if m := undefinedVolume.FindStringSubmatch(err.Error()); m != nil {
+		return fmt.Errorf("%w (the variable %s has no value: define it in the .env)", err, m[1])
+	}
+	return err
+}
+
 // NewComposeAppWithEnv loads compose text installed with its .env, twice. resolved takes the
 // .env's values, an `env_file: .env` included: it is what the checks before the install look
 // at (the ports). kept leaves every reference to a key of the .env as written: it is what the
@@ -77,7 +91,7 @@ func NewComposeAppWithEnv(text, env []byte) (resolved, kept *ComposeApp, err err
 	}
 
 	if resolved, err = newComposeAppFromYAML(text, false, true, nil, dir, values, profiles); err != nil {
-		return nil, nil, err
+		return nil, nil, withUndefinedVariableHint(err)
 	}
 
 	keep := map[string]struct{}{}
