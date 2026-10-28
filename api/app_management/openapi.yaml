@@ -541,6 +541,7 @@ paths:
 
         > - The request has to be `content-type: application/yaml` and the body has to follow [Compose Specification](https://compose-spec.io).
         > - When `dry_run=true` is provided in the query string, it only validates the YAML content.
+        > - A top-level `x-casaos-env` string is the app's `.env`, installed with it: it is taken out of the compose text, the compose is checked with its values (an `env_file: .env` included), and it is written as the `.env` next to the app's `docker-compose.yml`. A reference to one of its keys stays as written in the compose file, as for a `.env` added later (`PUT /compose/{id}/env`). A key CasaOS sets itself (`TZ`, `PUID`, `PGID`, `AppID`...) is refused with a `400`.
 
       operationId: installComposeApp
       tags:

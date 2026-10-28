@@ -86,7 +86,7 @@ func TestApplyParsesTheFileInTheAppFolder(t *testing.T) {
 
 	dir := writeStack(t, map[string]string{"docker-compose.yml": handWrittenStack, ".env": "GREETING=hello\n"})
 
-	_, err := newComposeAppFromYAML([]byte(handWrittenStack), true, true, nil, dir)
+	_, err := newComposeAppFromYAML([]byte(handWrittenStack), true, true, nil, dir, nil)
 	assert.NilError(t, err)
 }
 

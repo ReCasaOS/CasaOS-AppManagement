@@ -1231,7 +1231,7 @@ func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[
 
 	// in the app's own folder: parsed in a temporary one, a relative `env_file: .env` was looked
 	// for there, and every save of an app that has one failed, its settings and its .env alike
-	newComposeApp, err := newComposeAppFromYAML(newComposeYAML, true, true, nil, a.WorkingDir)
+	newComposeApp, err := newComposeAppFromYAML(newComposeYAML, true, true, nil, a.WorkingDir, nil)
 	if err != nil {
 		return err
 	}
@@ -1603,12 +1603,14 @@ func removeRuntime(a *ComposeApp) {
 }
 
 func NewComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool) (*ComposeApp, error) {
-	return newComposeAppFromYAML(yaml, skipInterpolation, skipValidation, nil, "")
+	return newComposeAppFromYAML(yaml, skipInterpolation, skipValidation, nil, "", nil)
 }
 
 // keep is non-nil for the settings pipeline (ComposeAppFromSettingsYAML): the output is compose
 // text again, see substituteEscaping. nil resolves everything as before.
-func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, keep map[string]struct{}, workingDir string) (*ComposeApp, error) {
+// values are what a .env installed with the text defines (NewComposeAppWithEnv): they resolve
+// before the environment of this process.
+func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, keep map[string]struct{}, workingDir string, values map[string]string) (*ComposeApp, error) {
 	// workingDir is where the relative paths of the text resolve (env_file, a build context, a
 	// ./ volume): the app's own folder for an installed app's file, a temporary folder for text
 	// that has no folder yet.
@@ -1667,6 +1669,9 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 						return fmt.Sprintf("$%s", k), true
 					}
 				}
+				if value, ok := values[key]; ok {
+					return value, true
+				}
 				// the function may can to replace the above code.
 				value, ok := os.LookupEnv(key)
 				if ok {
@@ -1674,8 +1679,8 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 				}
 				// ${KEY:-default} and ${KEY:?message} mean something when KEY has no value: say so, and the
 				// default (or the message) applies. Any other unknown KEY stays $KEY, for the app's settings,
-				// and the settings pipeline (keep) keeps every reference as it is written.
-				if keep == nil && fallbacks[key] {
+				// and a key the settings pipeline keeps (a key of the app's .env) stays as it is written.
+				if _, kept := keep[key]; fallbacks[key] && !kept {
 					return "", false
 				}
 				return fmt.Sprintf("$%s", key), true
