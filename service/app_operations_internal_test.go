@@ -73,7 +73,7 @@ func TestAnUpdateIsRefusedWhileTheAppIsBusy(t *testing.T) {
 func TestAnInstallIsRefusedWhileTheAppIsBusy(t *testing.T) {
 	holding(t, "jarvis")
 
-	assertBusy(t, NewComposeService().Install(context.Background(), &ComposeApp{Name: "jarvis"}))
+	assertBusy(t, NewComposeService().Install(context.Background(), &ComposeApp{Name: "jarvis"}, nil))
 }
 
 // An uninstall is refused before it touches anything. The name is one no real compose

@@ -384,8 +384,23 @@ func (a *AppManagement) InstallComposeApp(ctx echo.Context, params codegen.Insta
 		})
 	}
 
-	// validate new compose yaml
-	composeApp, err := service.NewComposeAppFromYAML(buf, false, true)
+	// a .env sent with the compose (x-casaos-env): checked with its values, installed beside it
+	buf, env, err := service.SplitInstallEnv(buf)
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{
+			Message: &message,
+		})
+	}
+
+	// validate new compose yaml; checked is what the port check looks at, composeApp what is installed
+	var composeApp, checked *service.ComposeApp
+	if len(env) > 0 {
+		checked, composeApp, err = service.NewComposeAppWithEnv(buf, env)
+	} else {
+		composeApp, err = service.NewComposeAppFromYAML(buf, false, true)
+		checked = composeApp
+	}
 	if err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{
@@ -405,7 +420,7 @@ func (a *AppManagement) InstallComposeApp(ctx echo.Context, params codegen.Insta
 
 	if params.CheckPortConflict == nil || *params.CheckPortConflict {
 		// validation 1 - check if there are ports in use
-		validation, err := composeApp.GetPortsInUse()
+		validation, err := checked.GetPortsInUse()
 		if err != nil {
 			message := err.Error()
 			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
@@ -444,7 +459,7 @@ func (a *AppManagement) InstallComposeApp(ctx echo.Context, params codegen.Insta
 	// attach context key/value pairs from upstream
 	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
 
-	if err := service.MyService.Compose().Install(backgroundCtx, composeApp); err != nil {
+	if err := service.MyService.Compose().Install(backgroundCtx, composeApp, env); err != nil {
 		logger.Error("failed to start compose app installation", zap.Error(err))
 
 		message := err.Error()

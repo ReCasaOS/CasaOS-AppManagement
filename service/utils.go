@@ -38,7 +38,7 @@ func ComposeAppFromSettingsYAML(buf []byte, keep map[string]struct{}) (*ComposeA
 	if keep == nil {
 		keep = map[string]struct{}{}
 	}
-	return newComposeAppFromYAML(buf, false, true, keep, "")
+	return newComposeAppFromYAML(buf, false, true, keep, "", nil)
 }
 
 // GenerateYAMLFromComposeApp writes an app loaded by the settings pipeline (ComposeAppFromSettingsYAML,

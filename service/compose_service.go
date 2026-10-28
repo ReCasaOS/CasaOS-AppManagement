@@ -47,7 +47,9 @@ func (s *ComposeService) IsInstalling(appName string) bool {
 	return ok
 }
 
-func (s *ComposeService) Install(ctx context.Context, composeApp *ComposeApp) error {
+// Install writes the app's compose file, and env as its .env beside it when there is one (see
+// NewComposeAppWithEnv), then installs it.
+func (s *ComposeService) Install(ctx context.Context, composeApp *ComposeApp, env []byte) error {
 	end, err := Begin(composeApp.Name, "install")
 	if err != nil {
 		return err
@@ -87,6 +89,15 @@ func (s *ComposeService) Install(ctx context.Context, composeApp *ComposeApp) er
 			logger.Error("failed to cleanup working dir after failing to save compose file", zap.Error(err), zap.String("path", workingDirectory))
 		}
 		return err
+	}
+
+	// before the load: the load resolves the compose file's references from it
+	if len(env) > 0 {
+		if err := file.WriteToFullPath(env, filepath.Join(workingDirectory, ".env"), 0o600); err != nil {
+			logger.Error("failed to save the .env of the compose app", zap.Error(err), zap.String("dir", workingDirectory))
+			cleanup(workingDirectory)
+			return err
+		}
 	}
 
 	// load project
