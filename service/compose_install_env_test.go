@@ -1,6 +1,7 @@
 package service
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -108,4 +109,36 @@ services:
 	assert.NilError(t, err)
 	assert.Assert(t, strings.Contains(string(text), "vecto-engine"), string(text))
 	assert.Assert(t, !strings.Contains(string(text), "caddy"), string(text))
+}
+
+// a service started by systemd has no HOME: ${HOME} is still the user's home, as for docker compose
+func TestHomeIsTheUsersHomeWhenTheProcessHasNone(t *testing.T) {
+	if old, ok := os.LookupEnv("HOME"); ok {
+		t.Cleanup(func() { os.Setenv("HOME", old) })
+	}
+	os.Unsetenv("HOME")
+	const stack = `name: w
+services:
+  w:
+    image: containrrr/watchtower
+    volumes:
+      - ${HOME}/.docker/config.json:/config.json:ro
+`
+	app, err := NewComposeAppFromYAML([]byte(stack), false, true)
+	assert.NilError(t, err)
+	home, err := userHome()
+	assert.NilError(t, err)
+	assert.Equal(t, app.Services["w"].Volumes[0].Source, home+"/.docker/config.json")
+	assert.Assert(t, !strings.Contains(app.Services["w"].Volumes[0].Source, "$"))
+}
+
+func TestAVolumeBehindAVariableWithNoValueSaysSo(t *testing.T) {
+	_, _, err := NewComposeAppWithEnv([]byte(`name: w
+services:
+  w:
+    image: alpine
+    volumes:
+      - ${NOT_DEFINED}/data:/data
+`), []byte("A=1\n"))
+	assert.ErrorContains(t, err, "the variable NOT_DEFINED has no value: define it in the .env")
 }
