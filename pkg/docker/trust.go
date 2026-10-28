@@ -47,27 +47,38 @@ func EncodedEnvAuth(ref string) (string, error) {
 // EncodedConfigAuth returns an encoded auth config for the given registry
 // loaded from the docker config
 // Returns an empty string if credentials cannot be found for the referenced server
-// The docker config must be mounted on the container
+//
+// The config is $DOCKER_CONFIG when set. Otherwise it is the one `docker login` writes
+// (~/.docker/config.json, the home of the user this process runs as when it has no HOME), then
+// the root of the file system, where a container that had the config mounted found it.
 func EncodedConfigAuth(ref string) (string, error) {
 	server, err := ParseServerAddress(ref)
 	if err != nil {
 		return "", err
 	}
-	configDir := os.Getenv("DOCKER_CONFIG")
-	if configDir == "" {
-		configDir = "/"
+	dirs := []string{os.Getenv("DOCKER_CONFIG")}
+	if dirs[0] == "" {
+		dirs = []string{cliconfig.Dir(), "/"}
 	}
-	configFile, err := cliconfig.Load(configDir)
-	if err != nil {
-		return "", err
-	}
-	credStore := CredentialsStore(*configFile)
-	auth, _ := credStore.Get(server) // returns (types.AuthConfig{}) if server not in credStore
 
-	if auth == (types.AuthConfig{}) {
-		return "", nil
+	var firstErr error
+	for _, dir := range dirs {
+		configFile, err := cliconfig.Load(dir)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		credStore := CredentialsStore(*configFile)
+		auth, _ := credStore.Get(server) // returns (types.AuthConfig{}) if server not in credStore
+
+		if auth != (types.AuthConfig{}) {
+			return EncodeAuth(auth)
+		}
 	}
-	return EncodeAuth(auth)
+
+	return "", firstErr
 }
 
 // ParseServerAddress extracts the server part from a container image ref

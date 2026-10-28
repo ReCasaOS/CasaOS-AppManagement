@@ -600,7 +600,7 @@ func (a *ComposeApp) Containers(ctx context.Context) (map[string][]api.Container
 }
 
 func (a *ComposeApp) Pull(ctx context.Context) error {
-	serviceNames := pulledServiceNames(a.Services)
+	serviceNames := pullServiceNames(ctx, a.Services)
 	serviceNum := len(serviceNames)
 
 	for i, name := range serviceNames {
@@ -630,6 +630,29 @@ func (a *ComposeApp) Pull(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// imageIsHere reports whether an image is on this box already, a var for the tests.
+var imageIsHere = func(ctx context.Context, image string) bool {
+	_, err := docker.Image(ctx, image)
+	return err == nil
+}
+
+// pullServiceNames is what a pull fetches: pulledServiceNames, and the services with a build
+// section whose image is not on this box. Such a service came from a compose file that builds
+// and names an image a registry holds (`build:` and `image:` together, as a CI that pushes it
+// does): installed here there is nothing to build it from, and no pull left its container with
+// "No such image". An image that is here, built on this box or pulled before, is left as it is.
+func pullServiceNames(ctx context.Context, services types.Services) []string {
+	names := pulledServiceNames(services)
+	for _, name := range sortedServiceNames(services) {
+		if s := services[name]; s.Build != nil && s.Image != "" && !imageIsHere(ctx, s.Image) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	return names
 }
 
 // pulledServiceNames is every service a pull fetches an image for, sorted. A service with a

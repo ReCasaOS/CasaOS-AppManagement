@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -141,4 +142,33 @@ services:
       - ${NOT_DEFINED}/data:/data
 `), []byte("A=1\n"))
 	assert.ErrorContains(t, err, "the variable NOT_DEFINED has no value: define it in the .env")
+}
+
+// A service with both build: and image: (what a CI that pushes the image writes) has nothing to
+// build it from once installed here: its image is pulled when it is not on this box, and left
+// alone when it is.
+func TestABuiltServiceWhoseImageIsNotHereIsPulled(t *testing.T) {
+	saved := imageIsHere
+	t.Cleanup(func() { imageIsHere = saved })
+	present := map[string]bool{}
+	imageIsHere = func(_ context.Context, image string) bool { return present[image] }
+
+	app, err := NewComposeAppFromYAML([]byte(`name: stack
+services:
+  built:
+    build: .
+    image: registry.example.org/app-php:latest
+  buildonly:
+    build: .
+  pulled:
+    image: redis:7
+`), false, true)
+	assert.NilError(t, err)
+
+	assert.DeepEqual(t, pullServiceNames(context.Background(), app.Services), []string{"built", "pulled"})
+
+	present["registry.example.org/app-php:latest"] = true // built on this box, or pulled before
+	assert.DeepEqual(t, pullServiceNames(context.Background(), app.Services), []string{"pulled"})
+	// the check of updates still leaves a built service out
+	assert.DeepEqual(t, pulledServiceNames(app.Services), []string{"pulled"})
 }
