@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -50,6 +51,9 @@ func SplitInstallEnv(text []byte) ([]byte, []byte, error) {
 // at (the ports). kept leaves every reference to a key of the .env as written: it is what the
 // install writes beside the .env, so that the app's .env settings go on applying, as for an
 // app whose .env was added later (see EnvKeys). A key CasaOS sets itself is refused, as there.
+// COMPOSE_PROFILES in the .env turns profiles on, as docker compose reads it: a service of a
+// profile it names is installed, and runs, since the runtime reads the same .env; a service of
+// another profile is left out of the app.
 func NewComposeAppWithEnv(text, env []byte) (resolved, kept *ComposeApp, err error) {
 	values, err := ParseEnvFile(env)
 	if err != nil {
@@ -65,7 +69,14 @@ func NewComposeAppWithEnv(text, env []byte) (resolved, kept *ComposeApp, err err
 		return nil, nil, err
 	}
 
-	if resolved, err = newComposeAppFromYAML(text, false, true, nil, dir, values); err != nil {
+	var profiles []string
+	for _, p := range strings.Split(values["COMPOSE_PROFILES"], ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			profiles = append(profiles, p)
+		}
+	}
+
+	if resolved, err = newComposeAppFromYAML(text, false, true, nil, dir, values, profiles); err != nil {
 		return nil, nil, err
 	}
 
@@ -73,7 +84,8 @@ func NewComposeAppWithEnv(text, env []byte) (resolved, kept *ComposeApp, err err
 	for key := range values {
 		keep[key] = struct{}{}
 	}
-	if kept, err = ComposeAppFromSettingsYAML(text, keep); err != nil {
+	// the settings parse (ComposeAppFromSettingsYAML), with the profiles
+	if kept, err = newComposeAppFromYAML(text, false, true, keep, "", nil, profiles); err != nil {
 		return nil, nil, err
 	}
 
