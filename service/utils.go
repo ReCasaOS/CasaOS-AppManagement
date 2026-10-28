@@ -38,7 +38,8 @@ func ComposeAppFromSettingsYAML(buf []byte, keep map[string]struct{}) (*ComposeA
 	if keep == nil {
 		keep = map[string]struct{}{}
 	}
-	return newComposeAppFromYAML(buf, false, true, keep, "", nil, nil)
+	// every profile: the text is written back to the file, which keeps the services behind a profile
+	return newComposeAppFromYAML(buf, false, true, keep, "", nil, []string{"*"})
 }
 
 // GenerateYAMLFromComposeApp writes an app loaded by the settings pipeline (ComposeAppFromSettingsYAML,

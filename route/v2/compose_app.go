@@ -220,7 +220,7 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 	if params.CheckPortConflict == nil || *params.CheckPortConflict {
 
 		// validation 1 - check if there are ports in use
-		validation, err := newComposeApp.GetPortsInUse()
+		validation, err := newComposeApp.GetPortsInUseFor(composeApp.Profiles)
 		if err != nil {
 			message := err.Error()
 			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{

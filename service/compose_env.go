@@ -163,6 +163,10 @@ func LoadComposeAppForEditing(appID, configFile string, keep map[string]struct{}
 		cli.WithOsEnv,
 		cli.WithEnv(env),
 		cli.WithName(appID),
+		// every service, whatever its profile: this load is what a save, an update or a refresh writes
+		// back, and a service behind a profile (an engine, a proxy, an updater) was left out of the file
+		// by it. What runs is decided by the .env's COMPOSE_PROFILES when docker compose loads the file.
+		cli.WithProfiles([]string{"*"}),
 		cli.WithLoadOptions(func(o *loader.Options) {
 			if o.Interpolate == nil {
 				// compose-go (v2.15) first applies load options to bare Options only to find the

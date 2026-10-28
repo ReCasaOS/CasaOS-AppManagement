@@ -1440,6 +1440,23 @@ func newLogConsumer(ctx context.Context, w io.Writer) api.LogConsumer {
 }
 
 func (a *ComposeApp) GetPortsInUse() (*codegen.ComposeAppValidationErrorsPortsInUse, error) {
+	return a.portsInUse(a.Services)
+}
+
+// GetPortsInUseFor is GetPortsInUse for what runs with the profiles on: the ports of a service
+// behind a profile that is off (a proxy that is not installed here) are no conflict.
+func (a *ComposeApp) GetPortsInUseFor(profiles []string) (*codegen.ComposeAppValidationErrorsPortsInUse, error) {
+	running := types.Services{}
+	for name, s := range a.Services {
+		if len(s.Profiles) == 0 || lo.Contains(profiles, "*") || len(lo.Intersect(s.Profiles, profiles)) > 0 {
+			running[name] = s
+		}
+	}
+
+	return a.portsInUse(running)
+}
+
+func (a *ComposeApp) portsInUse(services types.Services) (*codegen.ComposeAppValidationErrorsPortsInUse, error) {
 	tcpPorts, udpPorts, err := port.ListPortsInUse()
 	if err != nil {
 		return nil, err
@@ -1450,7 +1467,7 @@ func (a *ComposeApp) GetPortsInUse() (*codegen.ComposeAppValidationErrorsPortsIn
 	tcpPortInUse := []string{}
 	udpPortInUse := []string{}
 
-	for _, s := range a.Services {
+	for _, s := range services {
 		for _, p := range s.Ports {
 			if lo.ContainsBy(allPortsInUse, func(portInUse int) bool { return strconv.Itoa(portInUse) == p.Published }) {
 				switch strings.ToLower(p.Protocol) {
