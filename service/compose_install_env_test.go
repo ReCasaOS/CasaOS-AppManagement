@@ -82,3 +82,30 @@ func TestAnEnvThatMissesAKeyOrSetsOneOfCasaOSIsRefused(t *testing.T) {
 	_, _, err = NewComposeAppWithEnv([]byte(stackWithEnv), []byte("DB_PASSWORD=x\nDB_PORT=1\nTZ=Europe/Paris\n"))
 	assert.ErrorContains(t, err, "TZ is set by CasaOS")
 }
+
+// COMPOSE_PROFILES in the .env turns a profile on: its service is installed, the others are not
+func TestComposeProfilesInTheEnvInstallTheirServices(t *testing.T) {
+	const stack = `name: vecto
+services:
+  web:
+    image: nginx
+  engine:
+    profiles: ["engine"]
+    image: vecto-engine
+  proxy:
+    profiles: ["tls"]
+    image: caddy:2
+`
+	resolved, kept, err := NewComposeAppWithEnv([]byte(stack), []byte("A=1\n"))
+	assert.NilError(t, err)
+	assert.DeepEqual(t, sortedServiceNames(resolved.Services), []string{"web"})
+	assert.DeepEqual(t, sortedServiceNames(kept.Services), []string{"web"})
+
+	resolved, kept, err = NewComposeAppWithEnv([]byte(stack), []byte("COMPOSE_PROFILES=engine\n"))
+	assert.NilError(t, err)
+	assert.DeepEqual(t, sortedServiceNames(resolved.Services), []string{"engine", "web"})
+	text, err := GenerateYAMLFromComposeApp(*kept)
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(text), "vecto-engine"), string(text))
+	assert.Assert(t, !strings.Contains(string(text), "caddy"), string(text))
+}

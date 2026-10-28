@@ -1231,7 +1231,7 @@ func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[
 
 	// in the app's own folder: parsed in a temporary one, a relative `env_file: .env` was looked
 	// for there, and every save of an app that has one failed, its settings and its .env alike
-	newComposeApp, err := newComposeAppFromYAML(newComposeYAML, true, true, nil, a.WorkingDir, nil)
+	newComposeApp, err := newComposeAppFromYAML(newComposeYAML, true, true, nil, a.WorkingDir, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -1603,14 +1603,15 @@ func removeRuntime(a *ComposeApp) {
 }
 
 func NewComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool) (*ComposeApp, error) {
-	return newComposeAppFromYAML(yaml, skipInterpolation, skipValidation, nil, "", nil)
+	return newComposeAppFromYAML(yaml, skipInterpolation, skipValidation, nil, "", nil, nil)
 }
 
 // keep is non-nil for the settings pipeline (ComposeAppFromSettingsYAML): the output is compose
 // text again, see substituteEscaping. nil resolves everything as before.
 // values are what a .env installed with the text defines (NewComposeAppWithEnv): they resolve
-// before the environment of this process.
-func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, keep map[string]struct{}, workingDir string, values map[string]string) (*ComposeApp, error) {
+// before the environment of this process. profiles are the profiles turned on: a service of
+// another profile is left out, as docker compose leaves it.
+func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, keep map[string]struct{}, workingDir string, values map[string]string, profiles []string) (*ComposeApp, error) {
 	// workingDir is where the relative paths of the text resolve (env_file, a build context, a
 	// ./ volume): the app's own folder for an installed app's file, a temporary folder for text
 	// that has no folder yet.
@@ -1648,6 +1649,7 @@ func newComposeAppFromYAML(yaml []byte, skipInterpolation, skipValidation bool, 
 		func(o *loader.Options) {
 			o.SkipInterpolation = skipInterpolation
 			o.SkipValidation = skipValidation
+			o.Profiles = profiles
 			if keep != nil {
 				keepPathRefs(o)
 				keepRefCasts(o)
