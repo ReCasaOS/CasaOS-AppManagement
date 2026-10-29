@@ -21,3 +21,11 @@ func ApplyDataPath(root string) string {
 	imageUpdateStatePath = filepath.Join(root, "image_updates.json")
 	return root
 }
+
+func ApplyGitAppsDataRoot(v string) {
+	if v == "" {
+		gitAppsDataRoot = "/DATA/AppData"
+		return
+	}
+	gitAppsDataRoot = v
+}

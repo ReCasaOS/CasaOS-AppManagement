@@ -59,3 +59,17 @@ func TestApplyDataPathEmptyUsesDefault(t *testing.T) {
 		t.Fatalf("StatsDir = %q, want %q", StatsDir, want)
 	}
 }
+
+func TestApplyGitAppsDataRoot(t *testing.T) {
+	prev := gitAppsDataRoot
+	t.Cleanup(func() { gitAppsDataRoot = prev })
+
+	ApplyGitAppsDataRoot("/tmp/x")
+	if gitAppsDataRoot != "/tmp/x" {
+		t.Fatalf("got %q", gitAppsDataRoot)
+	}
+	ApplyGitAppsDataRoot("")
+	if gitAppsDataRoot != "/DATA/AppData" {
+		t.Fatalf("empty got %q", gitAppsDataRoot)
+	}
+}

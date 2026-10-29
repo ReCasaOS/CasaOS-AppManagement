@@ -73,6 +73,7 @@ func main() {
 		config.InitGlobal(*configFlag)
 
 		root := service.ApplyDataPath(config.AppInfo.DataPath)
+		service.ApplyGitAppsDataRoot(os.Getenv("CASAOS_GIT_APPS_DATA"))
 		v1.DockerRootDirFilePath = filepath.Join(root, "docker_root")
 
 		logger.LogInit(config.AppInfo.LogPath, config.AppInfo.LogSaveName, config.AppInfo.LogFileExt)
