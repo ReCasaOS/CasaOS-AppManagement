@@ -43,6 +43,11 @@ import (
 // It is inside /var/lib/casaos/backups, which the box's own backup already holds.
 var KeyDir = "/var/lib/casaos/backups/restic"
 
+// CacheDir is where restic keeps what it learns about a repository between runs.
+// Given explicitly because the service has neither $HOME nor $XDG_CACHE_HOME,
+// and without a place for it restic refuses to back anything up.
+var CacheDir = "/var/cache/casaos/restic"
+
 // RepositoryFolder is the folder a destination keeps its repository in. Next to
 // the stamped copies, not in place of them: a destination switched to restic keeps
 // whatever it held.
@@ -163,6 +168,7 @@ func (e *Engine) call(ctx context.Context, destination string, args ...string) (
 	return e.run(ctx, []string{
 		"RESTIC_REPOSITORY=" + e.repository(destination),
 		"RESTIC_PASSWORD_FILE=" + key,
+		"RESTIC_CACHE_DIR=" + CacheDir,
 	}, append([]string{"--retry-lock", "5m", "--quiet"}, args...)...)
 }
 
