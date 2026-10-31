@@ -72,6 +72,9 @@ func TestEnableMakesARepositoryAndHandsBackThePassword(t *testing.T) {
 	if len(f.calls) != 2 || f.calls[1].args[3] != "init" {
 		t.Fatalf("expected cat config then init, got %v", f.calls)
 	}
+	if !contains(f.calls[0].env, "RESTIC_CACHE_DIR="+CacheDir) {
+		t.Fatalf("restic was not told where its cache goes: %v", f.calls[0].env)
+	}
 	if !contains(f.calls[0].env, "RESTIC_REPOSITORY=repo-of-nas") {
 		t.Fatalf("the repository was not passed: %v", f.calls[0].env)
 	}
@@ -215,6 +218,10 @@ func TestWithTheRealBinary(t *testing.T) {
 	}
 
 	KeyDir = t.TempDir()
+	CacheDir = filepath.Join(t.TempDir(), "cache")
+	// the service runs with neither: restic found no place for its cache and refused
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
 	repository := filepath.Join(t.TempDir(), "repo")
 	e := &Engine{run: execRunner, repository: func(string) string { return repository }}
 	ctx := context.Background()
