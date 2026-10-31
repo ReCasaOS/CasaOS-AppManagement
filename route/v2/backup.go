@@ -2,6 +2,7 @@ package v2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/rclone"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/restic"
 	"github.com/ReCasaOS/CasaOS-AppManagement/service"
 	"github.com/ReCasaOS/CasaOS-Common/utils"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
@@ -81,7 +83,7 @@ func (a *AppManagement) DeleteBackupRun(ctx echo.Context, name codegen.BackupDes
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 	}
 
-	if err := rclone.NewClient().Purge(ctx.Request().Context(), string(name), path.Join(string(app), string(stamp))); err != nil {
+	if err := restic.NewRouter().Purge(ctx.Request().Context(), string(name), path.Join(string(app), string(stamp))); err != nil {
 		return backupError(ctx, err)
 	}
 
@@ -113,6 +115,46 @@ func (a *AppManagement) CheckBackupDestination(ctx echo.Context, name codegen.Ba
 		Data: &codegen.BackupDestinationSpace{
 			Used: space.Used, Free: space.Free, Total: space.Total,
 		},
+	})
+}
+
+// BackupDestinationRestic says whether a destination keeps its backups with restic.
+func (a *AppManagement) BackupDestinationRestic(ctx echo.Context, name codegen.BackupDestinationName) error {
+	return ctx.JSON(http.StatusOK, codegen.BackupDestinationResticOK{
+		Message: utils.Ptr("OK"),
+		Data: &codegen.BackupDestinationRestic{
+			Available: restic.Available(),
+			Enabled:   restic.New().Enabled(string(name)),
+		},
+	})
+}
+
+// EnableBackupDestinationRestic switches a destination to restic and hands back
+// the password of its repository, the one time it is shown.
+func (a *AppManagement) EnableBackupDestinationRestic(ctx echo.Context, name codegen.BackupDestinationName) error {
+	var spec codegen.BackupDestinationResticSpec
+	if err := ctx.Bind(&spec); err != nil {
+		return backupBadRequest(ctx, err)
+	}
+
+	password := ""
+	if spec.Password != nil {
+		password = *spec.Password
+	}
+
+	password, err := restic.New().Enable(ctx.Request().Context(), string(name), password)
+	if err != nil {
+		// each of these is something the person can fix; the rest is a failure to report
+		if errors.Is(err, restic.ErrNotInstalled) || errors.Is(err, restic.ErrAlreadyEnabled) || errors.Is(err, restic.ErrWrongPassword) {
+			return backupBadRequest(ctx, err)
+		}
+
+		return backupError(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.BackupDestinationResticPasswordOK{
+		Message: utils.Ptr("OK"),
+		Data:    &codegen.BackupDestinationResticPassword{Password: password},
 	})
 }
 
@@ -166,7 +208,7 @@ func (a *AppManagement) BackupComposeApp(ctx echo.Context, id codegen.ComposeApp
 }
 
 func runBackupInBackground(ctx context.Context, composeApp *service.ComposeApp, destination, stamp string, holdStill bool, keep int) {
-	client := rclone.NewClient()
+	client := restic.NewRouter()
 	manifest, err := service.BackupOnDemand(ctx, composeApp, service.MyService.Docker(), client, service.BackupOptions{
 		Destination: destination,
 		Stamp:       stamp,
@@ -364,7 +406,7 @@ func (a *AppManagement) RestoreBackup(ctx echo.Context) error {
 	// come back under services that are stopped for it.
 	if opts.App == service.SystemBackupName {
 		go func() {
-			report, err := service.SystemRestoreOnDemand(backgroundCtx, rclone.NewClient(), service.Systemd(), service.SystemRestoreOptions{
+			report, err := service.SystemRestoreOnDemand(backgroundCtx, restic.NewRouter(), service.Systemd(), service.SystemRestoreOptions{
 				Destination: opts.Destination, Stamp: opts.Stamp,
 			})
 			if err != nil {
@@ -388,7 +430,7 @@ func (a *AppManagement) RestoreBackup(ctx echo.Context) error {
 	installed := composeApps[opts.App]
 
 	go func() {
-		report, err := service.RestoreOnDemand(backgroundCtx, installed, service.MyService.Docker(), rclone.NewClient(), installFromBackup, opts)
+		report, err := service.RestoreOnDemand(backgroundCtx, installed, service.MyService.Docker(), restic.NewRouter(), installFromBackup, opts)
 		if err != nil {
 			logger.Error("restore failed",
 				zap.Error(err), zap.String("app", opts.App), zap.String("destination", opts.Destination), zap.String("stamp", opts.Stamp))
@@ -475,7 +517,7 @@ func (a *AppManagement) BackupDestinationRuns(ctx echo.Context, name codegen.Bac
 		installed[appName] = true
 	}
 
-	held, err := service.DestinationContents(ctx.Request().Context(), rclone.NewClient(), string(name), installed)
+	held, err := service.DestinationContents(ctx.Request().Context(), restic.NewRouter(), string(name), installed)
 	if err != nil {
 		return backupError(ctx, err)
 	}
@@ -509,7 +551,7 @@ func (a *AppManagement) BackupSystem(ctx echo.Context) error {
 	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
 
 	go func() {
-		manifest, err := service.SystemBackupOnDemand(backgroundCtx, rclone.NewClient(), service.Systemd(), service.SystemBackupOptions{
+		manifest, err := service.SystemBackupOnDemand(backgroundCtx, restic.NewRouter(), service.Systemd(), service.SystemBackupOptions{
 			Destination: request.Destination, Stamp: stamp, HoldStill: holdStill,
 		})
 		if err != nil {
