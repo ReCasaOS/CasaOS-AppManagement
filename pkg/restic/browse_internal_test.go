@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -143,5 +144,114 @@ func TestANameIsNotReadAsAPattern(t *testing.T) {
 	}
 	if got := strings.Join(f.last(), " "); !strings.HasSuffix(got, `--include /we\[ird]\*\?.txt`) {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// With the real binary: look inside a snapshot, and take a folder and a file of it back
+// over what is there without deleting anything.
+func TestBrowsingAndTakingBackWithTheRealBinary(t *testing.T) {
+	if _, err := exec.LookPath("restic"); err != nil {
+		t.Skip("restic is not installed")
+	}
+
+	KeyDir = t.TempDir()
+	CacheDir = filepath.Join(t.TempDir(), "cache")
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	repository := filepath.Join(t.TempDir(), "repo")
+	e := &Engine{run: execRunner, repository: func(string) string { return repository }}
+	ctx := context.Background()
+
+	if _, err := e.Enable(ctx, "local", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	source := t.TempDir()
+	write := func(name, content string) {
+		full := filepath.Join(source, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("top.txt", "top one")
+	write("sub/inner.txt", "inner one")
+	write("sub/deeper/leaf.txt", "leaf one")
+	write("we[ird] *name.txt", "odd one")
+
+	if err := e.CopyDirectory(ctx, source, "local", "blog/20261001/volume-data"); err != nil {
+		t.Fatal(err)
+	}
+
+	// one level at a time: its children only, folders flagged
+	top, err := e.List(ctx, "local", "blog/20261001/volume-data", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, file := range top {
+		got[file.Name] = file.Directory
+	}
+	want := map[string]bool{"top.txt": false, "sub": true, "we[ird] *name.txt": false}
+	if len(got) != len(want) {
+		t.Fatalf("top level %v", got)
+	}
+	for name, directory := range want {
+		if value, ok := got[name]; !ok || value != directory {
+			t.Fatalf("top level %v, want %v", got, want)
+		}
+	}
+
+	below, err := e.List(ctx, "local", "blog/20261001/volume-data", "sub")
+	if err != nil || len(below) != 2 {
+		t.Fatalf("below sub: %+v %v", below, err)
+	}
+
+	// changed since, and things that were never in the backup
+	write("top.txt", "top changed")
+	write("sub/inner.txt", "inner changed")
+	write("sub/deeper/leaf.txt", "leaf changed")
+	write("sub/added.txt", "added later")
+	write("we[ird] *name.txt", "odd changed")
+
+	// a folder: what it held is back, and what was added in it stays
+	if err := e.CopyBack(ctx, "local", "blog/20261001/volume-data", "sub", filepath.Join(source, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) string {
+		content, _ := os.ReadFile(filepath.Join(source, name))
+
+		return string(content)
+	}
+	if read("sub/inner.txt") != "inner one" || read("sub/deeper/leaf.txt") != "leaf one" {
+		t.Fatalf("the folder is not back: %q %q", read("sub/inner.txt"), read("sub/deeper/leaf.txt"))
+	}
+	if read("sub/added.txt") != "added later" {
+		t.Fatal("a file added in the folder was deleted")
+	}
+	if read("top.txt") != "top changed" {
+		t.Fatal("something outside the folder was touched")
+	}
+
+	// a file, and a name that looks like a pattern
+	if err := e.CopyBack(ctx, "local", "blog/20261001/volume-data", "top.txt", filepath.Join(source, "top.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CopyBack(ctx, "local", "blog/20261001/volume-data", "we[ird] *name.txt", filepath.Join(source, "we[ird] *name.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if read("top.txt") != "top one" || read("we[ird] *name.txt") != "odd one" {
+		t.Fatalf("the files are not back: %q %q", read("top.txt"), read("we[ird] *name.txt"))
+	}
+
+	// the whole copy, without the deletion a whole restore does
+	write("stranger.txt", "was never in the backup")
+	if err := e.CopyBack(ctx, "local", "blog/20261001/volume-data", "", source); err != nil {
+		t.Fatal(err)
+	}
+	if read("stranger.txt") != "was never in the backup" {
+		t.Fatal("a file that was not in the backup was deleted")
 	}
 }
