@@ -52,7 +52,7 @@ func dayOf(root, p string) time.Time {
 	name := parts[len(parts)-1]
 	switch {
 	case len(parts) == 2 && parts[0] == "_events" && strings.HasSuffix(name, ".jsonl") && len(name) == len("2006-01-02.jsonl"):
-	case len(parts) == 3 && strings.HasSuffix(name, ".log") && len(name) > 11 && name[10] == '.':
+	case len(parts) == 3 && parts[0] != "_events" && strings.HasSuffix(name, ".log") && len(name) > 11 && name[10] == '.':
 	default:
 		return time.Time{}
 	}
@@ -68,9 +68,10 @@ func dayOf(root, p string) time.Time {
 func PlanPurge(files []FileInfo, now time.Time, retentionDays int, maxBytes int64) []string {
 	var plan []string
 	var kept []FileInfo
+	// retentionDays=7 keeps today and the 6 days before: a day <= today-7 goes.
 	cutoff := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -retentionDays)
 	for _, f := range files {
-		if retentionDays > 0 && !f.Day.IsZero() && f.Day.Before(cutoff) {
+		if retentionDays > 0 && !f.Day.IsZero() && !f.Day.After(cutoff) {
 			plan = append(plan, f.Path)
 		} else {
 			kept = append(kept, f)
@@ -112,9 +113,17 @@ func Purge(root string, now time.Time, retentionDays int, maxBytes int64) (remov
 	for _, f := range files {
 		size[f.Path] = f.Size
 	}
-	for _, p := range PlanPurge(files, now, retentionDays, maxBytes) {
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return removed, err
+	return removePlanned(root, PlanPurge(files, now, retentionDays, maxBytes), size)
+}
+
+// removePlanned keeps going past a failing remove so one stuck file cannot stop the cap; it returns the first error.
+func removePlanned(root string, plan []string, size map[string]int64) (removed int64, first error) {
+	for _, p := range plan {
+		if err := os.Remove(p); err != nil {
+			if !errors.Is(err, fs.ErrNotExist) && first == nil {
+				first = err
+			}
+			continue
 		}
 		removed += size[p]
 		// only <app>/<service>/file qualifies; os.Remove refuses a non-empty directory, which is the check we want.
@@ -125,7 +134,7 @@ func Purge(root string, now time.Time, retentionDays int, maxBytes int64) (remov
 			}
 		}
 	}
-	return removed, nil
+	return removed, first
 }
 
 func Usage(root string) (bytes int64, oldest time.Time, err error) {
