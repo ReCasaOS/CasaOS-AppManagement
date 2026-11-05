@@ -151,19 +151,25 @@ func LastTimestamp(root, app, service, container string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	sort.Strings(files)
-	f, err := os.Open(files[len(files)-1])
+	at := lastLineAt(files[len(files)-1])
+	return at, !at.IsZero()
+}
+
+// lastLineAt returns the time of the file's last parsable line within its last 64 KiB, zero if none.
+func lastLineAt(name string) time.Time {
+	f, err := os.Open(name)
 	if err != nil {
-		return time.Time{}, false
+		return time.Time{}
 	}
 	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
-		return time.Time{}, false
+		return time.Time{}
 	}
 	start := max(st.Size()-flushThreshold, 0)
 	tail := make([]byte, st.Size()-start)
 	if _, err := f.ReadAt(tail, start); err != nil && !errors.Is(err, io.EOF) {
-		return time.Time{}, false
+		return time.Time{}
 	}
 	lines := bytes.Split(tail, []byte("\n"))
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -171,8 +177,8 @@ func LastTimestamp(root, app, service, container string) (time.Time, bool) {
 			break // first chunk line is cut mid-line
 		}
 		if at, _, _, ok := ParseLine(lines[i]); ok {
-			return at, true
+			return at
 		}
 	}
-	return time.Time{}, false
+	return time.Time{}
 }
