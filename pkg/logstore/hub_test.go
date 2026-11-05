@@ -48,6 +48,7 @@ func TestASlowSubscriberGetsALagNotLost(t *testing.T) {
 		h.Publish(lineMsg("a", fmt.Sprint(i)))
 	}
 
+	h.waitSettled(t)
 	first := recv(t, ch)
 	assert.Equal(t, first.T, "lag")
 	assert.Equal(t, first.Dropped, 5)
@@ -86,4 +87,22 @@ func TestCancelClosesTheChannel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("channel not closed")
 	}
+}
+
+// waitSettled waits until every drain goroutine has consumed its wake signal after the last Publish,
+// so that what it offers next is the final state and not a stale head.
+func (h *Hub) waitSettled(t *testing.T) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		h.mu.Lock()
+		ok := true
+		for s := range h.subs {
+			ok = ok && len(s.q)-s.head == QueueSize && len(s.wake) == 0
+		}
+		h.mu.Unlock()
+		if ok {
+			return
+		}
+	}
+	t.Fatal("drain never settled")
 }

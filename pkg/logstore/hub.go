@@ -129,10 +129,15 @@ func (h *Hub) drain(s *subscriber) {
 		h.mu.Lock()
 		if lag {
 			s.dropped -= item.Dropped
-		} else if s.popped == id && len(s.q) > s.head {
+		} else if s.popped != id {
+			s.dropped-- // the message just sent had been counted as dropped
+		} else if len(s.q) > s.head {
 			s.q[s.head] = Message{}
 			s.head++
 			s.popped++
+			if s.head == len(s.q) { // empty: reuse the array from the start
+				s.q, s.head = s.q[:0], 0
+			}
 		}
 		h.mu.Unlock()
 	}
