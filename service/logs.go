@@ -36,6 +36,10 @@ type logsDocker interface {
 // logsRetry is how long the collector waits before trying to create its root again; a var for the tests.
 var logsRetry = 30 * time.Second
 
+// logsTick is how often the collector checks the cap and looks for running containers it does
+// not follow (a Docker restart's start events are missed while the watch reconnects); a var for the tests.
+var logsTick = time.Minute
+
 // dieDrain bounds how long a die waits for its container's stream to end, so that the died
 // event follows the container's last lines on disk; past it the event is recorded anyway and
 // the follower still drains. A var for the tests.
@@ -144,7 +148,7 @@ func runLogs(ctx context.Context, docker logsDocker) {
 
 	daily := time.NewTicker(24 * time.Hour)
 	defer daily.Stop()
-	minute := time.NewTicker(time.Minute)
+	minute := time.NewTicker(logsTick)
 	defer minute.Stop()
 	for {
 		select {
@@ -153,6 +157,7 @@ func runLogs(ctx context.Context, docker logsDocker) {
 		case <-daily.C:
 			purgeLogs(store)
 		case <-minute.C:
+			followRunning(ctx, docker) // follow starts nothing for a container already followed
 			_, mb, _ := logsConfig()
 			if used, _, err := store.Usage(); err == nil && used > int64(mb)<<20 {
 				purgeLogs(store)

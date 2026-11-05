@@ -20,13 +20,20 @@ import (
 // A follower reads one container's log stream into the store, from where its files stop,
 // until the stream ends with the container.
 
-// sinceFor is where a follower resumes. Docker's Since is inclusive at second granularity on
-// some versions, so the follower also drops the lines at or before last.
-func sinceFor(last time.Time, ok bool) string {
-	if !ok {
+// sinceFor is where a follower resumes: after last, but never before floor, the start of the
+// retention (zero: none). Unlike the spec's "catch up on everything", a first follow does not
+// ingest what Docker holds from before the retention, only for the purge to remove it.
+// Docker's Since is inclusive at second granularity on some versions, so the follower also
+// drops the lines at or before last.
+func sinceFor(last time.Time, ok bool, floor time.Time) string {
+	since := floor
+	if ok && last.Add(time.Nanosecond).After(since) {
+		since = last.Add(time.Nanosecond)
+	}
+	if since.IsZero() {
 		return ""
 	}
-	return last.Add(time.Nanosecond).UTC().Format(time.RFC3339Nano)
+	return since.UTC().Format(time.RFC3339Nano)
 }
 
 // splitDockerLine splits "2026-11-05T10:00:00.123456789Z text", as Docker's Timestamps give it.
@@ -133,8 +140,12 @@ func readLogs(ctx context.Context, docker logsDocker, id, key, app, service stri
 		return
 	}
 	last, hasLast := logstore.LastTimestamp(store.Root, app, service, key)
+	var floor time.Time
+	if days, _, _ := logsConfig(); days > 0 {
+		floor = time.Now().AddDate(0, 0, -days)
+	}
 	body, err := docker.ContainerLogs(ctx, id, container.LogsOptions{
-		ShowStdout: true, ShowStderr: true, Follow: true, Timestamps: true, Since: sinceFor(last, hasLast),
+		ShowStdout: true, ShowStderr: true, Follow: true, Timestamps: true, Since: sinceFor(last, hasLast, floor),
 	})
 	if err != nil {
 		logFollowError(ctx, key, err)

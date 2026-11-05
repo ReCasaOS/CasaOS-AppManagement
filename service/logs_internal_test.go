@@ -35,6 +35,8 @@ type fakeLogsDocker struct {
 }
 
 func (f *fakeLogsDocker) ContainerList(context.Context, container.ListOptions) ([]container.Summary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.list, nil
 }
 
@@ -150,8 +152,13 @@ func TestLogEventOfDockerActions(t *testing.T) {
 
 func TestSinceForAndTheBoundaryDedupe(t *testing.T) {
 	last := time.Date(2026, 11, 5, 10, 0, 0, 500, time.UTC)
-	assert.Equal(t, sinceFor(time.Time{}, false), "")
-	assert.Equal(t, sinceFor(last, true), "2026-11-05T10:00:00.000000501Z")
+	assert.Equal(t, sinceFor(time.Time{}, false, time.Time{}), "")
+	assert.Equal(t, sinceFor(last, true, time.Time{}), "2026-11-05T10:00:00.000000501Z")
+	// the retention's start bounds a first follow, and a last line older than it
+	floor := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	assert.Equal(t, sinceFor(time.Time{}, false, floor), "2026-10-29T10:00:00Z")
+	assert.Equal(t, sinceFor(floor.Add(-time.Hour), true, floor), "2026-10-29T10:00:00Z")
+	assert.Equal(t, sinceFor(last, true, floor), "2026-11-05T10:00:00.000000501Z")
 
 	s := openLogs(t)
 	w := s.Writer("plex", "plex", testID)
@@ -163,7 +170,7 @@ func TestSinceForAndTheBoundaryDedupe(t *testing.T) {
 	follow(context.Background(), docker, testID, "plex", "plex", "plex", false)
 	waitNoFollower(t)
 
-	assert.Equal(t, docker.opts[0].Since, sinceFor(last, true))
+	assert.Equal(t, docker.opts[0].Since, sinceFor(last, true, time.Time{}))
 	assert.Equal(t, dayFile(t, s), "2026-11-05T10:00:00.0000005Z o same\n2026-11-05T10:00:01Z o next\n")
 }
 
@@ -175,7 +182,12 @@ func TestATTYContainerIsReadRaw(t *testing.T) {
 
 	o := docker.opts[0]
 	assert.Assert(t, o.ShowStdout && o.ShowStderr && o.Follow && o.Timestamps)
-	assert.Equal(t, o.Since, "")
+	// no line on disk: the follow starts at the retention's start, 7 days ago
+	assert.Equal(t, config.AppInfo.LogsRetentionDays, 7)
+	since, err := time.Parse(time.RFC3339Nano, o.Since)
+	assert.NilError(t, err)
+	ago := time.Since(since)
+	assert.Assert(t, ago >= 7*24*time.Hour && ago < 7*24*time.Hour+time.Minute, ago)
 	assert.Equal(t, dayFile(t, s), "2026-11-05T10:00:00Z o hello\n")
 }
 
@@ -236,13 +248,14 @@ func TestDieFlushesBeforeTheEventIsRecorded(t *testing.T) {
 
 func TestADieRecordedBeforeTheStreamEndsLosesNoLine(t *testing.T) {
 	drain := dieDrain
-	dieDrain = 50 * time.Millisecond
+	dieDrain = 200 * time.Millisecond
 	t.Cleanup(func() { dieDrain = drain })
 	s := openLogs(t)
 	ch, cancel := s.Subscribe(nil)
 	defer cancel()
 
-	// the first run's last line comes 100 ms after the die; the restart's run has nothing new
+	// the first run's last line comes 400 ms after the die, well past the drain even under -race;
+	// the restart's run has nothing new
 	runs := 0
 	docker := &fakeLogsDocker{tty: true, body: func() io.ReadCloser {
 		runs++
@@ -252,7 +265,7 @@ func TestADieRecordedBeforeTheStreamEndsLosesNoLine(t *testing.T) {
 		r, w := io.Pipe()
 		go func() {
 			_, _ = io.WriteString(w, "2026-11-05T10:00:00Z one\n")
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(400 * time.Millisecond)
 			_, _ = io.WriteString(w, "2026-11-05T10:00:01Z late\n")
 			_ = w.Close()
 		}()
@@ -322,6 +335,37 @@ func TestTheStoreWaitsForItsRoot(t *testing.T) {
 	}
 	StopLogs()
 	assert.Assert(t, Logs() == nil)
+}
+
+func TestARunningContainerIsFollowedWithinATick(t *testing.T) {
+	path, tick := config.AppInfo.LogsPath, logsTick
+	config.AppInfo.LogsPath, logsTick = filepath.Join(t.TempDir(), "logs"), 20*time.Millisecond
+	t.Cleanup(func() { config.AppInfo.LogsPath, logsTick = path, tick })
+
+	docker := &fakeLogsDocker{tty: true, body: bodyOf("")}
+	assert.NilError(t, StartLogs(context.Background(), docker))
+	defer StopLogs()
+	followed := func() int {
+		docker.mu.Lock()
+		defer docker.mu.Unlock()
+		return len(docker.opts)
+	}
+	for deadline := time.Now().Add(5 * time.Second); Logs() == nil; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the store did not open")
+		}
+	}
+	assert.Equal(t, followed(), 0)
+
+	// after a Docker restart the watch missed its start: only the list knows it runs
+	docker.mu.Lock()
+	docker.list = []container.Summary{{ID: testID, Names: []string{"/plex"}, Labels: testLabels}}
+	docker.mu.Unlock()
+	for deadline := time.Now().Add(5 * time.Second); followed() == 0; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the running container was not followed")
+		}
+	}
 }
 
 func TestRecordAppEventIsAnOperationEvent(t *testing.T) {
