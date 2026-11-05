@@ -291,6 +291,11 @@ func (w *dockerWatch) follow(ctx context.Context) error {
 			if app == "" || m.Actor.Attributes[api.OneoffLabel] == "True" {
 				continue
 			}
+			// widened for the logs collector only: observe decides on what it always had
+			switch m.Action {
+			case events.ActionCreate, events.ActionStop, events.ActionOOM:
+				continue
+			}
 
 			out = w.observe(containerEvent{
 				at:        time.Unix(0, m.TimeNano),

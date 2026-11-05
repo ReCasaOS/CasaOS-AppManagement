@@ -36,9 +36,10 @@ type logsDocker interface {
 // logsRetry is how long the collector waits before trying to create its root again; a var for the tests.
 var logsRetry = 30 * time.Second
 
-// dieDrain bounds how long a die waits for its container's stream to end: the died event
-// must follow the container's last lines on disk.
-const dieDrain = 2 * time.Second
+// dieDrain bounds how long a die waits for its container's stream to end, so that the died
+// event follows the container's last lines on disk; past it the event is recorded anyway and
+// the follower still drains. A var for the tests.
+var dieDrain = 2 * time.Second
 
 var (
 	logsStore atomic.Pointer[logstore.Store]
@@ -63,6 +64,7 @@ type follower struct {
 	cancel             context.CancelFunc
 	done               chan struct{}
 	app, service, name string
+	again              bool // a start came while this run still drained: follow the next run too
 }
 
 // Logs is the open store, nil while it is not open (the logs routes answer 503).
@@ -185,7 +187,7 @@ func followRunning(ctx context.Context, docker logsDocker) {
 			name = c.Names[0]
 		}
 		if app, service, ok := logTarget(c.Labels, name, others); ok {
-			follow(ctx, docker, c.ID, app, service, name)
+			follow(ctx, docker, c.ID, app, service, name, false)
 		}
 	}
 }
@@ -250,10 +252,7 @@ func logsOnEvent(ctx context.Context, docker logsDocker, m events.Message) {
 	}
 	id := shortID(m.Actor.ID)
 	if m.Action == events.ActionDie {
-		endFollower(id, dieDrain)
-		if err := store.CloseWriter(id); err != nil {
-			logger.Error("a container's last logs could not be written", zap.Error(err), zap.String("container", id))
-		}
+		awaitFollower(id, dieDrain) // the follower closes, so flushes, its writer before it ends
 	}
 	if e, ok := logEventOf(m, app, service, held(app)); ok {
 		if err := store.Record(e); err != nil {
@@ -261,7 +260,7 @@ func logsOnEvent(ctx context.Context, docker logsDocker, m events.Message) {
 		}
 	}
 	if m.Action == events.ActionStart {
-		follow(ctx, docker, m.Actor.ID, app, service, name)
+		follow(ctx, docker, m.Actor.ID, app, service, name, true)
 	}
 }
 
@@ -345,9 +344,12 @@ func ApplyLogsSettings(retentionDays, maxSizeMB int, includeOthers bool) error {
 	}
 
 	logsSettingsMu.Lock()
-	was := config.AppInfo.LogsIncludeOthers
+	days, mb, was := config.AppInfo.LogsRetentionDays, config.AppInfo.LogsMaxSizeMB, config.AppInfo.LogsIncludeOthers
 	config.AppInfo.LogsRetentionDays, config.AppInfo.LogsMaxSizeMB, config.AppInfo.LogsIncludeOthers = retentionDays, maxSizeMB, includeOthers
 	err := config.SaveSetup()
+	if err != nil {
+		config.AppInfo.LogsRetentionDays, config.AppInfo.LogsMaxSizeMB, config.AppInfo.LogsIncludeOthers = days, mb, was
+	}
 	logsSettingsMu.Unlock()
 	if err != nil {
 		return err

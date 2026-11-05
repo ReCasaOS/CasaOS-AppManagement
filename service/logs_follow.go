@@ -50,12 +50,17 @@ func FollowedContainers() map[string]bool {
 	return ids
 }
 
-// follow starts the container's follower unless it has one; it ends with the container's stream.
-func follow(ctx context.Context, docker logsDocker, id, app, service, name string) {
+// follow starts the container's follower unless it has one. A start (restart true) for a
+// container whose last run still drains is followed by the same goroutine once that run ends.
+func follow(ctx context.Context, docker logsDocker, id, app, service, name string, restart bool) {
 	key := shortID(id)
 	followMu.Lock()
 	defer followMu.Unlock()
-	if _, running := followers[key]; running || ctx.Err() != nil {
+	if ctx.Err() != nil {
+		return
+	}
+	if f, running := followers[key]; running {
+		f.again = f.again || restart
 		return
 	}
 	fctx, cancel := context.WithCancel(ctx)
@@ -63,18 +68,26 @@ func follow(ctx context.Context, docker logsDocker, id, app, service, name strin
 	followers[key] = f
 	go func() {
 		defer close(f.done)
-		defer func() {
-			followMu.Lock()
-			delete(followers, key)
-			followMu.Unlock()
-		}()
 		defer cancel()
-		readLogs(fctx, docker, id, key, app, service)
+		for {
+			readLogs(fctx, docker, id, key, app, service)
+			followMu.Lock()
+			again := f.again && fctx.Err() == nil
+			f.again = false
+			if !again {
+				delete(followers, key)
+			}
+			followMu.Unlock()
+			if !again {
+				return
+			}
+		}
 	}()
 }
 
-// endFollower waits up to grace for the container's stream to end, then cuts it.
-func endFollower(id string, grace time.Duration) {
+// awaitFollower waits up to grace for the container's follower to end. It never cuts the
+// stream: a dead container's stream ends by itself, and its last lines are its crash reason.
+func awaitFollower(id string, grace time.Duration) {
 	followMu.Lock()
 	f := followers[id]
 	followMu.Unlock()
@@ -84,8 +97,6 @@ func endFollower(id string, grace time.Duration) {
 	select {
 	case <-f.done:
 	case <-time.After(grace):
-		f.cancel()
-		<-f.done
 	}
 }
 
@@ -182,25 +193,9 @@ func scanLines(r io.Reader, line func([]byte)) {
 func readFrames(r io.Reader, out, errs func([]byte)) error {
 	br := bufio.NewReaderSize(r, 64<<10)
 	pending := map[byte][]byte{}
-	var hdr [8]byte
-	for {
-		if _, err := io.ReadFull(br, hdr[:]); err != nil {
-			for stream, rest := range pending {
-				if len(rest) > 0 {
-					lineOf(stream, out, errs)(rest)
-				}
-			}
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			return err
-		}
-		frame := make([]byte, binary.BigEndian.Uint32(hdr[4:]))
-		if _, err := io.ReadFull(br, frame); err != nil {
-			return err
-		}
-		stream, line := hdr[0], lineOf(hdr[0], out, errs)
-		data := append(pending[stream], frame...)
+	feed := func(stream byte, chunk []byte) {
+		line := lineOf(stream, out, errs)
+		data := append(pending[stream], chunk...)
 		for {
 			i := bytes.IndexByte(data, '\n')
 			if i < 0 {
@@ -214,6 +209,32 @@ func readFrames(r io.Reader, out, errs func([]byte)) error {
 			data = nil
 		}
 		pending[stream] = bytes.Clone(data)
+	}
+	end := func(err error) error {
+		for stream, rest := range pending {
+			if len(rest) > 0 {
+				lineOf(stream, out, errs)(rest)
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	var hdr [8]byte
+	chunk := make([]byte, 64<<10) // a frame is read in chunks: its size comes from the stream
+	for {
+		if _, err := io.ReadFull(br, hdr[:]); err != nil {
+			return end(err)
+		}
+		for size := int(binary.BigEndian.Uint32(hdr[4:])); size > 0; {
+			n, err := io.ReadFull(br, chunk[:min(size, len(chunk))])
+			feed(hdr[0], chunk[:n])
+			if err != nil {
+				return end(err)
+			}
+			size -= n
+		}
 	}
 }
 

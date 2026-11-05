@@ -159,7 +159,7 @@ func TestSinceForAndTheBoundaryDedupe(t *testing.T) {
 
 	docker := &fakeLogsDocker{tty: true, body: bodyOf(
 		"2026-11-05T10:00:00.0000005Z same\n2026-11-05T10:00:01Z next\n")}
-	follow(context.Background(), docker, testID, "plex", "plex", "plex")
+	follow(context.Background(), docker, testID, "plex", "plex", "plex", false)
 	waitNoFollower(t)
 
 	assert.Equal(t, docker.opts[0].Since, sinceFor(last, true))
@@ -169,7 +169,7 @@ func TestSinceForAndTheBoundaryDedupe(t *testing.T) {
 func TestATTYContainerIsReadRaw(t *testing.T) {
 	s := openLogs(t)
 	docker := &fakeLogsDocker{tty: true, body: bodyOf("2026-11-05T10:00:00.000000000Z hello\r\n")}
-	follow(context.Background(), docker, testID, "plex", "plex", "plex")
+	follow(context.Background(), docker, testID, "plex", "plex", "plex", false)
 	waitNoFollower(t)
 
 	o := docker.opts[0]
@@ -186,7 +186,7 @@ func TestAMultiplexedStreamSplitsStdoutAndStderr(t *testing.T) {
 	_, err = stdcopy.NewStdWriter(&framed, stdcopy.Stderr).Write([]byte("2026-11-05T10:00:01Z b\n"))
 	assert.NilError(t, err)
 
-	follow(context.Background(), &fakeLogsDocker{body: bodyOf(framed.String())}, testID, "plex", "plex", "plex")
+	follow(context.Background(), &fakeLogsDocker{body: bodyOf(framed.String())}, testID, "plex", "plex", "plex", false)
 	waitNoFollower(t)
 
 	assert.Equal(t, dayFile(t, s), "2026-11-05T10:00:00Z o a\n2026-11-05T10:00:01Z e b\n")
@@ -231,6 +231,71 @@ func TestDieFlushesBeforeTheEventIsRecorded(t *testing.T) {
 	}
 	assert.DeepEqual(t, seen, []string{"started ", "one", "two", "died 137"})
 	assert.Equal(t, len(FollowedContainers()), 0)
+}
+
+func TestADieRecordedBeforeTheStreamEndsLosesNoLine(t *testing.T) {
+	drain := dieDrain
+	dieDrain = 50 * time.Millisecond
+	t.Cleanup(func() { dieDrain = drain })
+	s := openLogs(t)
+	ch, cancel := s.Subscribe(nil)
+	defer cancel()
+
+	// the first run's last line comes 100 ms after the die; the restart's run has nothing new
+	runs := 0
+	docker := &fakeLogsDocker{tty: true, body: func() io.ReadCloser {
+		runs++
+		if runs > 1 {
+			return io.NopCloser(strings.NewReader(""))
+		}
+		r, w := io.Pipe()
+		go func() {
+			_, _ = io.WriteString(w, "2026-11-05T10:00:00Z one\n")
+			time.Sleep(100 * time.Millisecond)
+			_, _ = io.WriteString(w, "2026-11-05T10:00:01Z late\n")
+			_ = w.Close()
+		}()
+		return r
+	}}
+	ctx := context.Background()
+	attrs := map[string]string{api.ProjectLabel: "plex", api.ServiceLabel: "plex", "name": "plex", "exitCode": "1"}
+	event := func(a events.Action) {
+		logsOnEvent(ctx, docker, events.Message{Action: a, TimeNano: time.Now().UnixNano(), Actor: events.Actor{ID: testID, Attributes: attrs}})
+	}
+	event(events.ActionStart)
+	event(events.ActionDie)
+	event(events.ActionStart) // the restart, while the first run still drains
+
+	var seen []string
+	for len(seen) < 5 {
+		select {
+		case m := <-ch:
+			if m.Line != nil {
+				seen = append(seen, m.Line.Text)
+			} else {
+				seen = append(seen, m.Event.Kind)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %v", seen)
+		}
+	}
+	assert.DeepEqual(t, seen, []string{"started", "one", "died", "started", "late"})
+	waitNoFollower(t)
+	assert.Equal(t, len(docker.opts), 2) // the restart was followed once the first run ended
+	assert.Equal(t, dayFile(t, s), "2026-11-05T10:00:00Z o one\n2026-11-05T10:00:01Z o late\n")
+}
+
+func TestAFrameLargerThanAChunkIsSplitIntoItsLines(t *testing.T) {
+	long := strings.Repeat("x", 100<<10)
+	var framed bytes.Buffer
+	_, err := stdcopy.NewStdWriter(&framed, stdcopy.Stdout).Write([]byte("A a\nB " + long + "\nC c"))
+	assert.NilError(t, err)
+	framed.Write([]byte{1, 0, 0, 0, 0, 0, 0, 9, 'D'}) // a frame cut short: its partial line is kept
+
+	var lines []string
+	err = readFrames(&framed, func(b []byte) { lines = append(lines, string(b)) }, nil)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assert.DeepEqual(t, lines, []string{"A a", "B " + long, "C cD"})
 }
 
 func TestTheStoreWaitsForItsRoot(t *testing.T) {
@@ -302,4 +367,8 @@ func TestApplyLogsSettingsValidatesAndPersists(t *testing.T) {
 	got := GetLogsSettings()
 	assert.Equal(t, got.RetentionDays, 10)
 	assert.Equal(t, got.IncludeOthers, true)
+
+	config.ConfigFilePath = t.TempDir() // a directory: the save fails and nothing changes
+	assert.Assert(t, ApplyLogsSettings(20, 1024, false) != nil)
+	assert.Equal(t, GetLogsSettings(), got)
 }
