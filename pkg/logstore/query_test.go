@@ -99,7 +99,7 @@ func TestABackwardsPageReadsOnlyTheChunksItNeeds(t *testing.T) {
 	for i := 0; big.Len() < 20<<20; i++ {
 		at := day.Add(time.Duration(i) * 300 * time.Millisecond)
 		if i == 100000 {
-			mid = Cursor{At: at, File: "app/web/2026-11-05.aaaaaaaaaaaa.log", Seq: big.Len()}
+			mid = Cursor{At: at, File: "app/web/2026-11-05.aaaaaaaaaaaa.log", Seq: int64(big.Len())}
 		}
 		big.Write(FormatLine(at, "o", fmt.Sprintf("line %06d %s", i, strings.Repeat("x", 60))))
 	}
@@ -160,7 +160,7 @@ func TestForwardsFromACursorIsExclusive(t *testing.T) {
 		lines = append(lines, entry{base.Add(time.Duration(i) * time.Second), "o", fmt.Sprint(i)})
 	}
 	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", lines)
-	const lineLen = len("2026-11-05T10:00:00Z o 0\n")
+	const lineLen = int64(len("2026-11-05T10:00:00Z o 0\n"))
 	after := Cursor{At: base.Add(2 * time.Second), File: "app/web/2026-11-05.aaaaaaaaaaaa.log", Seq: 2 * lineLen}
 
 	p, err := Read(context.Background(), root, Query{After: &after, Limit: 3})
@@ -191,7 +191,7 @@ func TestAPartialForwardsPageStillCarriesNext(t *testing.T) {
 		lines = append(lines, entry{base.Add(time.Duration(i) * time.Second), "o", fmt.Sprint(i)})
 	}
 	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", lines)
-	const lineLen = len("2026-11-05T10:00:00Z o 0\n")
+	const lineLen = int64(len("2026-11-05T10:00:00Z o 0\n"))
 	file := "app/web/2026-11-05.aaaaaaaaaaaa.log"
 	after := Cursor{At: base, File: file}
 
@@ -328,7 +328,7 @@ func TestListAppsReadsTheTree(t *testing.T) {
 }
 
 func TestCursorRoundTrips(t *testing.T) {
-	c := Cursor{At: time.Date(2026, 11, 5, 10, 0, 0, 123456789, time.UTC), File: "app/web/2026-11-05.aaaaaaaaaaaa.log", Seq: 42}
+	c := Cursor{At: time.Date(2026, 11, 5, 10, 0, 0, 123456789, time.UTC), File: "app/web/2026-11-05.aaaaaaaaaaaa.log", Seq: 5 << 30} // past 32 bits
 	got, err := ParseCursor(c.String())
 	assert.NilError(t, err)
 	assert.DeepEqual(t, got, c)
@@ -336,4 +336,84 @@ func TestCursorRoundTrips(t *testing.T) {
 		_, err := ParseCursor(bad)
 		assert.Assert(t, errors.Is(err, ErrBadFilter), bad)
 	}
+}
+
+func TestAForwardsPageReadsTheOtherFilesFromTheCursorsTime(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "app", "web")
+	assert.NilError(t, os.MkdirAll(dir, 0o755))
+	day := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+	const file = "app/web/2026-11-05.aaaaaaaaaaaa.log"
+	var after Cursor
+	var n int
+	for k, c := range []string{"a", "b", "c"} {
+		var buf bytes.Buffer
+		for i := 0; buf.Len() < 4<<20; i++ {
+			at := day.Add(time.Duration(i)*30*time.Millisecond + time.Duration(k)*10*time.Millisecond)
+			if c == "a" {
+				n = i
+			}
+			buf.Write(FormatLine(at, "o", fmt.Sprintf("%s %06d %s", c, i, strings.Repeat("x", 60))))
+		}
+		assert.NilError(t, os.WriteFile(filepath.Join(dir, "2026-11-05."+strings.Repeat(c, 12)+".log"), buf.Bytes(), 0o644))
+	}
+	// the cursor is a's line 100 before its last
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
+	assert.NilError(t, err)
+	lines := bytes.SplitAfter(data, []byte("\n"))
+	i := n - 100
+	seq := int64(0)
+	for _, l := range lines[:i] {
+		seq += int64(len(l))
+	}
+	at, _, _, ok := ParseLine(bytes.TrimSuffix(lines[i], []byte("\n")))
+	assert.Assert(t, ok)
+	after = Cursor{At: at, File: file, Seq: seq}
+
+	readBytes.Store(0)
+	p, err := Read(context.Background(), root, Query{After: &after, Limit: 50})
+	assert.NilError(t, err)
+	assert.Equal(t, len(p.Lines), 50)
+	assert.Assert(t, strings.HasPrefix(p.Lines[0].Text, fmt.Sprintf("b %06d ", i)), p.Lines[0].Text)
+	assert.Assert(t, readBytes.Load() < 256<<10, readBytes.Load())
+}
+
+func TestAPageWithoutLinesStillHasTheEventsAfterTheLast(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", []entry{{base, "o", "last"}})
+	assert.NilError(t, AppendEvent(root, Event{At: base.Add(2 * time.Second), App: "app", Kind: "died", By: "docker"}))
+	after := Cursor{At: base, File: "app/web/2026-11-05.aaaaaaaaaaaa.log"}
+
+	p, err := read(context.Background(), root, Query{After: &after}, base.Add(10*time.Second))
+	assert.NilError(t, err)
+	assert.Equal(t, len(p.Lines), 0)
+	assert.Equal(t, len(p.Events), 1)
+	assert.Equal(t, p.Events[0].Kind, "died")
+
+	// within the last second, the event waits like a line would
+	p, err = read(context.Background(), root, Query{After: &after}, base.Add(2500*time.Millisecond))
+	assert.NilError(t, err)
+	assert.Equal(t, len(p.Events), 0)
+
+	// backwards, a page without lines spans Since to now
+	p, err = read(context.Background(), root, Query{Since: base.Add(time.Second)}, base.Add(10*time.Second))
+	assert.NilError(t, err)
+	assert.Equal(t, len(p.Lines), 0)
+	assert.Equal(t, len(p.Events), 1)
+}
+
+func TestAHistoryLinesCursorRoundTripsAsSince(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", []entry{{base, "o", "0"}, {base.Add(time.Second), "o", "1"}, {base.Add(2 * time.Second), "o", "2"}})
+
+	p, err := Read(context.Background(), root, Query{})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, texts(p.Lines), []string{"2", "1", "0"})
+	c, err := ParseCursor(p.Lines[1].Cursor)
+	assert.NilError(t, err)
+	p, err = Read(context.Background(), root, Query{After: &c})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, texts(p.Lines), []string{"2"})
 }

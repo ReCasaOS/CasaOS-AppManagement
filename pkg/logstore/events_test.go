@@ -92,3 +92,14 @@ func TestReadEventsNoDirectory(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, len(got), 0)
 }
+
+func TestReadEventsSkipsADayFileGoneSinceTheListing(t *testing.T) {
+	root, _ := seedEvents(t)
+	// a dangling link matches the Glob and reads as not found, as a file purged in between does
+	if err := os.Symlink("gone.jsonl", EventsFile(root, d("2026-11-05"))); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	got, err := ReadEvents(root, EventQuery{})
+	assert.NilError(t, err)
+	assert.Equal(t, len(got), 3)
+}

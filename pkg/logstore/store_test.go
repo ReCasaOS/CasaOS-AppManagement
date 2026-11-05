@@ -2,6 +2,10 @@ package logstore
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -74,4 +78,93 @@ func TestCloseWriterFlushesAndForgets(t *testing.T) {
 	page, err := s.Read(context.Background(), Query{})
 	assert.NilError(t, err)
 	assert.Equal(t, len(page.Lines), 2)
+}
+
+func TestAPurgedFileIsCreatedAgainByItsWriter(t *testing.T) {
+	s := openTest(t)
+	at := time.Now().UTC()
+	w := s.Writer("a", "s", "0123456789ab")
+	assert.NilError(t, w.Write(at, "o", "before"))
+	assert.NilError(t, w.Flush())
+
+	_, err := s.Purge(at, 0, 1) // a 1-byte cap: today's file goes
+	assert.NilError(t, err)
+	used, _, err := s.Usage()
+	assert.NilError(t, err)
+	assert.Equal(t, used, int64(0))
+
+	assert.NilError(t, w.Write(at.Add(time.Millisecond), "o", "after"))
+	assert.NilError(t, w.Flush())
+	page, err := s.Read(context.Background(), Query{})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, texts(page.Lines), []string{"after"})
+	used, _, err = s.Usage()
+	assert.NilError(t, err)
+	assert.Assert(t, used > 0)
+}
+
+func TestAForwardsReadFlushesEveryWriterAndHoldsTheLastSecond(t *testing.T) {
+	s := openTest(t)
+	at := time.Now().UTC()
+	// B has no flush loop: its older line stays in its buffer until the read flushes it
+	b := NewWriter(s.Root, "app", "b", "bbbbbbbbbbbb", nil)
+	s.mu.Lock()
+	s.writers["bbbbbbbbbbbb"] = b
+	s.mu.Unlock()
+	assert.NilError(t, b.Write(at.Add(-500*time.Millisecond), "o", "b"))
+	a := s.Writer("app", "a", "aaaaaaaaaaaa")
+	assert.NilError(t, a.Write(at.Add(-100*time.Millisecond), "o", "a"))
+	assert.NilError(t, a.Flush())
+	start := Cursor{At: at.Add(-time.Hour)}
+
+	s.now = func() time.Time { return at }
+	p, err := s.Read(context.Background(), Query{After: &start})
+	assert.NilError(t, err)
+	assert.Equal(t, len(p.Lines), 0) // both are within the last second
+	assert.Equal(t, p.Next, "")
+
+	s.now = func() time.Time { return at.Add(2 * time.Second) }
+	p, err = s.Read(context.Background(), Query{After: &start})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, texts(p.Lines), []string{"b", "a"})
+}
+
+func TestOpenNeverCreatesTheRootsGrandparent(t *testing.T) {
+	tmp := t.TempDir()
+	_, err := Open(context.Background(), filepath.Join(tmp, "missing", "sub", "logs"))
+	assert.Assert(t, err != nil)
+	_, err = os.Stat(filepath.Join(tmp, "missing"))
+	assert.Assert(t, errors.Is(err, fs.ErrNotExist), err)
+
+	assert.NilError(t, os.Mkdir(filepath.Join(tmp, "present"), 0o755))
+	_, err = Open(context.Background(), filepath.Join(tmp, "present", "sub", "logs"))
+	assert.NilError(t, err)
+	st, err := os.Stat(filepath.Join(tmp, "present", "sub", "logs"))
+	assert.NilError(t, err)
+	assert.Assert(t, st.IsDir())
+}
+
+func TestASymlinkedRootIsPurged(t *testing.T) {
+	tmp := t.TempDir()
+	target, link := filepath.Join(tmp, "target"), filepath.Join(tmp, "link")
+	assert.NilError(t, os.Mkdir(target, 0o755))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := Open(ctx, link)
+	assert.NilError(t, err)
+	defer s.Close()
+	old := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	writeLines(t, s.Root, "a", "s", "aaaaaaaaaaaa", []entry{{old, "o", "old"}})
+
+	_, oldest, err := s.Usage()
+	assert.NilError(t, err)
+	assert.Assert(t, oldest.Equal(d("2026-01-01")), oldest)
+	removed, err := s.Purge(time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC), 7, 0)
+	assert.NilError(t, err)
+	assert.Assert(t, removed > 0)
+	_, err = os.Stat(DayFile(target, "a", "s", "aaaaaaaaaaaa", old))
+	assert.Assert(t, errors.Is(err, fs.ErrNotExist), err)
 }

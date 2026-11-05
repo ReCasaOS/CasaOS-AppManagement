@@ -16,6 +16,7 @@ type Line struct {
 	Container string    `json:"container"` // 12 hex chars
 	Stream    string    `json:"stream"`    // "o" or "e"
 	Text      string    `json:"text"`
+	Cursor    string    `json:"cursor,omitempty"` // set by Read only: where the line is, to pass as since or before
 }
 
 const MaxLineBytes = 16 << 10

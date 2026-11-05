@@ -93,11 +93,11 @@ func (m *Matcher) MatchEvent(e Event) bool { return inSet(m.apps, e.App) }
 type Cursor struct {
 	At   time.Time
 	File string // path relative to root
-	Seq  int    // byte offset of the line's start in File: ordered like the lines, stable under appends, seekable
+	Seq  int64  // byte offset of the line's start in File: ordered like the lines, stable under appends, seekable
 }
 
 func (c Cursor) String() string {
-	return strconv.FormatInt(c.At.UnixNano(), 10) + ":" + strconv.Itoa(c.Seq) + ":" + c.File
+	return strconv.FormatInt(c.At.UnixNano(), 10) + ":" + strconv.FormatInt(c.Seq, 10) + ":" + c.File
 }
 
 // ParseCursor wraps its error in ErrBadFilter: a cursor comes from the client like the filter does.
@@ -105,7 +105,7 @@ func ParseCursor(s string) (Cursor, error) {
 	parts := strings.SplitN(s, ":", 3)
 	if len(parts) == 3 {
 		ns, err1 := strconv.ParseInt(parts[0], 10, 64)
-		seq, err2 := strconv.Atoi(parts[1])
+		seq, err2 := strconv.ParseInt(parts[1], 10, 64)
 		file := parts[2]
 		if err1 == nil && err2 == nil && seq >= 0 && file != "" && !strings.HasPrefix(file, "/") &&
 			!strings.Contains(file, `\`) && !slices.Contains(strings.Split(file, "/"), "..") {
@@ -138,6 +138,9 @@ const (
 	// Lines stop at their encoded size plus a comma; the rest is left to the envelope and ≤ maxPageEvents events.
 	maxLinesBytes = MaxPageBytes - 256<<10
 	maxPageEvents = 500
+	// holdBack keeps a forwards page off the last second: a line that recent may still sit in
+	// another writer's buffer, and a cursor past it would skip it for good.
+	holdBack = time.Second
 )
 
 // readBytes counts the bytes the reader pulls from day files; tests use it to check a page reads only what it needs.
@@ -145,7 +148,12 @@ var readBytes atomic.Int64
 
 // Read returns one page of history. Lines are ordered on (At, File, Seq), descending without After,
 // ascending with it; a day file's lines are assumed to be in time order, as the writer appends them.
+// Forwards, the lines of the last second are held back (see holdBack).
 func Read(ctx context.Context, root string, q Query) (Page, error) {
+	return read(ctx, root, q, time.Now())
+}
+
+func read(ctx context.Context, root string, q Query, now time.Time) (Page, error) {
 	if q.After != nil && q.Before != nil {
 		return Page{}, ErrBothDirections
 	}
@@ -153,7 +161,7 @@ func Read(ctx context.Context, root string, q Query) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	p := pager{q: q, m: m, limit: q.Limit, lines: []Line{}}
+	p := pager{q: q, m: m, limit: q.Limit, lines: []Line{}, hold: now.Add(-holdBack)}
 	if p.limit <= 0 {
 		p.limit = 500
 	}
@@ -201,22 +209,32 @@ func Read(ctx context.Context, root string, q Query) (Page, error) {
 		page.Next = p.last.String()
 	}
 	// The window runs from the cursor the client sent to the far end of the page, so consecutive pages leave no gap.
-	if n := len(p.lines); n > 0 {
-		var since, until time.Time
-		switch {
-		case q.After != nil:
-			since, until = q.After.At, p.lines[n-1].At
-		case q.Before != nil:
-			since, until = p.lines[n-1].At, q.Before.At
-		case !q.Until.IsZero():
-			since, until = p.lines[n-1].At, q.Until
-		default:
-			since, until = p.lines[n-1].At, time.Now()
+	// A page that is not full ends the history: its window runs on to now, so the events after the
+	// last line (a crashed app's died) are seen, by a forwards poll too.
+	var since, until time.Time
+	n := len(p.lines)
+	switch {
+	case q.After != nil && p.full:
+		since, until = q.After.At, p.lines[n-1].At
+	case q.After != nil:
+		since, until = q.After.At, p.hold
+		if !q.Until.IsZero() && q.Until.Before(until) {
+			until = q.Until
 		}
-		page.Events, err = ReadEvents(root, EventQuery{Apps: q.Apps, Since: since, Until: until, Limit: maxPageEvents})
-		if err != nil {
-			return Page{}, err
+	default:
+		since, until = q.Since, now
+		if n > 0 {
+			since = p.lines[n-1].At
 		}
+		if q.Before != nil {
+			until = q.Before.At
+		} else if !q.Until.IsZero() {
+			until = q.Until
+		}
+	}
+	page.Events, err = ReadEvents(root, EventQuery{Apps: q.Apps, Since: since, Until: until, Limit: maxPageEvents})
+	if err != nil {
+		return Page{}, err
 	}
 	return page, nil
 }
@@ -235,8 +253,9 @@ type pager struct {
 	lines []Line
 	bytes int
 	last  Cursor
-	full  bool // stopped on Limit or MaxPageBytes: Next is set
-	done  bool // full, or past the Since/Until bound
+	hold  time.Time // forwards, lines after it are left to the next poll
+	full  bool      // stopped on Limit or MaxPageBytes: Next is set
+	done  bool      // full, or past the Since/Until bound
 }
 
 // readDay merges the day's files on (At, File, Seq), in the direction of the query.
@@ -282,12 +301,18 @@ func (p *pager) readDay(ctx context.Context, root string, files []logFile) error
 	return nil
 }
 
-// openReader starts the cursor's own file at the cursor's offset; the other files are read whole.
+// openReader starts a forwards read at the cursor's offset in its own file and near the cursor's
+// time in the others, a backwards read at the cursor's offset or the end.
 func (p *pager) openReader(ctx context.Context, f *os.File, rel string) (lineReader, error) {
 	if c := p.q.After; c != nil {
-		var start int64
-		if c.File == rel && c.Seq > 0 {
-			start = int64(c.Seq) // the line there equals the cursor and is skipped by take
+		start := max(c.Seq, 0) // the line there equals the cursor and is skipped by take
+		if c.File != rel {
+			var err error
+			if start, err = seekTime(f, c.At); err != nil {
+				return nil, err
+			}
+		}
+		if start > 0 {
 			if _, err := f.Seek(start, io.SeekStart); err != nil {
 				return nil, err
 			}
@@ -300,12 +325,66 @@ func (p *pager) openReader(ctx context.Context, f *os.File, rel string) (lineRea
 	}
 	end := st.Size()
 	if c := p.q.Before; c != nil && c.File == rel {
-		end = min(end, int64(c.Seq))
+		end = min(end, c.Seq)
 	}
 	return &revReader{ctx: ctx, f: f, off: end}, nil
 }
 
-func compareTo(at time.Time, file string, seq int, c Cursor) int {
+// seekTime returns the start of a line at or before the file's first line at or after t, within
+// readChunk of it: a binary search on the timestamps, the lines being in time order.
+func seekTime(f *os.File, t time.Time) (int64, error) {
+	st, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	lo, hi := int64(0), st.Size() // lo is a line start, and every line before lo is before t
+	for hi-lo > readChunk {
+		mid := lo + (hi-lo)/2
+		s, at, ok, err := lineFrom(f, mid)
+		if err != nil {
+			return 0, err
+		}
+		if ok && s < hi && at.Before(t) {
+			lo = s
+		} else {
+			hi = mid
+		}
+	}
+	return lo, nil
+}
+
+// lineFrom returns the start and time of the first line starting at or after off (> 0); ok is
+// false when there is none or its time does not parse.
+func lineFrom(f *os.File, off int64) (start int64, at time.Time, ok bool, err error) {
+	var buf [4 << 10]byte
+	for pos := off - 1; ; pos += int64(len(buf)) { // from the byte before off: a newline there makes off a line start
+		n, err := f.ReadAt(buf[:], pos)
+		readBytes.Add(int64(n))
+		if i := bytes.IndexByte(buf[:n], '\n'); i >= 0 {
+			start = pos + int64(i) + 1
+			break
+		}
+		if errors.Is(err, io.EOF) {
+			return 0, time.Time{}, false, nil
+		}
+		if err != nil {
+			return 0, time.Time{}, false, err
+		}
+	}
+	n, err := f.ReadAt(buf[:64], start)
+	readBytes.Add(int64(n))
+	if err != nil && !errors.Is(err, io.EOF) {
+		return 0, time.Time{}, false, err
+	}
+	ts, _, found := bytes.Cut(buf[:n], []byte(" "))
+	if !found {
+		return 0, time.Time{}, false, nil
+	}
+	at, perr := time.Parse(time.RFC3339Nano, string(ts))
+	return start, at, perr == nil, nil
+}
+
+func compareTo(at time.Time, file string, seq int64, c Cursor) int {
 	return cmp.Or(at.Compare(c.At), strings.Compare(file, c.File), cmp.Compare(seq, c.Seq))
 }
 
@@ -319,6 +398,10 @@ func (p *pager) take(s *source) {
 	r, q := s.head, p.q
 	if q.After != nil {
 		if compareTo(r.at, s.file.rel, r.seq, *q.After) <= 0 || (!q.Since.IsZero() && r.at.Before(q.Since)) {
+			return
+		}
+		if r.at.After(p.hold) {
+			p.done = true
 			return
 		}
 		if !q.Until.IsZero() && r.at.After(q.Until) {
@@ -341,6 +424,8 @@ func (p *pager) take(s *source) {
 	if !p.m.Match(l) {
 		return
 	}
+	c := Cursor{At: r.at, File: s.file.rel, Seq: r.seq}
+	l.Cursor = c.String()
 	b, _ := json.Marshal(l) // a Line always encodes
 	cost := len(b) + 1
 	if len(p.lines) > 0 && p.bytes+cost > maxLinesBytes {
@@ -349,7 +434,7 @@ func (p *pager) take(s *source) {
 	}
 	p.lines = append(p.lines, l)
 	p.bytes += cost
-	p.last = Cursor{At: r.at, File: s.file.rel, Seq: r.seq}
+	p.last = c
 	if len(p.lines) == p.limit {
 		p.full, p.done = true, true
 	}
@@ -357,7 +442,7 @@ func (p *pager) take(s *source) {
 
 type rec struct {
 	at     time.Time
-	seq    int
+	seq    int64
 	stream byte
 	text   []byte // valid until the reader's next call
 }
@@ -432,7 +517,7 @@ func (s *fwdReader) next() (rec, bool, error) {
 			return rec{}, false, err
 		}
 		if at, stream, text, ok := parseRaw(bytes.TrimSuffix(b, []byte{'\n'})); ok {
-			return rec{at, int(start), stream, text}, true, nil
+			return rec{at, start, stream, text}, true, nil
 		}
 	}
 }
@@ -462,7 +547,7 @@ func (s *revReader) next() (rec, bool, error) {
 		start := s.off + int64(j+1)
 		s.buf = s.buf[:j+1]
 		if at, stream, text, ok := parseRaw(line); ok {
-			return rec{at, int(start), stream, text}, true, nil
+			return rec{at, start, stream, text}, true, nil
 		}
 	}
 }

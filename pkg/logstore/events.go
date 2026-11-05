@@ -3,7 +3,9 @@ package logstore
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -94,6 +96,9 @@ func ReadEvents(root string, q EventQuery) ([]Event, error) {
 			continue
 		}
 		data, err := os.ReadFile(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // purged since the Glob
+		}
 		if err != nil {
 			return nil, err
 		}
