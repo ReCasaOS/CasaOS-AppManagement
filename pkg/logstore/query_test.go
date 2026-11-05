@@ -180,6 +180,31 @@ func TestForwardsFromACursorIsExclusive(t *testing.T) {
 	p, err = Read(context.Background(), root, Query{After: &next, Limit: 3})
 	assert.NilError(t, err)
 	assert.DeepEqual(t, texts(p.Lines), []string{"9"})
+	assert.Equal(t, p.Next, Cursor{At: base.Add(9 * time.Second), File: after.File, Seq: 9 * lineLen}.String())
+}
+
+func TestAPartialForwardsPageStillCarriesNext(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	var lines []entry
+	for i := range 4 {
+		lines = append(lines, entry{base.Add(time.Duration(i) * time.Second), "o", fmt.Sprint(i)})
+	}
+	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", lines)
+	const lineLen = len("2026-11-05T10:00:00Z o 0\n")
+	file := "app/web/2026-11-05.aaaaaaaaaaaa.log"
+	after := Cursor{At: base, File: file}
+
+	p, err := Read(context.Background(), root, Query{After: &after, Limit: 500})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, texts(p.Lines), []string{"1", "2", "3"})
+	assert.Equal(t, p.Next, Cursor{At: base.Add(3 * time.Second), File: file, Seq: 3 * lineLen}.String())
+
+	next, err := ParseCursor(p.Next)
+	assert.NilError(t, err)
+	p, err = Read(context.Background(), root, Query{After: &next, Limit: 500})
+	assert.NilError(t, err)
+	assert.Equal(t, len(p.Lines), 0)
 	assert.Equal(t, p.Next, "")
 }
 

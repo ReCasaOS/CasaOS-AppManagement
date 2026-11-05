@@ -316,15 +316,18 @@ func (a *AppManagement) GetLogsSettings(ctx echo.Context) error {
 	return logsSettings(ctx)
 }
 
-// SetLogsSettings saves the retention and size cap; the validator has bounded them as the service does.
+// SetLogsSettings saves the retention and size cap.
 func (a *AppManagement) SetLogsSettings(ctx echo.Context) error {
 	var in codegen.LogsSettingsInput
 	if err := ctx.Bind(&in); err != nil {
 		return logsMessage(ctx, http.StatusBadRequest, err.Error())
 	}
 	if err := service.ApplyLogsSettings(in.RetentionDays, in.MaxSizeMb, in.IncludeOthers); err != nil {
+		if errors.Is(err, service.ErrLogsSettings) {
+			return logsMessage(ctx, http.StatusBadRequest, err.Error())
+		}
 		logger.Error("saving the logs settings failed", zap.Error(err))
-		return logsMessage(ctx, http.StatusInternalServerError, err.Error())
+		return logsMessage(ctx, http.StatusInternalServerError, "the settings could not be saved")
 	}
 	return logsSettings(ctx)
 }

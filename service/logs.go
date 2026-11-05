@@ -41,6 +41,9 @@ var logsRetry = 30 * time.Second
 // the follower still drains. A var for the tests.
 var dieDrain = 2 * time.Second
 
+// ErrLogsSettings wraps a settings value out of range: the caller's mistake, not a failure.
+var ErrLogsSettings = errors.New("logs settings out of range")
+
 var (
 	logsStore atomic.Pointer[logstore.Store]
 
@@ -337,10 +340,10 @@ func GetLogsSettings() LogsSettings {
 // following the containers of no app without a restart.
 func ApplyLogsSettings(retentionDays, maxSizeMB int, includeOthers bool) error {
 	if retentionDays < 1 || retentionDays > 3650 {
-		return fmt.Errorf("logs: retention must be 1 to 3650 days, not %d", retentionDays)
+		return fmt.Errorf("%w: the retention must be 1 to 3650 days, not %d", ErrLogsSettings, retentionDays)
 	}
 	if maxSizeMB < 64 || maxSizeMB > 1_048_576 {
-		return fmt.Errorf("logs: the size cap must be 64 to 1048576 MB, not %d", maxSizeMB)
+		return fmt.Errorf("%w: the size cap must be 64 to 1048576 MB, not %d", ErrLogsSettings, maxSizeMB)
 	}
 
 	logsSettingsMu.Lock()

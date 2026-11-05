@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -353,7 +354,9 @@ func TestApplyLogsSettingsValidatesAndPersists(t *testing.T) {
 	config.Cfg, config.ConfigFilePath = ini.Empty(), filepath.Join(t.TempDir(), "app-management.conf")
 	t.Cleanup(func() { *config.AppInfo, config.Cfg, config.ConfigFilePath = saved, cfg, path })
 
-	assert.ErrorContains(t, ApplyLogsSettings(0, 512, true), "1 to 3650")
+	err := ApplyLogsSettings(0, 512, true)
+	assert.ErrorContains(t, err, "1 to 3650")
+	assert.Assert(t, errors.Is(err, ErrLogsSettings))
 	assert.ErrorContains(t, ApplyLogsSettings(10, 63, true), "64 to 1048576")
 
 	assert.NilError(t, ApplyLogsSettings(10, 512, true))

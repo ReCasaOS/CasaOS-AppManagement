@@ -196,7 +196,8 @@ func Read(ctx context.Context, root string, q Query) (Page, error) {
 	}
 
 	page := Page{Lines: p.lines, Events: []Event{}}
-	if p.full {
+	// forwards, a client polls for what comes next: it resumes from the last line it got even when the page is not full
+	if p.full || (q.After != nil && len(p.lines) > 0) {
 		page.Next = p.last.String()
 	}
 	// The window runs from the cursor the client sent to the far end of the page, so consecutive pages leave no gap.
