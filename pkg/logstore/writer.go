@@ -2,8 +2,10 @@ package logstore
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -20,6 +22,9 @@ type Writer struct {
 	root, app, service, container string // container is already cut to 12 chars
 	onLine                        func(Line)
 
+	// OnError, if set before use, receives every flush error (nil = ignored). The failed buffer is dropped.
+	OnError func(error)
+
 	mu     sync.Mutex
 	buf    bytes.Buffer
 	file   *os.File
@@ -35,58 +40,73 @@ func NewWriter(root, app, service, container string, onLine func(Line)) *Writer 
 	return &Writer{root: root, app: app, service: service, container: container, onLine: onLine}
 }
 
+// Write always buffers the line and always calls onLine. A flush error (day change or 64 KiB) is
+// returned and sent to OnError; it concerns earlier lines only.
 func (w *Writer) Write(at time.Time, stream, text string) error {
 	text = Truncate(text)
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.closed {
+		w.mu.Unlock()
 		return errors.New("logstore: write on closed writer")
 	}
+	var err error
 	day := at.UTC().Format("2006-01-02")
 	if day != w.day {
-		if err := w.flushLocked(); err != nil {
-			return err
-		}
+		err = w.flushLocked()
 		w.closeFile()
 		w.day = day
 	}
 	w.buf.Write(FormatLine(at, stream, text))
-	var err error
 	if w.buf.Len() >= flushThreshold {
-		err = w.flushLocked()
+		err = cmp.Or(err, w.flushLocked())
 	}
-	if w.onLine != nil {
-		w.onLine(Line{At: at, App: w.app, Service: w.service, Container: w.container, Stream: stream, Text: text})
+	w.mu.Unlock()
+	if w.onLine != nil { // outside the mutex: a slow or re-entrant callback must not block the writer
+		w.onLine(Line{At: at, App: w.app, Service: w.service, Container: w.container, Stream: stream, Text: newlines.Replace(text)})
 	}
+	w.report(err)
 	return err
+}
+
+func (w *Writer) report(err error) {
+	if err != nil && w.OnError != nil {
+		w.OnError(err)
+	}
 }
 
 // Flush does not fsync: the 1 s crash window is accepted by the spec.
 func (w *Writer) Flush() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.flushLocked()
+	err := w.flushLocked()
+	w.mu.Unlock()
+	w.report(err)
+	return err
 }
 
 func (w *Writer) flushLocked() error {
 	if w.buf.Len() == 0 {
 		return nil
 	}
+	day, _ := time.Parse("2006-01-02", w.day)
+	name := DayFile(w.root, w.app, w.service, w.container, day)
 	if w.file == nil {
-		day, _ := time.Parse("2006-01-02", w.day)
-		name := DayFile(w.root, w.app, w.service, w.container, day)
 		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
-			return err
+			w.buf.Reset()
+			return fmt.Errorf("logstore: %s: %w", name, err)
 		}
 		f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
-			return err
+			w.buf.Reset()
+			return fmt.Errorf("logstore: %s: %w", name, err)
 		}
 		w.file = f
 	}
 	_, err := w.file.Write(w.buf.Bytes())
-	w.buf.Reset() // drop even on error: retrying a failing disk would grow the buffer without bound
-	return err
+	w.buf.Reset() // dropped even on error: retrying a failing disk would grow the buffer without bound
+	if err != nil {
+		return fmt.Errorf("logstore: %s: %w", name, err)
+	}
+	return nil
 }
 
 func (w *Writer) closeFile() {
@@ -96,6 +116,7 @@ func (w *Writer) closeFile() {
 	}
 }
 
+// Run does not close the writer when ctx ends; the caller still calls Close.
 func (w *Writer) Run(ctx context.Context) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
@@ -112,10 +133,11 @@ func (w *Writer) Run(ctx context.Context) {
 
 func (w *Writer) Close() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	err := w.flushLocked()
 	w.closeFile()
 	w.closed = true
+	w.mu.Unlock()
+	w.report(err)
 	return err
 }
 

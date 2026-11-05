@@ -83,3 +83,32 @@ func TestWriteAfterCloseFails(t *testing.T) {
 	assert.NilError(t, w.Close())
 	assert.Assert(t, w.Write(time.Now(), "o", "x") != nil)
 }
+
+func TestAFailingDiskIsReportedAndWritesKeepWorking(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "file")
+	assert.NilError(t, os.WriteFile(root, nil, 0o644)) // a regular file: no directory can be created under it
+	var errs []error
+	var lines []Line
+	w := NewWriter(root, "a", "s", "0123456789ab", func(l Line) { lines = append(lines, l) })
+	w.OnError = func(err error) { errs = append(errs, err) }
+	at := time.Date(2026, 11, 5, 1, 0, 0, 0, time.UTC)
+	assert.NilError(t, w.Write(at, "o", "one"))
+	assert.Assert(t, w.Flush() != nil)
+	assert.Equal(t, len(errs), 1)
+	assert.Assert(t, strings.Contains(errs[0].Error(), "2026-11-05.0123456789ab.log"), errs[0])
+
+	// day change: the earlier line's flush fails, the new line is still buffered and seen by onLine
+	assert.NilError(t, w.Write(at, "o", "two"))
+	next := at.Add(24 * time.Hour)
+	assert.Assert(t, w.Write(next, "o", "three\nfour") != nil)
+	assert.Equal(t, len(errs), 2)
+	assert.Equal(t, len(lines), 3)
+	assert.Equal(t, lines[2].Text, "three four") // same newline replacement as on disk
+}
+
+func TestOnLineMayCallBackIntoTheWriter(t *testing.T) {
+	var w *Writer
+	w = NewWriter(t.TempDir(), "a", "s", "0123456789ab", func(Line) { _ = w.Flush() })
+	assert.NilError(t, w.Write(time.Now(), "o", "x"))
+	assert.NilError(t, w.Close())
+}
