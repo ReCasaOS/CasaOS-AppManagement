@@ -97,23 +97,31 @@ func (a *AppManagement) LogsApps(ctx echo.Context) error {
 			installed = nil
 		}
 	}
-	followed := service.FollowedContainers()
+	return ctx.JSON(http.StatusOK, echo.Map{"data": logsAppsOf(summaries, installed, service.FollowedContainers())})
+}
+
+// logsAppsOf marks the running services, and the apps neither installed nor running as uninstalled;
+// installed nil means the list is not known.
+func logsAppsOf(summaries []logstore.AppSummary, installed map[string]*service.ComposeApp, followed map[string]bool) []logsApp {
 	out := make([]logsApp, 0, len(summaries))
 	for _, s := range summaries {
 		app := logsApp{AppSummary: s}
+		running := false
+		for i := range app.Services {
+			app.Services[i].Running = followed[app.Services[i].Container]
+			running = running || app.Services[i].Running
+		}
 		if composeApp, ok := installed[s.App]; ok {
 			if info, err := composeApp.StoreInfo(false); err == nil && info != nil {
 				app.Title, app.Icon = info.Title, utils.Ptr(info.Icon)
 			}
 		} else {
-			app.Uninstalled = installed != nil && s.App != "_other"
-		}
-		for i := range app.Services {
-			app.Services[i].Running = followed[app.Services[i].Container]
+			// the compose list knows no v1 app: one with a followed container is installed
+			app.Uninstalled = installed != nil && s.App != "_other" && !running
 		}
 		out = append(out, app)
 	}
-	return ctx.JSON(http.StatusOK, echo.Map{"data": out})
+	return out
 }
 
 // LogsQuery returns one page of history and the events of its window.

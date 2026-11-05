@@ -5067,6 +5067,9 @@ components:
           type: string
         text:
           type: string
+        cursor:
+          description: Where the line is, to pass as `since` or `before`. In history pages only, never on the stream.
+          type: string
 
     LogEvent:
       type: object

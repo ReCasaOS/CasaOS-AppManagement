@@ -278,7 +278,23 @@ func TestStreamAndHistoryAgree(t *testing.T) {
 
 	var history logsPage
 	r.get("/logs?app=plex&since="+url.QueryEscape(*page.Next), http.StatusOK, &history)
+	for i := range history.Lines { // only history lines say where they are
+		assert.Equal(t, streamed[i].Cursor, "")
+		assert.Assert(t, history.Lines[i].Cursor != "")
+		history.Lines[i].Cursor = ""
+	}
 	assert.DeepEqual(t, streamed, history.Lines)
+}
+
+func TestAHistoryLinesCursorIsASince(t *testing.T) {
+	r := newLogsRig(t)
+	r.write("plex", "plex", "aaaaaaaaaaaa", logsDay, "one", "two", "three")
+	var page logsPage
+	r.get("/logs?app=plex", http.StatusOK, &page)
+	assert.DeepEqual(t, texts(page.Lines), []string{"three", "two", "one"})
+	var after logsPage
+	r.get("/logs?app=plex&since="+url.QueryEscape(page.Lines[2].Cursor), http.StatusOK, &after)
+	assert.DeepEqual(t, texts(after.Lines), []string{"two", "three"})
 }
 
 func TestTheStreamEndsWhenTheClientGoes(t *testing.T) {
