@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -91,7 +93,7 @@ func (m *Matcher) MatchEvent(e Event) bool { return inSet(m.apps, e.App) }
 type Cursor struct {
 	At   time.Time
 	File string // path relative to root
-	Seq  int    // 0-based line index in File
+	Seq  int    // byte offset of the line's start in File: ordered like the lines, stable under appends, seekable
 }
 
 func (c Cursor) String() string {
@@ -133,10 +135,13 @@ type Page struct {
 const (
 	readChunk   = 64 << 10
 	maxReadLine = 1 << 20 // a longer line is cut, then Truncate cuts it to MaxLineBytes
-	// The page cap counts len(Text)+len(App)+len(Service)+lineJSONOverhead per line.
-	// shortcut: JSON escapes (control chars, <>&) and the events are not counted; measure the encoding if pages near the cap get rejected.
-	lineJSONOverhead = 128
+	// Lines stop at their encoded size plus a comma; the rest is left to the envelope and ≤ maxPageEvents events.
+	maxLinesBytes = MaxPageBytes - 256<<10
+	maxPageEvents = 500
 )
+
+// readBytes counts the bytes the reader pulls from day files; tests use it to check a page reads only what it needs.
+var readBytes atomic.Int64
 
 // Read returns one page of history. Lines are ordered on (At, File, Seq), descending without After,
 // ascending with it; a day file's lines are assumed to be in time order, as the writer appends them.
@@ -194,12 +199,20 @@ func Read(ctx context.Context, root string, q Query) (Page, error) {
 	if p.full {
 		page.Next = p.last.String()
 	}
+	// The window runs from the cursor the client sent to the far end of the page, so consecutive pages leave no gap.
 	if n := len(p.lines); n > 0 {
-		oldest, newest := p.lines[0].At, p.lines[n-1].At
-		if q.After == nil {
-			oldest, newest = newest, oldest
+		var since, until time.Time
+		switch {
+		case q.After != nil:
+			since, until = q.After.At, p.lines[n-1].At
+		case q.Before != nil:
+			since, until = p.lines[n-1].At, q.Before.At
+		case !q.Until.IsZero():
+			since, until = p.lines[n-1].At, q.Until
+		default:
+			since, until = p.lines[n-1].At, time.Now()
 		}
-		page.Events, err = ReadEvents(root, EventQuery{Apps: q.Apps, Since: oldest, Until: newest, Limit: 1000})
+		page.Events, err = ReadEvents(root, EventQuery{Apps: q.Apps, Since: since, Until: until, Limit: maxPageEvents})
 		if err != nil {
 			return Page{}, err
 		}
@@ -243,9 +256,7 @@ func (p *pager) readDay(ctx context.Context, root string, files []logFile) error
 		}
 		s := &source{f: f, file: lf}
 		srcs = append(srcs, s)
-		if p.q.After != nil {
-			s.lineReader = &fwdReader{r: bufio.NewReaderSize(ctxReader{ctx, f}, readChunk)}
-		} else if s.lineReader, err = newRevReader(ctx, f); err != nil {
+		if s.lineReader, err = p.openReader(ctx, f, lf.rel); err != nil {
 			return err
 		}
 		if err := s.advance(); err != nil {
@@ -268,6 +279,29 @@ func (p *pager) readDay(ctx context.Context, root string, files []logFile) error
 		}
 	}
 	return nil
+}
+
+// openReader starts the cursor's own file at the cursor's offset; the other files are read whole.
+func (p *pager) openReader(ctx context.Context, f *os.File, rel string) (lineReader, error) {
+	if c := p.q.After; c != nil {
+		var start int64
+		if c.File == rel && c.Seq > 0 {
+			start = int64(c.Seq) // the line there equals the cursor and is skipped by take
+			if _, err := f.Seek(start, io.SeekStart); err != nil {
+				return nil, err
+			}
+		}
+		return &fwdReader{r: bufio.NewReaderSize(ctxReader{ctx, f}, readChunk), pos: start}, nil
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	end := st.Size()
+	if c := p.q.Before; c != nil && c.File == rel {
+		end = min(end, int64(c.Seq))
+	}
+	return &revReader{ctx: ctx, f: f, off: end}, nil
 }
 
 func compareTo(at time.Time, file string, seq int, c Cursor) int {
@@ -306,8 +340,9 @@ func (p *pager) take(s *source) {
 	if !p.m.Match(l) {
 		return
 	}
-	cost := len(l.Text) + len(l.App) + len(l.Service) + lineJSONOverhead
-	if len(p.lines) > 0 && p.bytes+cost > MaxPageBytes {
+	b, _ := json.Marshal(l) // a Line always encodes
+	cost := len(b) + 1
+	if len(p.lines) > 0 && p.bytes+cost > maxLinesBytes {
 		p.full, p.done = true, true
 		return
 	}
@@ -365,21 +400,26 @@ func (c ctxReader) Read(b []byte) (int, error) {
 	if err := c.ctx.Err(); err != nil {
 		return 0, err
 	}
-	return c.r.Read(b)
+	n, err := c.r.Read(b)
+	readBytes.Add(int64(n))
+	return n, err
 }
 
 type fwdReader struct {
 	r   *bufio.Reader
-	seq int
+	pos int64 // file offset of the next byte r returns
 }
 
 func (s *fwdReader) next() (rec, bool, error) {
 	for {
+		start := s.pos
 		b, err := s.r.ReadSlice('\n')
+		s.pos += int64(len(b))
 		if err == bufio.ErrBufferFull {
 			long := append([]byte(nil), b...)
 			for err == bufio.ErrBufferFull {
 				b, err = s.r.ReadSlice('\n')
+				s.pos += int64(len(b))
 				long = append(long, b[:min(len(b), max(maxReadLine-len(long), 0))]...)
 			}
 			b = long
@@ -390,43 +430,19 @@ func (s *fwdReader) next() (rec, bool, error) {
 		if err != nil {
 			return rec{}, false, err
 		}
-		seq := s.seq
-		s.seq++
 		if at, stream, text, ok := parseRaw(bytes.TrimSuffix(b, []byte{'\n'})); ok {
-			return rec{at, seq, stream, text}, true, nil
+			return rec{at, int(start), stream, text}, true, nil
 		}
 	}
 }
 
-// revReader returns a file's complete lines last to first, reading 64 KiB chunks from the end.
+// revReader returns the complete lines before off, last to first, reading 64 KiB chunks backwards.
 type revReader struct {
-	ctx context.Context
-	f   *os.File
-	off int64  // file bytes [0, off) are not read yet
-	buf []byte // file bytes from off: whole lines, each ending with '\n', not returned yet
-	seq int    // index of buf's last line
-}
-
-func newRevReader(ctx context.Context, f *os.File) (*revReader, error) {
-	// Seq counts from the start of the file, so count the lines first; bytes after the last '\n' are still being written.
-	r := bufio.NewReaderSize(ctxReader{ctx, f}, readChunk)
-	var n int
-	var pos, end int64
-	for {
-		b, err := r.ReadSlice('\n')
-		pos += int64(len(b))
-		if len(b) > 0 && b[len(b)-1] == '\n' {
-			n++
-			end = pos
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil && err != bufio.ErrBufferFull {
-			return nil, err
-		}
-	}
-	return &revReader{ctx: ctx, f: f, off: end, seq: n - 1}, nil
+	ctx     context.Context
+	f       *os.File
+	off     int64  // file bytes [0, off) are not read yet
+	buf     []byte // file bytes from off: whole lines, each ending with '\n', not returned yet
+	trimmed bool   // the bytes after the last '\n' (a line still being written) were dropped
 }
 
 func (s *revReader) next() (rec, bool, error) {
@@ -435,18 +451,17 @@ func (s *revReader) next() (rec, bool, error) {
 			return rec{}, false, nil
 		}
 		j := bytes.LastIndexByte(s.buf[:max(len(s.buf)-1, 0)], '\n')
-		if j < 0 && s.off > 0 {
+		if j < 0 && (s.off > 0 || !s.trimmed) {
 			if err := s.fill(); err != nil {
 				return rec{}, false, err
 			}
 			continue
 		}
 		line := s.buf[j+1 : len(s.buf)-1]
+		start := s.off + int64(j+1)
 		s.buf = s.buf[:j+1]
-		seq := s.seq
-		s.seq--
 		if at, stream, text, ok := parseRaw(line); ok {
-			return rec{at, seq, stream, text}, true, nil
+			return rec{at, int(start), stream, text}, true, nil
 		}
 	}
 }
@@ -465,9 +480,15 @@ func (s *revReader) fill() error {
 	if _, err := s.f.ReadAt(b[:n], s.off-n); err != nil {
 		return err
 	}
+	readBytes.Add(n)
 	copy(b[n:], keep)
 	s.off -= n
 	s.buf = b
+	if !s.trimmed {
+		i := bytes.LastIndexByte(s.buf, '\n')
+		s.buf = s.buf[:i+1] // i = -1: everything read so far is the unfinished line
+		s.trimmed = i >= 0 || s.off == 0
+	}
 	return nil
 }
 
@@ -558,11 +579,16 @@ func ListApps(root string) ([]AppSummary, error) {
 		}
 		run := files[i:j] // oldest day first: names start with the day
 		newest := run[len(run)-1]
-		s := ServiceSummary{Service: newest.service, Container: newest.c12,
-			FirstAt: firstLineAt(filepath.Join(root, filepath.FromSlash(run[0].rel))),
-			LastAt:  lastLineAt(filepath.Join(root, filepath.FromSlash(newest.rel)))}
+		s := ServiceSummary{Service: newest.service, FirstAt: firstLineAt(filepath.Join(root, filepath.FromSlash(run[0].rel)))}
 		for _, f := range run {
 			s.SizeBytes += f.size
+			if f.day != newest.day {
+				continue
+			}
+			// after a recreation the newest day holds several containers: the current one wrote last
+			if at := lastLineAt(filepath.Join(root, filepath.FromSlash(f.rel))); s.Container == "" || at.After(s.LastAt) {
+				s.Container, s.LastAt = f.c12, at
+			}
 		}
 		if len(out) == 0 || out[len(out)-1].App != newest.app {
 			out = append(out, AppSummary{App: newest.app})

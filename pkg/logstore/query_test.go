@@ -1,6 +1,7 @@
 package logstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -77,11 +78,78 @@ func TestPagesAreStableWithinOneSecond(t *testing.T) {
 		}
 	}
 	assert.DeepEqual(t, got, want)
+}
 
+func TestCancelStopsTheRead(t *testing.T) {
+	root := t.TempDir()
+	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", []entry{{time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC), "o", "x"}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := Read(ctx, root, Query{})
 	assert.Assert(t, errors.Is(err, context.Canceled))
+}
+
+func TestABackwardsPageReadsOnlyTheChunksItNeeds(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "app", "web")
+	assert.NilError(t, os.MkdirAll(dir, 0o755))
+	day := time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)
+	var big bytes.Buffer
+	var mid Cursor
+	for i := 0; big.Len() < 20<<20; i++ {
+		at := day.Add(time.Duration(i) * 300 * time.Millisecond)
+		if i == 100000 {
+			mid = Cursor{At: at, File: "app/web/2026-11-05.aaaaaaaaaaaa.log", Seq: big.Len()}
+		}
+		big.Write(FormatLine(at, "o", fmt.Sprintf("line %06d %s", i, strings.Repeat("x", 60))))
+	}
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "2026-11-05.aaaaaaaaaaaa.log"), big.Bytes(), 0o644))
+	for _, c := range []string{"b", "c"} {
+		var small []entry
+		for h := range 24 {
+			small = append(small, entry{day.Add(time.Duration(h) * time.Hour), "o", c})
+		}
+		writeLines(t, root, "app", "web", strings.Repeat(c, 12), small)
+	}
+
+	readBytes.Store(0)
+	p, err := Read(context.Background(), root, Query{Before: &mid, Limit: 500})
+	assert.NilError(t, err)
+	assert.Equal(t, len(p.Lines), 500)
+	assert.Assert(t, strings.HasPrefix(p.Lines[0].Text, "line 099999 "), p.Lines[0].Text)
+	assert.Assert(t, readBytes.Load() < 256<<10, readBytes.Load())
+}
+
+func TestEventsBetweenTwoPagesAreKept(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	var lines []entry
+	for i := range 10 {
+		lines = append(lines, entry{base.Add(time.Duration(i) * time.Second), "o", fmt.Sprint(i)})
+	}
+	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", lines)
+	assert.NilError(t, AppendEvent(root, Event{At: base.Add(4500 * time.Millisecond), App: "app", Kind: "died", By: "docker"}))
+
+	events := func(q Query) int {
+		t.Helper()
+		n := 0
+		for range 2 {
+			p, err := Read(context.Background(), root, q)
+			assert.NilError(t, err)
+			n += len(p.Events)
+			c, err := ParseCursor(p.Next)
+			assert.NilError(t, err)
+			if q.After != nil {
+				q.After = &c
+			} else {
+				q.Before = &c
+			}
+		}
+		return n
+	}
+	assert.Equal(t, events(Query{Limit: 5}), 1) // pages 9..5 and 4..0
+	start := Cursor{At: base, File: "app/web/2026-11-05.aaaaaaaaaaaa.log"}
+	assert.Equal(t, events(Query{After: &start, Limit: 4}), 1) // pages 1..4 and 5..8
 }
 
 func TestForwardsFromACursorIsExclusive(t *testing.T) {
@@ -92,7 +160,8 @@ func TestForwardsFromACursorIsExclusive(t *testing.T) {
 		lines = append(lines, entry{base.Add(time.Duration(i) * time.Second), "o", fmt.Sprint(i)})
 	}
 	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", lines)
-	after := Cursor{At: base.Add(2 * time.Second), File: "app/web/2026-11-05.aaaaaaaaaaaa.log", Seq: 2}
+	const lineLen = len("2026-11-05T10:00:00Z o 0\n")
+	after := Cursor{At: base.Add(2 * time.Second), File: "app/web/2026-11-05.aaaaaaaaaaaa.log", Seq: 2 * lineLen}
 
 	p, err := Read(context.Background(), root, Query{After: &after, Limit: 3})
 	assert.NilError(t, err)
@@ -100,7 +169,7 @@ func TestForwardsFromACursorIsExclusive(t *testing.T) {
 	assert.Assert(t, p.Next != "")
 	next, err := ParseCursor(p.Next)
 	assert.NilError(t, err)
-	assert.Equal(t, next.Seq, 5)
+	assert.Equal(t, next.Seq, 5*lineLen)
 
 	p, err = Read(context.Background(), root, Query{After: &next, Limit: 3})
 	assert.NilError(t, err)
@@ -183,14 +252,29 @@ func TestAPageNeverExceedsTwoMiB(t *testing.T) {
 	for i, l := range all {
 		assert.Equal(t, l.Text[:3], fmt.Sprintf("%03d", 299-i))
 	}
+
+	// escapes grow several-fold once encoded: the cap must count the JSON, not the raw bytes
+	root = t.TempDir()
+	lines = nil
+	for i := range 300 {
+		lines = append(lines, entry{at.Add(time.Duration(i) * time.Millisecond), "o", fmt.Sprintf("%03d ", i) + strings.Repeat("\x1b[31m<>&", 1900)})
+	}
+	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", lines)
+	p, err = Read(context.Background(), root, Query{Limit: 500})
+	assert.NilError(t, err)
+	b, err = json.Marshal(p)
+	assert.NilError(t, err)
+	assert.Assert(t, len(b) <= MaxPageBytes, len(b))
+	assert.Equal(t, len(walk(t, root, Query{Limit: 500})), 300)
 }
 
 func TestListAppsReadsTheTree(t *testing.T) {
 	root := t.TempDir()
 	d4 := time.Date(2026, 11, 4, 8, 0, 0, 0, time.UTC)
 	d5 := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
-	writeLines(t, root, "media", "web", "aaaaaaaaaaaa", []entry{{d4, "o", "1"}, {d4.Add(time.Minute), "o", "2"}, {d5, "o", "3"}})
-	writeLines(t, root, "media", "web", "bbbbbbbbbbbb", []entry{{d5.Add(time.Hour), "o", "4"}, {d5.Add(2 * time.Hour), "o", "5"}})
+	// web was recreated on the 5th: the new container's id sorts first, yet it is the current one
+	writeLines(t, root, "media", "web", "bbbbbbbbbbbb", []entry{{d4, "o", "1"}, {d4.Add(time.Minute), "o", "2"}, {d5, "o", "3"}})
+	writeLines(t, root, "media", "web", "aaaaaaaaaaaa", []entry{{d5.Add(time.Hour), "o", "4"}, {d5.Add(2 * time.Hour), "o", "5"}})
 	writeLines(t, root, "media", "db", "cccccccccccc", []entry{{d5, "e", "6"}})
 	writeLines(t, root, "notes", "app", "dddddddddddd", []entry{{d4, "o", "7"}})
 	assert.NilError(t, AppendEvent(root, Event{At: d5, App: "media", Kind: "started", By: "docker"}))
@@ -209,8 +293,8 @@ func TestListAppsReadsTheTree(t *testing.T) {
 	assert.DeepEqual(t, got, []AppSummary{
 		{App: "media", Services: []ServiceSummary{
 			{Service: "db", Container: "cccccccccccc", FirstAt: d5, LastAt: d5, SizeBytes: size("media/db/2026-11-05.cccccccccccc.log")},
-			{Service: "web", Container: "bbbbbbbbbbbb", FirstAt: d4, LastAt: d5.Add(2 * time.Hour),
-				SizeBytes: size("media/web/2026-11-04.aaaaaaaaaaaa.log", "media/web/2026-11-05.aaaaaaaaaaaa.log", "media/web/2026-11-05.bbbbbbbbbbbb.log")},
+			{Service: "web", Container: "aaaaaaaaaaaa", FirstAt: d4, LastAt: d5.Add(2 * time.Hour),
+				SizeBytes: size("media/web/2026-11-04.bbbbbbbbbbbb.log", "media/web/2026-11-05.bbbbbbbbbbbb.log", "media/web/2026-11-05.aaaaaaaaaaaa.log")},
 		}},
 		{App: "notes", Services: []ServiceSummary{
 			{Service: "app", Container: "dddddddddddd", FirstAt: d4, LastAt: d4, SizeBytes: size("notes/app/2026-11-04.dddddddddddd.log")},
