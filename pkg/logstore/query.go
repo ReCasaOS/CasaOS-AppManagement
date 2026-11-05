@@ -222,9 +222,9 @@ func read(ctx context.Context, root string, q Query, now time.Time) (Page, error
 			until = q.Until
 		}
 	default:
-		since, until = q.Since, now
-		if n > 0 {
-			since = p.lines[n-1].At
+		since, until = q.Since, p.hold // the newest page holds back the last second, like a forwards one
+		if p.full {
+			since = p.lines[n-1].At // a page that is not full is the oldest: its window runs back to Since
 		}
 		if q.Before != nil {
 			until = q.Before.At
@@ -410,6 +410,10 @@ func (p *pager) take(s *source) {
 		}
 	} else {
 		if (q.Before != nil && compareTo(r.at, s.file.rel, r.seq, *q.Before) >= 0) || (!q.Until.IsZero() && r.at.After(q.Until)) {
+			return
+		}
+		// the newest page: its first line's cursor may start a forwards poll, so it is held back too
+		if q.Before == nil && q.Until.IsZero() && r.at.After(p.hold) {
 			return
 		}
 		if !q.Since.IsZero() && r.at.Before(q.Since) {

@@ -417,3 +417,27 @@ func TestAHistoryLinesCursorRoundTripsAsSince(t *testing.T) {
 	assert.NilError(t, err)
 	assert.DeepEqual(t, texts(p.Lines), []string{"2"})
 }
+
+func TestTheOldestBackwardsPageHasTheEventsBeforeItsFirstLine(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	writeLines(t, root, "app", "web", "aaaaaaaaaaaa", []entry{{base, "o", "0"}, {base.Add(time.Second), "o", "1"}, {base.Add(2 * time.Second), "o", "2"}})
+	assert.NilError(t, AppendEvent(root, Event{At: base.Add(-time.Hour), App: "app", Kind: "created", By: "docker"}))
+
+	kinds := func(p Page) []string {
+		var out []string
+		for _, e := range p.Events {
+			out = append(out, e.Kind)
+		}
+		return out
+	}
+	p, err := Read(context.Background(), root, Query{Limit: 2})
+	assert.NilError(t, err)
+	assert.Equal(t, len(p.Events), 0) // a full page's window stops at its oldest line
+	c, err := ParseCursor(p.Next)
+	assert.NilError(t, err)
+	p, err = Read(context.Background(), root, Query{Before: &c, Limit: 2})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, texts(p.Lines), []string{"0"})
+	assert.DeepEqual(t, kinds(p), []string{"created"})
+}

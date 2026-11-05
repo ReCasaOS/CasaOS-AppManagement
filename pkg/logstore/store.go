@@ -88,12 +88,11 @@ func (s *Store) Record(e Event) error {
 	return nil
 }
 
-// Read flushes every writer before a forwards read, so a poll's cursor cannot pass a line still in a buffer.
+// Read flushes every writer first: any line's cursor may start a forwards poll, which must not
+// pass a line still in a buffer.
 func (s *Store) Read(ctx context.Context, q Query) (Page, error) {
-	if q.After != nil {
-		for _, w := range s.allWriters() {
-			_ = w.Flush() // errors go to OnError
-		}
+	for _, w := range s.allWriters() {
+		_ = w.Flush() // errors go to OnError
 	}
 	return read(ctx, s.Root, q, s.now())
 }

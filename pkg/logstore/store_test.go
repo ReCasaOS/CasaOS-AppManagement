@@ -29,7 +29,7 @@ func TestWhatIsWrittenIsReadAndStreamed(t *testing.T) {
 	ch, cancel := s.Subscribe(nil)
 	defer cancel()
 
-	at := time.Now().UTC().Truncate(time.Second)
+	at := time.Now().UTC().Truncate(time.Second).Add(-time.Minute) // older than the hold-back
 	w := s.Writer("plex", "plex", "0123456789abcdef")
 	assert.NilError(t, w.Write(at, "o", "hello"))
 	assert.NilError(t, s.Record(Event{At: at, App: "plex", Service: "plex", Container: "0123456789ab", Kind: "started", By: "docker"}))
@@ -64,7 +64,7 @@ func TestTheSameContainerGetsTheSameWriter(t *testing.T) {
 
 func TestCloseWriterFlushesAndForgets(t *testing.T) {
 	s := openTest(t)
-	at := time.Now().UTC().Truncate(time.Second)
+	at := time.Now().UTC().Truncate(time.Second).Add(-time.Minute) // older than the hold-back
 	w := s.Writer("a", "s", "0123456789ab")
 	assert.NilError(t, w.Write(at, "o", "first"))
 	assert.NilError(t, s.CloseWriter("0123456789ab"))
@@ -82,7 +82,7 @@ func TestCloseWriterFlushesAndForgets(t *testing.T) {
 
 func TestAPurgedFileIsCreatedAgainByItsWriter(t *testing.T) {
 	s := openTest(t)
-	at := time.Now().UTC()
+	at := time.Now().UTC().Add(-time.Minute) // older than the hold-back
 	w := s.Writer("a", "s", "0123456789ab")
 	assert.NilError(t, w.Write(at, "o", "before"))
 	assert.NilError(t, w.Flush())
@@ -167,4 +167,33 @@ func TestASymlinkedRootIsPurged(t *testing.T) {
 	assert.Assert(t, removed > 0)
 	_, err = os.Stat(DayFile(target, "a", "s", "aaaaaaaaaaaa", old))
 	assert.Assert(t, errors.Is(err, fs.ErrNotExist), err)
+}
+
+func TestTheNewestBackwardsPageHoldsBackTheLastSecond(t *testing.T) {
+	s := openTest(t)
+	at := time.Now().UTC()
+	// B has no flush loop: its line stays in its buffer until a read flushes it
+	b := NewWriter(s.Root, "app", "b", "bbbbbbbbbbbb", nil)
+	s.mu.Lock()
+	s.writers["bbbbbbbbbbbb"] = b
+	s.mu.Unlock()
+	a := s.Writer("app", "a", "aaaaaaaaaaaa")
+	c := s.Writer("app", "c", "cccccccccccc")
+	assert.NilError(t, a.Write(at.Add(-2*time.Second), "o", "A"))
+	assert.NilError(t, a.Flush())
+	assert.NilError(t, b.Write(at.Add(-500*time.Millisecond), "o", "B"))
+	assert.NilError(t, c.Write(at.Add(-100*time.Millisecond), "o", "C"))
+	assert.NilError(t, c.Flush())
+
+	s.now = func() time.Time { return at }
+	p, err := s.Read(context.Background(), Query{})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, texts(p.Lines), []string{"A"}) // B and C are within the last second
+
+	after, err := ParseCursor(p.Lines[0].Cursor)
+	assert.NilError(t, err)
+	s.now = func() time.Time { return at.Add(time.Second) }
+	p, err = s.Read(context.Background(), Query{After: &after})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, texts(p.Lines), []string{"B", "C"})
 }
