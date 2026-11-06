@@ -81,6 +81,7 @@ func (s *Store) CloseWriter(container string) error {
 
 // Record appends the event to the journal, then publishes it; nothing is published on error.
 func (s *Store) Record(e Event) error {
+	e.At = e.At.UTC() // one spelling for the journal and the stream, or the UI lists the event twice
 	if err := AppendEvent(s.Root, e); err != nil {
 		return err
 	}

@@ -2,10 +2,12 @@ package logstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,4 +198,30 @@ func TestTheNewestBackwardsPageHoldsBackTheLastSecond(t *testing.T) {
 	p, err = s.Read(context.Background(), Query{After: &after})
 	assert.NilError(t, err)
 	assert.DeepEqual(t, texts(p.Lines), []string{"B", "C"})
+}
+
+func TestAnEventIsStreamedAndJournaledInUTC(t *testing.T) {
+	s := openTest(t)
+	ch, cancel := s.Subscribe(nil)
+	defer cancel()
+
+	at := time.Now().UTC().Truncate(time.Second).Add(-time.Minute).In(time.FixedZone("", 3600))
+	assert.NilError(t, s.Record(Event{At: at, App: "plex", Service: "plex", Container: "0123456789ab", Kind: "started", By: "docker"}))
+
+	var m Message
+	select {
+	case m = <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event message")
+	}
+	evs, err := s.Events(EventQuery{})
+	assert.NilError(t, err)
+	assert.Equal(t, len(evs), 1)
+
+	streamed, err := json.Marshal(m.Event)
+	assert.NilError(t, err)
+	journaled, err := json.Marshal(evs[0])
+	assert.NilError(t, err)
+	assert.Assert(t, strings.Contains(string(streamed), `"at":"`+at.UTC().Format(time.RFC3339Nano)+`"`), string(streamed))
+	assert.Equal(t, string(streamed), string(journaled))
 }
