@@ -29,6 +29,9 @@ type BackupRunRecord struct {
 	// anything holding a database can be trusted to restore.
 	ContainersStopped bool `json:"containers_stopped"`
 	Copied            int  `json:"copied"`
+	// Bytes is the size of what was read for the copy, from the manifest; 0 for a
+	// restore, and for a run too old to have measured it.
+	Bytes int64 `json:"bytes"`
 	SkippedCount      int  `json:"skipped_count"`
 	// Error is empty when the run succeeded.
 	Error string `json:"error,omitempty"`
