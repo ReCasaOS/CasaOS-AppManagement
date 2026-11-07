@@ -31,8 +31,8 @@ type BackupRunRecord struct {
 	Copied            int  `json:"copied"`
 	// Bytes is the size of what was read for the copy, from the manifest; 0 for a
 	// restore, and for a run too old to have measured it.
-	Bytes int64 `json:"bytes"`
-	SkippedCount      int  `json:"skipped_count"`
+	Bytes        int64 `json:"bytes"`
+	SkippedCount int   `json:"skipped_count"`
 	// Error is empty when the run succeeded.
 	Error string `json:"error,omitempty"`
 	// Restore marks a run that put the app back from a backup rather than one
