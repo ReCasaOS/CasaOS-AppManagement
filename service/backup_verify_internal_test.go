@@ -179,6 +179,9 @@ func TestBackupVerificationCancellationWaitsForTheTransferToStop(t *testing.T) {
 	if result := awaitVerification(t, m, logPath); result.Status != "cancelled" {
 		t.Fatalf("unexpected cancellation result: %+v", result)
 	}
+	if _, err := os.Stat(client.paths[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a cancelled verification must remove its workspace: %v", err)
+	}
 }
 
 func TestBackupVerificationRetainsWorkspaceWhenStopIsUncertain(t *testing.T) {
@@ -350,5 +353,25 @@ func TestBackupVerificationReclaimsAWorkspaceLeftLongAgo(t *testing.T) {
 				t.Fatalf("old workspace was not reclaimed: %v", err)
 			}
 		})
+	}
+}
+// A cancellation that arrives once every object is read and compared changes
+// nothing: the result is a pass, not a cancellation that hides one.
+func TestBackupVerificationThatFinishedIsNotRecordedAsCancelled(t *testing.T) {
+	m, logPath, opts, client := verificationFixture(t)
+	client.verify = func(_ context.Context, local string, _ bool) error {
+		m.mu.Lock()
+		id := m.activeID
+		m.mu.Unlock()
+		if err := m.cancelRun(logPath, id); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(local, "data"), []byte("data"), 0o600)
+	}
+	if _, err := m.start(logPath, opts, client); err != nil {
+		t.Fatal(err)
+	}
+	if record := awaitVerification(t, m, logPath); record.Status != "passed" {
+		t.Fatalf("a finished check was hidden: %+v", record)
 	}
 }

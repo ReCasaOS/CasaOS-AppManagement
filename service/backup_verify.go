@@ -253,22 +253,16 @@ func (m *backupVerificationManager) run(ctx context.Context, client BackupVerifi
 	now := time.Now().UTC()
 	record.FinishedAt = &now
 	switch {
+	case err == nil: // everything was read and compared, whatever arrived since
+		record.Status = "passed"
 	case errors.Is(err, rclone.ErrVerificationJobUncertain):
 		record.Status, record.Error = "failed", "transfer stop could not be confirmed; private verification data was retained"
 	case errors.Is(ctx.Err(), context.Canceled):
-		record.Status, record.Error = "cancelled", "verification was cancelled"
-		if err != nil {
-			record.Error += "; " + err.Error()
-		}
+		record.Status, record.Error = "cancelled", "verification was cancelled; "+err.Error()
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		record.Status, record.Error = "failed", "verification exceeded the one-hour limit"
-		if err != nil {
-			record.Error += "; " + err.Error()
-		}
-	case err != nil:
-		record.Status, record.Error = "failed", err.Error()
+		record.Status, record.Error = "failed", "verification exceeded the one-hour limit; "+err.Error()
 	default:
-		record.Status = "passed"
+		record.Status, record.Error = "failed", err.Error()
 	}
 	if saveErr := m.saveRecord(record); saveErr != nil {
 		record.Status = "failed"
