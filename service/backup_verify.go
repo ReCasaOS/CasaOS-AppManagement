@@ -95,7 +95,9 @@ func verificationIdentifier(value string) bool {
 }
 
 func (m *backupVerificationManager) start(logPath string, opts BackupVerificationOptions, client BackupVerificationClient) (BackupVerificationRecord, error) {
-	if !verificationIdentifier(opts.Destination) || strings.HasSuffix(opts.Destination, rclone.RawSuffix) || !verificationIdentifier(opts.App) || !verificationIdentifier(opts.Stamp) || client == nil {
+	// "name,option=value:" overrides a remote's config in rclone (connection strings),
+	// e.g. repointing an alias at local files, so a destination name has no comma.
+	if !verificationIdentifier(opts.Destination) || strings.ContainsAny(opts.Destination, ",=") || strings.HasSuffix(opts.Destination, rclone.RawSuffix) || !verificationIdentifier(opts.App) || !verificationIdentifier(opts.Stamp) || client == nil {
 		return BackupVerificationRecord{}, ErrBackupVerificationInvalid
 	}
 	m.mu.Lock()

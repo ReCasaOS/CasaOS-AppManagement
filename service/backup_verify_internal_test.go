@@ -135,7 +135,7 @@ func TestBackupVerificationKeepsTheRemoteBasenameForSingleFiles(t *testing.T) {
 }
 
 func TestBackupVerificationRejectsInvalidIdentifiersBeforeStarting(t *testing.T) {
-	for _, value := range []string{"", ".", "..", "../nas", "nas/path", "nas\\path", "nas:other", " nas", "nas\x00"} {
+	for _, value := range []string{"", ".", "..", "../nas", "nas/path", "nas\\path", "nas:other", " nas", "nas\x00", "nas,remote=etc", "nas,password=x"} {
 		t.Run(value, func(t *testing.T) {
 			m, logPath, opts, client := verificationFixture(t)
 			opts.Destination = value
