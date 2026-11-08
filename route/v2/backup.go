@@ -344,9 +344,10 @@ func (a *AppManagement) BackupSchedules(ctx echo.Context) error {
 		return backupError(ctx, err)
 	}
 
+	now := time.Now()
 	out := make([]codegen.BackupSchedule, 0, len(schedules))
 	for _, schedule := range schedules {
-		out = append(out, toCodegenSchedule(schedule))
+		out = append(out, toCodegenSchedule(schedule, now))
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.BackupSchedulesOK{
@@ -417,18 +418,28 @@ func (a *AppManagement) BackupRuns(ctx echo.Context) error {
 	})
 }
 
-func toCodegenSchedule(schedule service.BackupSchedule) codegen.BackupSchedule {
+func toCodegenSchedule(schedule service.BackupSchedule, now time.Time) codegen.BackupSchedule {
 	weekday := int(schedule.Weekday)
 	every := string(schedule.Every)
 	lastRun := schedule.LastRun
 
-	return codegen.BackupSchedule{
+	out := codegen.BackupSchedule{
 		App: schedule.App, Destination: schedule.Destination,
 		Every: codegen.BackupScheduleEvery(every), At: schedule.At,
 		Weekday: &weekday, Keep: &schedule.Keep,
 		HoldStill: &schedule.HoldStill, Enabled: &schedule.Enabled,
 		LastRun: &lastRun,
 	}
+
+	// An unreadable time of day leaves the slots out: a listing that fails for one
+	// bad schedule hides all the others (the scheduler reports the bad one).
+	if schedule.Enabled {
+		if last, next, err := service.ScheduleSlots(schedule, now); err == nil {
+			out.LastSlot, out.NextSlot = &last, &next
+		}
+	}
+
+	return out
 }
 
 func fromCodegenSchedule(item codegen.BackupSchedule) service.BackupSchedule {
