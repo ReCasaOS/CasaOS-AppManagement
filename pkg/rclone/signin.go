@@ -70,11 +70,11 @@ var authLink = regexp.MustCompile(`https?://\S+/auth\?state=\S+`)
 type signIn struct {
 	backend string
 	state   string
-	cancel context.CancelFunc
-	exited chan struct{}
-	token  chan string
-	mu     sync.Mutex
-	output bytes.Buffer
+	cancel  context.CancelFunc
+	exited  chan struct{}
+	token   chan string
+	mu      sync.Mutex
+	output  bytes.Buffer
 }
 
 // One at a time: rclone listens on a fixed port, so a second sign-in could not
