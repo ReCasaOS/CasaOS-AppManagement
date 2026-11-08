@@ -16,8 +16,6 @@ func notImplemented(ctx echo.Context) error {
 	return ctx.JSON(http.StatusNotImplemented, codegen.BaseResponse{Message: &message})
 }
 
-func (a *AppManagement) ForceBackupSchedules(ctx echo.Context) error { return notImplemented(ctx) }
-
 func (a *AppManagement) BackupVerificationSchedule(ctx echo.Context) error {
 	return notImplemented(ctx)
 }

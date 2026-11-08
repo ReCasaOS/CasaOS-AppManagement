@@ -133,7 +133,11 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 		// asks what runs, so with this order one of the two always sees the other; a backup
 		// that looked first and listed itself after could be seen by neither, and run through
 		// the whole upgrade.
-		listed := markInProgress(schedule.App, "backup")
+		listed, ok := markUnlessForced(schedule.App, schedule.Destination)
+		if !ok {
+			// a force runs it now; its slot stays unrun for the next tick, and nothing is recorded
+			continue
+		}
 
 		// Asked before each backup and not once for the tick: a tick can hold hours of
 		// backups, and the upgrade can open between two of them.

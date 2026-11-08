@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
@@ -398,6 +399,60 @@ func (a *AppManagement) SetBackupSchedules(ctx echo.Context) error {
 
 	return ctx.JSON(http.StatusOK, codegen.BaseResponse{
 		Message: utils.Ptr(fmt.Sprintf("%d schedule(s) saved", len(schedules))),
+	})
+}
+
+// ForceBackupSchedules runs the enabled schedules now, or those the body narrows to, and
+// answers once they have started: 202 when one did, 409 when none could, 404 when none matched.
+func (a *AppManagement) ForceBackupSchedules(ctx echo.Context) error {
+	var body codegen.ForceBackupSchedulesJSONBody
+	if err := ctx.Bind(&body); err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	request := service.ForceRequest{}
+	for _, field := range []struct{ from, into *string }{{body.App, &request.App}, {body.Destination, &request.Destination}} {
+		if field.from == nil {
+			continue
+		}
+		if *field.from == "" {
+			return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{
+				Message: utils.Ptr("app and destination, when given, cannot be empty"),
+			})
+		}
+		*field.into = *field.from
+	}
+
+	result, err := service.ForceSchedules(ctx.Request().Context(), request, service.NewScheduledBackupRunner())
+	if errors.Is(err, service.ErrNoSuchSchedule) {
+		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: utils.Ptr(err.Error())})
+	}
+	if err != nil && !errors.Is(err, service.ErrUpgradeOpen) {
+		return backupError(ctx, err)
+	}
+
+	data := codegen.BackupForceResult{Started: []codegen.BackupForceTarget{}, Refused: []codegen.BackupForceRefusal{}}
+	for _, schedule := range result.Started {
+		data.Started = append(data.Started, codegen.BackupForceTarget{App: schedule.App, Destination: schedule.Destination})
+	}
+	reasons := []string{}
+	for _, refusal := range result.Refused {
+		data.Refused = append(data.Refused, codegen.BackupForceRefusal(refusal))
+		reasons = append(reasons, fmt.Sprintf("%s to %s: %s", refusal.App, refusal.Destination, refusal.Reason))
+	}
+
+	switch {
+	case err != nil:
+		return ctx.JSON(http.StatusConflict, codegen.BackupForceOK{Message: utils.Ptr(err.Error()), Data: &data})
+	case len(data.Started) == 0:
+		return ctx.JSON(http.StatusConflict, codegen.BackupForceOK{
+			Message: utils.Ptr("nothing started: " + strings.Join(reasons, "; ")), Data: &data,
+		})
+	}
+
+	return ctx.JSON(http.StatusAccepted, codegen.BackupForceOK{
+		Message: utils.Ptr(fmt.Sprintf("%d backup(s) started", len(data.Started))), Data: &data,
 	})
 }
 
