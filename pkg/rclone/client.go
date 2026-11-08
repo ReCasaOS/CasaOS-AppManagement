@@ -16,6 +16,7 @@
 package rclone
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,8 +83,17 @@ func NewClient() *Client {
 // accepts for these, and because it keeps a credential out of a JSON body that
 // would otherwise be easy to log whole.
 func (c *Client) call(endpoint string, params map[string]string, out interface{}) error {
-	response, err := c.http.R().SetFormData(params).Post(endpoint)
+	return c.callContext(context.Background(), endpoint, params, out)
+}
+
+// callContext is call, given up when ctx is: the caller then hears its own
+// cancellation, not a daemon that looks gone.
+func (c *Client) callContext(ctx context.Context, endpoint string, params map[string]string, out interface{}) error {
+	response, err := c.http.R().SetContext(ctx).SetFormData(params).Post(endpoint)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		// A socket that is not there is the common case, and it reads as a
 		// connection error rather than anything rclone said.
 		return fmt.Errorf("%w: %s", ErrDaemonUnreachable, err)
