@@ -73,7 +73,7 @@ func backupVerificationError(ctx echo.Context, err error) error {
 	status := http.StatusInternalServerError
 	message := "backup verification is unavailable; check the service and its verification history"
 	switch {
-	case errors.Is(err, service.ErrBackupVerificationInvalid):
+	case errors.Is(err, service.ErrBackupVerificationInvalid), errors.Is(err, service.ErrBackupVerificationRestic):
 		status, message = http.StatusBadRequest, err.Error()
 	case errors.Is(err, service.ErrBackupVerificationBusy), errors.Is(err, service.ErrBackupVerificationNotRunning):
 		status, message = http.StatusConflict, err.Error()

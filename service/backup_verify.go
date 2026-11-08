@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/rclone"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/restic"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
 )
@@ -35,9 +36,18 @@ var (
 	ErrBackupVerificationBusy       = errors.New("a backup verification is already running")
 	ErrBackupVerificationNotFound   = errors.New("backup verification not found")
 	ErrBackupVerificationNotRunning = errors.New("backup verification is not running")
+	ErrBackupVerificationRestic     = errors.New("this destination keeps its backups with restic: use its repository check")
 	BackupVerificationLogPath       = "/var/lib/casaos/backups/verifications.json"
 	backupVerificationTasks         backupVerificationManager
+	// replaced by tests; a destination kept with restic has its own repository check
+	resticHeld = func(name string) bool { return restic.New().Held(name) }
 )
+
+// verificationTooBig is a verdict, not a failure: the backup is bigger than what a
+// verification may read back, so nothing was retrieved.
+type verificationTooBig struct{ message string }
+
+func (e verificationTooBig) Error() string { return e.message }
 
 type BackupVerificationOptions struct {
 	Destination string
@@ -101,6 +111,9 @@ func (m *backupVerificationManager) start(logPath string, opts BackupVerificatio
 	// e.g. repointing an alias at local files, so a destination name has no comma.
 	if !verificationIdentifier(opts.Destination) || strings.ContainsAny(opts.Destination, ",=") || strings.HasSuffix(opts.Destination, rclone.RawSuffix) || !verificationIdentifier(opts.App) || !verificationIdentifier(opts.Stamp) || client == nil {
 		return BackupVerificationRecord{}, ErrBackupVerificationInvalid
+	}
+	if resticHeld(opts.Destination) {
+		return BackupVerificationRecord{}, ErrBackupVerificationRestic
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -258,9 +271,12 @@ func (m *backupVerificationManager) run(ctx context.Context, client BackupVerifi
 	}
 	now := time.Now().UTC()
 	record.FinishedAt = &now
+	tooBig := verificationTooBig{}
 	switch {
 	case err == nil: // everything was read and compared, whatever arrived since
 		record.Status = "passed"
+	case errors.As(err, &tooBig):
+		record.Status, record.Error = "not_verifiable", tooBig.message
 	case errors.Is(err, rclone.ErrVerificationJobUncertain):
 		record.Status, record.Error = "failed", "transfer stop could not be confirmed; private verification data was retained"
 	case errors.Is(ctx.Err(), context.Canceled):
@@ -326,11 +342,14 @@ func (m *backupVerificationManager) verify(ctx context.Context, client BackupVer
 		if err != nil {
 			return verificationFailure{"a backup object could not be inspected", err}
 		}
-		if size.Bytes < 0 || size.Files < 0 || size.Bytes > verificationMaxBytes-total {
-			return errors.New("backup size is unknown or exceeds the 1 GiB verification limit")
+		if size.Bytes < 0 || size.Files < 0 { // unmeasurable is a failure, not "too big"
+			return errors.New("backup size is unknown")
+		}
+		if size.Bytes > verificationMaxBytes-total {
+			return verificationTooBig{fmt.Sprintf("backup is bigger than the %d-byte verification limit", verificationMaxBytes)}
 		}
 		if size.Files > verificationMaxFiles-files {
-			return errors.New("backup exceeds the 100000-file verification limit")
+			return verificationTooBig{fmt.Sprintf("backup has more files than the %d-file verification limit", verificationMaxFiles)}
 		}
 		total += size.Bytes
 		files += size.Files

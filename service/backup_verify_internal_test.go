@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -252,8 +253,6 @@ func TestBackupVerificationRejectsFailuresWithoutExposingBackendSecrets(t *testi
 		name   string
 		change func(*fakeVerificationClient)
 	}{
-		{"size limit", func(f *fakeVerificationClient) { f.size.Bytes = verificationMaxBytes + 1 }},
-		{"file count limit", func(f *fakeVerificationClient) { f.size.Files = verificationMaxFiles + 1 }},
 		{"no free space", func(f *fakeVerificationClient) { f.free = 0 }},
 		{"unknown size", func(f *fakeVerificationClient) { f.size.Bytes = -1 }},
 		{"changed manifest", func(f *fakeVerificationClient) { f.change = true }},
@@ -397,4 +396,76 @@ func TestBackupVerificationWithTheDaemonDownBlocksNothing(t *testing.T) {
 		t.Fatalf("the next verification was blocked: %v", err)
 	}
 	awaitVerification(t, m, logPath)
+}
+
+func TestVerifyRefusesADestinationKeptWithRestic(t *testing.T) {
+	m, logPath, opts, client := verificationFixture(t)
+	defer func(old func(string) bool) { resticHeld = old }(resticHeld)
+	var asked string
+	resticHeld = func(name string) bool { asked = name; return true }
+	if _, err := m.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationRestic) {
+		t.Fatalf("a restic destination must be refused, got %v", err)
+	}
+	if asked != opts.Destination || client.fetches != 0 {
+		t.Fatalf("wrong destination asked or backup touched: %q %d", asked, client.fetches)
+	}
+	if _, err := os.Stat(logPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("nothing may be written for a refused verification: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(logPath), "verification")); err == nil {
+		t.Fatal("no workspace may be created")
+	}
+	// the identifier check comes first
+	opts.App = "../demo"
+	if _, err := m.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationInvalid) {
+		t.Fatalf("invalid identifiers come first, got %v", err)
+	}
+}
+
+func TestBackupBiggerThanTheLimitIsNotVerifiable(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*fakeVerificationClient)
+		limit  string
+	}{
+		{"bytes", func(f *fakeVerificationClient) { f.size.Bytes = verificationMaxBytes + 1 }, strconv.FormatInt(verificationMaxBytes, 10)},
+		{"files", func(f *fakeVerificationClient) { f.size.Files = verificationMaxFiles + 1 }, strconv.FormatInt(verificationMaxFiles, 10)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, logPath, opts, client := verificationFixture(t)
+			tc.change(client)
+			if _, err := m.start(logPath, opts, client); err != nil {
+				t.Fatal(err)
+			}
+			record := awaitVerification(t, m, logPath)
+			if record.Status != "not_verifiable" || record.FinishedAt == nil || !strings.Contains(record.Error, tc.limit) {
+				t.Fatalf("a too big backup is not verifiable, and says which limit: %+v", record)
+			}
+			if len(client.paths) != 0 {
+				t.Fatal("nothing may be downloaded for a backup that is not verifiable")
+			}
+		})
+	}
+}
+
+func TestAFailedReadStaysFailed(t *testing.T) {
+	for name, change := range map[string]func(*fakeVerificationClient){
+		"inspect":       func(f *fakeVerificationClient) { f.inspectErr = errors.New("remote is down") },
+		"unknown size":  func(f *fakeVerificationClient) { f.size.Bytes = -1 },
+		"unknown files": func(f *fakeVerificationClient) { f.size.Files = -1 },
+		"retrieve": func(f *fakeVerificationClient) {
+			f.verify = func(context.Context, string, bool) error { return errors.New("read failed") }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, logPath, opts, client := verificationFixture(t)
+			change(client)
+			if _, err := m.start(logPath, opts, client); err != nil {
+				t.Fatal(err)
+			}
+			if record := awaitVerification(t, m, logPath); record.Status != "failed" || record.Error == "" {
+				t.Fatalf("a failed read is a failure, not a size verdict: %+v", record)
+			}
+		})
+	}
 }

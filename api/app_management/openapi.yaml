@@ -958,7 +958,9 @@ paths:
     post:
       summary: Download and compare a backup in private temporary storage
       description: |
-        Starts one asynchronous data verification, limited to 1 GiB and one hour.
+        Starts one asynchronous data verification, limited to 1 GiB, 100,000 files
+        and one hour; a bigger backup ends as not_verifiable. A destination kept
+        with restic is refused (400): use its repository check instead.
         No app is started or stopped and no existing app data is replaced.
         Only one verification runs at a time. Temporary data is removed only
         after transfers are confirmed stopped. Existing backups have no original
