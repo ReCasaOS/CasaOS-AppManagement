@@ -2,6 +2,7 @@ package v2
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -800,4 +801,49 @@ func signInError(ctx echo.Context, err error) error {
 	}
 
 	return backupError(ctx, err)
+}
+
+// BackupVerificationSchedule says when the newest backups are read back by themselves.
+func (a *AppManagement) BackupVerificationSchedule(ctx echo.Context) error {
+	v, err := service.GetVerificationSchedule()
+	if err != nil {
+		return backupError(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.BackupVerificationScheduleOK{Data: verificationScheduleOut(v)})
+}
+
+// SetBackupVerificationSchedule saves it. The body is read strictly: a misspelt field would
+// otherwise save a default nobody chose. A last_run sent is the box's to keep and is ignored.
+func (a *AppManagement) SetBackupVerificationSchedule(ctx echo.Context) error {
+	var body struct {
+		Enabled   *bool           `json:"enabled"`
+		EveryDays *int            `json:"every_days"`
+		At        *string         `json:"at"`
+		LastRun   json.RawMessage `json:"last_run"`
+	}
+	decoder := json.NewDecoder(ctx.Request().Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil || body.Enabled == nil || body.EveryDays == nil || body.At == nil {
+		return backupBadRequest(ctx, errors.New("a verification schedule is JSON with enabled, every_days and at"))
+	}
+
+	err := service.SetVerificationSchedule(service.VerificationSchedule{Enabled: *body.Enabled, EveryDays: *body.EveryDays, At: *body.At})
+	if errors.Is(err, service.ErrInvalidVerificationSchedule) {
+		return backupBadRequest(ctx, err)
+	}
+	if err != nil {
+		return backupError(ctx, err)
+	}
+
+	return a.BackupVerificationSchedule(ctx)
+}
+
+func verificationScheduleOut(v service.VerificationSchedule) *codegen.BackupVerificationSchedule {
+	out := &codegen.BackupVerificationSchedule{Enabled: v.Enabled, EveryDays: v.EveryDays, At: v.At}
+	if !v.LastRun.IsZero() {
+		out.LastRun = &v.LastRun
+	}
+
+	return out
 }
