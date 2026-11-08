@@ -1,0 +1,316 @@
+package service
+
+import (
+	"context"
+	stdjson "encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/rclone"
+)
+
+type fakeVerificationClient struct {
+	manifest   []byte
+	size       rclone.VerificationSize
+	free       int64
+	verify     func(context.Context, string, bool) error
+	inspectErr error
+	fetches    int
+	change     bool
+	paths      []string
+	limits     []int64
+}
+
+func (f *fakeVerificationClient) FetchLimited(_ context.Context, _, _ string, limit int64) ([]byte, error) {
+	f.fetches++
+	if int64(len(f.manifest)) > limit {
+		return nil, errors.New("too large")
+	}
+	if f.change && f.fetches > 1 {
+		return append(append([]byte{}, f.manifest...), ' '), nil
+	}
+	return f.manifest, nil
+}
+
+func (f *fakeVerificationClient) InspectBackupPath(context.Context, string, string, bool) (rclone.VerificationSize, error) {
+	return f.size, f.inspectErr
+}
+
+func (f *fakeVerificationClient) StagingFreeSpace(context.Context, string) (int64, error) {
+	return f.free, nil
+}
+
+func (f *fakeVerificationClient) VerifyBackupPath(ctx context.Context, _, _, local string, directory bool, limit int64) error {
+	f.paths = append(f.paths, local)
+	f.limits = append(f.limits, limit)
+	if f.verify != nil {
+		return f.verify(ctx, local, directory)
+	}
+	if limit < 4 {
+		return errors.New("limit")
+	}
+	if directory {
+		local = filepath.Join(local, "data")
+	}
+	return os.WriteFile(local, []byte("data"), 0o600)
+}
+
+func verificationFixture(t *testing.T) (*backupVerificationManager, string, BackupVerificationOptions, *fakeVerificationClient) {
+	t.Helper()
+	raw, err := stdjson.Marshal(BackupManifest{
+		FormatVersion: BackupFormatVersion, App: "demo",
+		Operations: []BackupOperation{{Kind: BackupKindBind, Source: "/production/never-write-here", Destination: "binds/1", Directory: true}},
+		Skipped:    []BackupEntry{{Skip: "kernel interface"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &backupVerificationManager{}, filepath.Join(t.TempDir(), "verifications.json"),
+		BackupVerificationOptions{Destination: "nas", App: "demo", Stamp: "2026-10-04"},
+		&fakeVerificationClient{manifest: raw, size: rclone.VerificationSize{Bytes: 4, Files: 1}, free: 2 * verificationMaxBytes}
+}
+
+func awaitVerification(t *testing.T, m *backupVerificationManager, logPath string) BackupVerificationRecord {
+	t.Helper()
+	m.mu.Lock()
+	done := m.done
+	m.mu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("verification did not finish")
+	}
+	records, err := m.list(logPath)
+	if err != nil || len(records) == 0 {
+		t.Fatalf("missing verification history: %+v %v", records, err)
+	}
+	return records[0]
+}
+
+func TestBackupVerificationChecksDataPrivatelyAndCleansUp(t *testing.T) {
+	m, logPath, opts, client := verificationFixture(t)
+	if _, err := m.start(logPath, opts, client); err != nil {
+		t.Fatal(err)
+	}
+	record := awaitVerification(t, m, logPath)
+	if record.Status != "passed" || record.CheckedOperations != 1 || record.SkippedCount != 1 || record.Bytes != 4 || record.Files != 1 || record.FinishedAt == nil {
+		t.Fatalf("unexpected verification: %+v", record)
+	}
+	if len(client.paths) != 1 || !strings.HasPrefix(client.paths[0], filepath.Dir(logPath)+string(os.PathSeparator)) {
+		t.Fatalf("copy escaped the private workspace: %v", client.paths)
+	}
+	if len(client.limits) != 1 || client.limits[0] != client.size.Bytes {
+		t.Fatalf("copy must be capped at its measured size, not the remaining overall allowance: %v", client.limits)
+	}
+	if _, err := os.Stat(client.paths[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temporary data was not cleaned: %v", err)
+	}
+	var reloaded backupVerificationManager
+	records, err := reloaded.list(logPath)
+	if err != nil || len(records) != 1 || records[0].Status != "passed" {
+		t.Fatalf("completed result was not persisted: %+v %v", records, err)
+	}
+}
+
+func TestBackupVerificationKeepsTheRemoteBasenameForSingleFiles(t *testing.T) {
+	m, logPath, opts, client := verificationFixture(t)
+	raw, err := stdjson.Marshal(BackupManifest{FormatVersion: BackupFormatVersion, App: opts.App,
+		Operations: []BackupOperation{{Kind: BackupKindBind, Source: "/etc/unrelated", Destination: "binds/1/app.conf"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.manifest = raw
+	if _, err := m.start(logPath, opts, client); err != nil {
+		t.Fatal(err)
+	}
+	record := awaitVerification(t, m, logPath)
+	if record.Status != "passed" || len(client.paths) != 1 || filepath.Base(client.paths[0]) != "app.conf" {
+		t.Fatalf("file should be compared under its original basename, privately: %+v %v", record, client.paths)
+	}
+}
+
+func TestBackupVerificationRejectsInvalidIdentifiersBeforeStarting(t *testing.T) {
+	for _, value := range []string{"", ".", "..", "../nas", "nas/path", "nas\\path", "nas:other", " nas", "nas\x00"} {
+		t.Run(value, func(t *testing.T) {
+			m, logPath, opts, client := verificationFixture(t)
+			opts.Destination = value
+			if _, err := m.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationInvalid) {
+				t.Fatalf("invalid destination accepted: %v", err)
+			}
+			if client.fetches != 0 {
+				t.Fatal("invalid request touched the remote")
+			}
+		})
+	}
+}
+
+func TestBackupVerificationCancellationWaitsForTheTransferToStop(t *testing.T) {
+	m, logPath, opts, client := verificationFixture(t)
+	entered, cancelled, stopped := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	client.verify = func(ctx context.Context, _ string, _ bool) error {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-stopped
+		return ctx.Err()
+	}
+	record, err := m.start(logPath, opts, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	if err := m.cancelRun(logPath, record.ID); err != nil {
+		t.Fatal(err)
+	}
+	<-cancelled
+	records, err := m.list(logPath)
+	if err != nil || records[0].Status != "running" {
+		t.Fatalf("cancellation must not claim the transfer already stopped: %+v %v", records, err)
+	}
+	if _, err := m.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationBusy) {
+		t.Fatalf("second job should be refused until the first stops: %v", err)
+	}
+	close(stopped)
+	if result := awaitVerification(t, m, logPath); result.Status != "cancelled" {
+		t.Fatalf("unexpected cancellation result: %+v", result)
+	}
+}
+
+func TestBackupVerificationRetainsWorkspaceWhenStopIsUncertain(t *testing.T) {
+	m, logPath, opts, client := verificationFixture(t)
+	client.verify = func(context.Context, string, bool) error { return rclone.ErrVerificationJobUncertain }
+	if _, err := m.start(logPath, opts, client); err != nil {
+		t.Fatal(err)
+	}
+	record := awaitVerification(t, m, logPath)
+	if record.Status != "failed" || !strings.Contains(record.Error, "retained") {
+		t.Fatalf("uncertain transfer should be visible: %+v", record)
+	}
+	if _, err := os.Stat(client.paths[0]); err != nil {
+		t.Fatalf("workspace removed while the daemon may still write: %v", err)
+	}
+	if _, err := m.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationBusy) {
+		t.Fatalf("an unconfirmed old transfer must block a new job: %v", err)
+	}
+	var restarted backupVerificationManager
+	if _, err := restarted.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationBusy) {
+		t.Fatalf("restarting the service must not erase the uncertainty: %v", err)
+	}
+}
+
+func TestBackupVerificationDoesNotReportSuccessWhenHistoryCannotBeWritten(t *testing.T) {
+	m, logPath, opts, client := verificationFixture(t)
+	client.verify = func(_ context.Context, local string, _ bool) error {
+		if err := os.WriteFile(filepath.Join(local, "data"), []byte("data"), 0o600); err != nil {
+			return err
+		}
+		if err := os.Remove(logPath); err != nil {
+			return err
+		}
+		return os.Mkdir(logPath, 0o700) // make the atomic replacement fail
+	}
+	if _, err := m.start(logPath, opts, client); err != nil {
+		t.Fatal(err)
+	}
+	record := awaitVerification(t, m, logPath)
+	if record.Status != "failed" || !strings.Contains(record.Error, "could not be saved") {
+		t.Fatalf("a missing durable result must not be presented as success: %+v", record)
+	}
+}
+
+func TestBackupVerificationHistoryIsBounded(t *testing.T) {
+	m, logPath, _, _ := verificationFixture(t)
+	records := make([]BackupVerificationRecord, backupLogKept+1)
+	for i := range records {
+		records[i].Status = "passed"
+	}
+	records[0].ID = "discarded"
+	if err := writeVerificationLog(logPath, records); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := m.list(logPath)
+	if err != nil || len(loaded) != backupLogKept {
+		t.Fatalf("history was not bounded: records=%d err=%v", len(loaded), err)
+	}
+	for _, record := range loaded {
+		if record.ID == "discarded" {
+			t.Fatal("oldest result was retained beyond the history limit")
+		}
+	}
+}
+
+func TestBackupVerificationRejectsFailuresWithoutExposingBackendSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*fakeVerificationClient)
+	}{
+		{"size limit", func(f *fakeVerificationClient) { f.size.Bytes = verificationMaxBytes + 1 }},
+		{"file count limit", func(f *fakeVerificationClient) { f.size.Files = verificationMaxFiles + 1 }},
+		{"no free space", func(f *fakeVerificationClient) { f.free = 0 }},
+		{"unknown size", func(f *fakeVerificationClient) { f.size.Bytes = -1 }},
+		{"changed manifest", func(f *fakeVerificationClient) { f.change = true }},
+		{"changed contents", func(f *fakeVerificationClient) { f.size.Bytes = 9 }},
+		{"backend secret", func(f *fakeVerificationClient) { f.inspectErr = errors.New("https://cloud/?token=never-return-this") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, logPath, opts, client := verificationFixture(t)
+			tc.change(client)
+			if _, err := m.start(logPath, opts, client); err != nil {
+				t.Fatal(err)
+			}
+			record := awaitVerification(t, m, logPath)
+			if record.Status != "failed" || record.Error == "" || strings.Contains(record.Error, "never-return-this") {
+				t.Fatalf("unsafe failure result: %+v", record)
+			}
+		})
+	}
+}
+
+func TestBackupVerificationMarksInterruptedHistoryAndPreservesCorruption(t *testing.T) {
+	m, logPath, _, _ := verificationFixture(t)
+	if err := writeVerificationLog(logPath, []BackupVerificationRecord{{ID: "old", Status: "running"}}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := m.list(logPath)
+	if err != nil || len(records) != 1 || records[0].Status != "interrupted" {
+		t.Fatalf("old running job must not become a success: %+v %v", records, err)
+	}
+	if err := os.WriteFile(logPath, []byte("broken history"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var restarted backupVerificationManager
+	if _, err := restarted.list(logPath); err == nil {
+		t.Fatal("corrupt history must not be silently replaced")
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil || string(raw) != "broken history" {
+		t.Fatalf("corrupt file was altered: %q %v", raw, err)
+	}
+}
+
+func TestBackupVerificationRejectsUnsafeManifestPaths(t *testing.T) {
+	for _, destination := range []string{"../outside", "/binds/1", "binds/../outside", "binds/1\\outside", "binds/0", "binds/1\x00", "other/1"} {
+		raw, err := stdjson.Marshal(BackupManifest{FormatVersion: BackupFormatVersion, App: "demo", Operations: []BackupOperation{{Kind: BackupKindBind, Destination: destination, Directory: true}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := verificationPlan(raw, "demo"); err == nil {
+			t.Fatalf("unsafe manifest accepted: %q", destination)
+		}
+	}
+}
+
+func TestBackupVerificationRefusesLocalSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(dir, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := verificationLocalSize(dir, verificationMaxBytes); err == nil {
+		t.Fatal("a retrieved symlink must not be followed")
+	}
+}

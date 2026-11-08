@@ -23,13 +23,3 @@ func (a *AppManagement) BackupVerificationSchedule(ctx echo.Context) error {
 func (a *AppManagement) SetBackupVerificationSchedule(ctx echo.Context) error {
 	return notImplemented(ctx)
 }
-
-func (a *AppManagement) BackupVerifications(ctx echo.Context) error { return notImplemented(ctx) }
-
-func (a *AppManagement) StartBackupVerification(ctx echo.Context) error {
-	return notImplemented(ctx)
-}
-
-func (a *AppManagement) CancelBackupVerification(ctx echo.Context, verificationId string) error {
-	return notImplemented(ctx)
-}
