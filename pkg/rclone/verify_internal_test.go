@@ -103,7 +103,7 @@ func TestVerificationChecksEndpointResultAndUsesBoundedExactFileFilter(t *testin
 				if err := json.Unmarshal([]byte(request.PostForm.Get("_config")), &config); err != nil {
 					t.Fatal(err)
 				}
-				if config["MaxTransfer"] != float64(42*(i+1)) || config["CutoffMode"] != "HARD" || config["Links"] != false || config["SizeOnly"] != false {
+				if config["MaxTransfer"] != float64(42*(i+1)+1) || config["CutoffMode"] != "HARD" || config["Links"] != false || config["SizeOnly"] != false {
 					t.Fatalf("limits: %+v", config)
 				}
 				if !strings.HasPrefix(request.PostForm.Get("dstFs"), ":local,copy_links=false,links=false,no_clone=true:") {
@@ -282,5 +282,19 @@ func TestVerificationFetchIsBoundedAndRejectsSymlinks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// rclone refuses a copy once the bytes so far reach MaxTransfer (>=, fs/operations
+// copy.go checkLimits), so a limit of exactly the size refuses an empty file, and
+// an empty file copied last in a directory. One byte over is still caught: the
+// local size is compared with the measured one afterwards.
+func TestVerificationLimitLetsEmptyFilesThrough(t *testing.T) {
+	var config map[string]any
+	if err := json.Unmarshal([]byte(verificationConfig(context.Background(), 0)), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config["MaxTransfer"] != float64(1) {
+		t.Fatalf("an empty object would be refused: %+v", config["MaxTransfer"])
 	}
 }

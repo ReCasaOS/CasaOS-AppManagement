@@ -52,8 +52,10 @@ func verificationConfig(ctx context.Context, maxBytes int64) string {
 	if duration <= 0 {
 		duration = time.Nanosecond
 	}
+	// rclone refuses a copy once bytes so far >= MaxTransfer, which at exactly
+	// maxBytes refuses every empty file; the caller compares sizes afterwards.
 	encoded, _ := json.Marshal(map[string]any{
-		"MaxTransfer": maxBytes, "MaxDuration": duration.String(), "CutoffMode": "HARD",
+		"MaxTransfer": maxBytes + 1, "MaxDuration": duration.String(), "CutoffMode": "HARD",
 		"Transfers": 1, "Checkers": 1, "LowLevelRetries": 1, "Links": false,
 		"SizeOnly": false, "IgnoreSize": false, "IgnoreChecksum": false,
 		"IgnoreExisting": false, "IgnoreTimes": true, "UpdateOlder": false, "MaxDepth": -1,
