@@ -3931,7 +3931,7 @@ components:
           description: |-
             One of running, passed, failed, cancelled, interrupted, not_verifiable.
             Cancelled and interrupted are not a result, neither a pass nor a failure.
-            Not verifiable means the backup is bigger than the limits, or kept with restic.
+            Not verifiable means the backup is bigger than the limits.
             Kept as a string to preserve existing generated enum names.
         started_at:
           type: string
