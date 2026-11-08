@@ -96,7 +96,7 @@ func (c *Client) callContext(ctx context.Context, endpoint string, params map[st
 		}
 		// A socket that is not there is the common case, and it reads as a
 		// connection error rather than anything rclone said.
-		return fmt.Errorf("%w: %s", ErrDaemonUnreachable, err)
+		return fmt.Errorf("%w: %w", ErrDaemonUnreachable, err)
 	}
 
 	if response.StatusCode() != http.StatusOK {
@@ -106,10 +106,10 @@ func (c *Client) callContext(ctx context.Context, endpoint string, params map[st
 			Error string `json:"error"`
 		}
 		if json.Unmarshal(response.Body(), &failure) == nil && failure.Error != "" {
-			return fmt.Errorf("rclone: %s", failure.Error)
+			return answeredError{fmt.Errorf("rclone: %s", failure.Error)}
 		}
 
-		return fmt.Errorf("rclone answered %d to %s", response.StatusCode(), endpoint)
+		return answeredError{fmt.Errorf("rclone answered %d to %s", response.StatusCode(), endpoint)}
 	}
 
 	if out == nil {
@@ -117,6 +117,18 @@ func (c *Client) callContext(ctx context.Context, endpoint string, params map[st
 	}
 
 	return json.Unmarshal(response.Body(), out)
+}
+
+// answeredError is the daemon refusing a call, as opposed to the call not
+// reaching it or its answer being lost: whatever was asked did not happen.
+type answeredError struct{ error }
+
+// notStarted says a failed call certainly did nothing: the daemon refused it, or
+// the connection to it was never made.
+func notStarted(err error) bool {
+	var dial *net.OpError
+
+	return errors.As(err, &answeredError{}) || (errors.As(err, &dial) && dial.Op == "dial")
 }
 
 // Destinations lists the remotes this project put there, by their short name --

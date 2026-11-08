@@ -18,6 +18,8 @@ import (
 	"unicode"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/rclone"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"go.uber.org/zap"
 )
 
 const (
@@ -250,6 +252,10 @@ func (m *backupVerificationManager) run(ctx context.Context, client BackupVerifi
 	defer close(done)
 	defer markInProgress(record.App, "verification")()
 	err := m.verify(ctx, client, &record)
+	if failure := (verificationFailure{}); errors.As(err, &failure) && failure.cause != nil {
+		// the record keeps only the stage; the cause is for whoever reads the logs
+		logger.Error("backup verification failed", zap.String("id", record.ID), zap.String("stage", failure.stage), zap.Error(failure.cause))
+	}
 	now := time.Now().UTC()
 	record.FinishedAt = &now
 	switch {

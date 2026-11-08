@@ -90,6 +90,9 @@ func (c *Client) verificationJob(ctx context.Context, endpoint string, params ma
 		JobID int64 `json:"jobid"`
 	}
 	if err := c.callContext(ctx, endpoint, params, &started); err != nil {
+		if notStarted(err) {
+			return nil, errors.Join(errors.New("could not start the verification job"), err)
+		}
 		// A lost start response can hide an already running job's ID.
 		return nil, errors.Join(errors.New("could not start the verification job"), ctx.Err(), ErrVerificationJobUncertain)
 	}

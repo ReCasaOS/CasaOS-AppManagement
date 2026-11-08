@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-resty/resty/v2"
 )
 
 // Each endpoint runs as an asynchronous job, even when its useful output is a
@@ -296,5 +298,39 @@ func TestVerificationLimitLetsEmptyFilesThrough(t *testing.T) {
 	}
 	if config["MaxTransfer"] != float64(1) {
 		t.Fatalf("an empty object would be refused: %+v", config["MaxTransfer"])
+	}
+}
+
+// Only an answer lost after the request went out can hide a running job. A daemon
+// that is not there, or that answered with an error, started nothing: calling that
+// uncertain kept an empty workspace and refused every verification for two hours.
+func TestVerificationThatNeverStartedIsNotUncertain(t *testing.T) {
+	fastPolling(t)
+	errorAnswer, _ := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"directory not found"}`))
+	})
+	lostAnswer, _ := serverFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+	})
+	for _, tc := range []struct {
+		name      string
+		client    *Client
+		uncertain bool
+	}{
+		{"refused", &Client{http: resty.New().SetBaseURL("http://127.0.0.1:1")}, false},
+		{"error answer", errorAnswer, false},
+		{"lost answer", lostAnswer, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.client.InspectBackupPath(context.Background(), "test", "app/run/manifest.json", false)
+			if err == nil || errors.Is(err, ErrVerificationJobUncertain) != tc.uncertain {
+				t.Fatalf("uncertain=%v wanted, got %v", tc.uncertain, err)
+			}
+		})
 	}
 }

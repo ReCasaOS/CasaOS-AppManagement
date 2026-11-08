@@ -376,3 +376,25 @@ func TestBackupVerificationThatFinishedIsNotRecordedAsCancelled(t *testing.T) {
 		t.Fatalf("a finished check was hidden: %+v", record)
 	}
 }
+
+// A daemon that is down fails the run, and that is all: nothing is kept and the
+// next verification may start at once.
+func TestBackupVerificationWithTheDaemonDownBlocksNothing(t *testing.T) {
+	m, logPath, opts, client := verificationFixture(t)
+	client.inspectErr = errors.New("the rclone daemon is not answering")
+	if _, err := m.start(logPath, opts, client); err != nil {
+		t.Fatal(err)
+	}
+	if record := awaitVerification(t, m, logPath); record.Status != "failed" || strings.Contains(record.Error, "retained") {
+		t.Fatalf("unexpected verification: %+v", record)
+	}
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(logPath), "verification-work"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("workspace kept: %v %v", entries, err)
+	}
+	client.inspectErr = nil
+	if _, err := m.start(logPath, opts, client); err != nil {
+		t.Fatalf("the next verification was blocked: %v", err)
+	}
+	awaitVerification(t, m, logPath)
+}
