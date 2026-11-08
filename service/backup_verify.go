@@ -108,7 +108,7 @@ func (m *backupVerificationManager) start(logPath string, opts BackupVerificatio
 	if m.activeID != "" {
 		return BackupVerificationRecord{}, ErrBackupVerificationBusy
 	}
-	if err := verificationWorkspaceAvailable(logPath); err != nil {
+	if err := verificationWorkspaceAvailable(logPath, m.records); err != nil {
 		return BackupVerificationRecord{}, err
 	}
 	record := BackupVerificationRecord{
@@ -455,9 +455,14 @@ func verificationPlan(raw []byte, app string) ([]BackupOperation, int, error) {
 	return operations, len(manifest.Skipped), nil
 }
 
+// verificationStaleAfter is when a left workspace is reclaimed: a run's own
+// deadline and each job's MaxDuration are one hour, its stop wait 30 seconds.
+const verificationStaleAfter = 2 * time.Hour
+
 // An old transfer may outlive this process. Without its confirmed terminal job
-// state, neither deleting its workspace nor starting another bounded job is safe.
-func verificationWorkspaceAvailable(logPath string) error {
+// state, neither deleting its workspace nor starting another bounded job is safe
+// -- until the run that made it is long past every limit, or it would block for good.
+func verificationWorkspaceAvailable(logPath string, records []BackupVerificationRecord) error {
 	root := filepath.Join(filepath.Dir(logPath), "verification-work")
 	info, err := os.Lstat(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -471,9 +476,24 @@ func verificationWorkspaceAvailable(logPath string) error {
 		return errors.New("private verification workspace could not be inspected")
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "verify-") {
-			return fmt.Errorf("%w: a previous verification transfer could not be confirmed stopped; its temporary data needs recovery", ErrBackupVerificationBusy)
+		rest, ok := strings.CutPrefix(entry.Name(), "verify-")
+		if !ok {
+			continue
 		}
+		started := time.Time{}
+		if info, err := entry.Info(); err == nil {
+			started = info.ModTime() // the history may no longer hold its run
+		}
+		id, _, _ := strings.Cut(rest, "-")
+		for _, record := range records {
+			if record.ID == id {
+				started = record.StartedAt
+			}
+		}
+		if !started.IsZero() && time.Since(started) > verificationStaleAfter && os.RemoveAll(filepath.Join(root, entry.Name())) == nil {
+			continue
+		}
+		return fmt.Errorf("%w: a previous verification transfer could not be confirmed stopped; its temporary data needs recovery", ErrBackupVerificationBusy)
 	}
 	return nil
 }

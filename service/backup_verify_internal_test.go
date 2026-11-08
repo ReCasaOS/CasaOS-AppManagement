@@ -314,3 +314,41 @@ func TestBackupVerificationRefusesLocalSymlinks(t *testing.T) {
 		t.Fatal("a retrieved symlink must not be followed")
 	}
 }
+
+// A crash leaves its workspace behind, and the transfer it was running may still
+// be writing, so a recent one blocks. Every run ends within the hour, though, so
+// an old one is reclaimed rather than blocking verification for good.
+func TestBackupVerificationReclaimsAWorkspaceLeftLongAgo(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		started time.Duration
+		blocked bool
+	}{{"recent", -10 * time.Minute, true}, {"long ago", -3 * time.Hour, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, logPath, opts, client := verificationFixture(t)
+			if err := writeVerificationLog(logPath, []BackupVerificationRecord{{ID: "OLD", Status: "running", StartedAt: time.Now().Add(tc.started)}}); err != nil {
+				t.Fatal(err)
+			}
+			left := filepath.Join(filepath.Dir(logPath), "verification-work", "verify-OLD-123")
+			if err := os.MkdirAll(filepath.Join(left, "0"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			_, err := m.start(logPath, opts, client)
+			if tc.blocked {
+				if !errors.Is(err, ErrBackupVerificationBusy) {
+					t.Fatalf("a recent workspace must block: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("an old workspace must not block for good: %v", err)
+			}
+			if record := awaitVerification(t, m, logPath); record.Status != "passed" {
+				t.Fatalf("unexpected verification: %+v", record)
+			}
+			if _, err := os.Stat(left); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("old workspace was not reclaimed: %v", err)
+			}
+		})
+	}
+}
