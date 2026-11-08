@@ -22,7 +22,8 @@ type tourClient struct {
 	verified []string // app/stamp, in order
 	active   int
 	overlap  bool
-	hold     chan struct{} // when set, a verification waits for it to close
+	hold     chan struct{}    // when set, a verification waits for it to close
+	during   func(app string) // when set, called while each verification runs
 }
 
 func (c *tourClient) FetchLimited(_ context.Context, _, remote string, _ int64) ([]byte, error) {
@@ -48,8 +49,11 @@ func (c *tourClient) VerifyBackupPath(_ context.Context, _, remote, local string
 		c.overlap = true
 	}
 	c.verified = append(c.verified, strings.Join(strings.Split(remote, "/")[:2], "/"))
-	hold := c.hold
+	hold, during := c.hold, c.during
 	c.mu.Unlock()
+	if during != nil {
+		during(strings.Split(remote, "/")[0])
+	}
 	if hold != nil {
 		<-hold
 	}
@@ -78,6 +82,7 @@ func verificationTourInTempDir(t *testing.T) *upgradeFlag {
 	BackupVerificationLogPath = filepath.Join(dir, "verifications.json")
 	resticHeld = func(string) bool { return false }
 	backupVerificationTasks = backupVerificationManager{}
+	verifiedThisTour, verifiedFor = map[[2]string]bool{}, time.Time{}
 	t.Cleanup(func() {
 		if done := backupVerificationTasks.running(); done != nil {
 			<-done // a verification still writing to this test's directory
@@ -447,5 +452,127 @@ func TestACorruptEveryDaysNeverRunsAndIsSaidOnceAnHour(t *testing.T) {
 	RunDueVerifications(context.Background(), paris(8, 3, 0), client)
 	if got := client.seen(); strings.Join(got, ",") != "immich/s" {
 		t.Fatalf("verified %v", got)
+	}
+}
+
+// Each couple's stamp is chosen just before it is verified: a backup that ran meanwhile (and
+// whose retention may have deleted the stamp the tour began with) is the one verified.
+func TestTourPicksEachCoupleStampJustBeforeVerifyingIt(t *testing.T) {
+	verificationTourInTempDir(t)
+	saveVerificationSchedule(t, VerificationSchedule{Enabled: true, EveryDays: 7, At: "03:00"})
+	_ = SaveBackupSchedules([]BackupSchedule{
+		{App: "immich", Destination: "nas", Every: ScheduleDaily, At: "03:00", Enabled: true},
+		{App: "jellyfin", Destination: "nas", Every: ScheduleDaily, At: "03:00", Enabled: true},
+	})
+	recordRuns(t,
+		BackupRunRecord{App: "immich", Destination: "nas", Stamp: "s", StartedAt: paris(7, 3, 0)},
+		BackupRunRecord{App: "jellyfin", Destination: "nas", Stamp: "j-old", StartedAt: paris(7, 3, 0)},
+	)
+
+	client := &tourClient{}
+	client.during = func(app string) {
+		if app == "immich" {
+			recordRuns(t, BackupRunRecord{App: "jellyfin", Destination: "nas", Stamp: "j-new", StartedAt: paris(8, 3, 0)})
+		}
+	}
+	RunDueVerifications(context.Background(), paris(8, 3, 0), client)
+
+	if got := client.seen(); strings.Join(got, ",") != "immich/s,jellyfin/j-new" {
+		t.Fatalf("verified %v", got)
+	}
+}
+
+// A couple whose app is being backed up is left for the next tick: no record, no failure, and
+// the tour is not recorded until it is done; what was verified is not verified again.
+func TestTourPostponesACoupleWhoseAppIsBackingUp(t *testing.T) {
+	verificationTourInTempDir(t)
+	saveVerificationSchedule(t, VerificationSchedule{Enabled: true, EveryDays: 7, At: "03:00", LastRun: paris(1, 3, 0)})
+	_ = SaveBackupSchedules([]BackupSchedule{
+		{App: "immich", Destination: "nas", Every: ScheduleDaily, At: "03:00", Enabled: true},
+		{App: "jellyfin", Destination: "nas", Every: ScheduleDaily, At: "03:00", Enabled: true},
+	})
+	recordRuns(t,
+		BackupRunRecord{App: "immich", Destination: "nas", Stamp: "s", StartedAt: paris(7, 3, 0)},
+		BackupRunRecord{App: "jellyfin", Destination: "nas", Stamp: "j", StartedAt: paris(7, 3, 0)},
+	)
+
+	backingUp := markInProgress("jellyfin", "backup")
+	client := &tourClient{}
+	RunDueVerifications(context.Background(), paris(8, 3, 0), client)
+	backingUp()
+
+	if got := client.seen(); strings.Join(got, ",") != "immich/s" {
+		t.Fatalf("verified %v", got)
+	}
+	if records, _ := BackupVerifications(); len(records) != 1 {
+		t.Fatalf("the postponed couple has no record: %+v", records)
+	}
+	if v, _ := GetVerificationSchedule(); !v.LastRun.Equal(paris(1, 3, 0)) {
+		t.Fatalf("a tour with a couple postponed is not recorded: %v", v.LastRun)
+	}
+
+	RunDueVerifications(context.Background(), paris(8, 3, 1), client)
+	if got := client.seen(); strings.Join(got, ",") != "immich/s,jellyfin/j" {
+		t.Fatalf("the next tick verifies only what was postponed: %v", got)
+	}
+	if v, _ := GetVerificationSchedule(); !v.LastRun.Equal(paris(8, 3, 1)) {
+		t.Fatalf("then the tour is recorded: %v", v.LastRun)
+	}
+}
+
+// The verification is listed as running on its app by the time it has started, so a forced
+// backup of that app, and the core's upgrade, see it.
+func TestAVerificationIsListedBeforeItsStartReturns(t *testing.T) {
+	verificationTourInTempDir(t)
+	_ = SaveBackupSchedules([]BackupSchedule{{App: "immich", Destination: "nas", Every: ScheduleDaily, At: "03:00", Enabled: true}})
+
+	client := &tourClient{hold: make(chan struct{})}
+	if _, err := StartBackupVerification(BackupVerificationOptions{Destination: "nas", App: "immich", Stamp: "s"}, client); err != nil {
+		t.Fatal(err)
+	}
+	listed := RunningOperations()
+	result, err := ForceSchedules(context.Background(), ForceRequest{App: "immich"}, &fakeRunner{})
+	close(client.hold)
+	forcedRuns.Wait()
+
+	if len(listed) != 1 || listed[0] != (AppOperation{App: "immich", Kind: "verification"}) {
+		t.Fatalf("listed as soon as it started: %+v", listed)
+	}
+	if err != nil || len(result.Started) != 0 || len(result.Refused) != 1 || !strings.Contains(result.Refused[0].Reason, "verification") {
+		t.Fatalf("a forced backup of the app being verified is refused: %+v %v", result, err)
+	}
+}
+
+// A workspace a crash left behind blocks verification for two hours. The tour waits that out
+// instead of skipping every couple and recording a tour that verified nothing.
+func TestTourWaitsOutAWorkspaceLeftByACrash(t *testing.T) {
+	verificationTourInTempDir(t)
+	saveVerificationSchedule(t, VerificationSchedule{Enabled: true, EveryDays: 7, At: "03:00", LastRun: paris(1, 3, 0)})
+	_ = SaveBackupSchedules([]BackupSchedule{{App: "immich", Destination: "nas", Every: ScheduleDaily, At: "03:00", Enabled: true}})
+	recordRuns(t, BackupRunRecord{App: "immich", Destination: "nas", Stamp: "s", StartedAt: paris(7, 3, 0)})
+	left := filepath.Join(filepath.Dir(BackupVerificationLogPath), "verification-work", "verify-OLD-123")
+	if err := os.MkdirAll(left, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &tourClient{}
+	RunDueVerifications(context.Background(), paris(8, 3, 0), client)
+	if got := client.seen(); len(got) != 0 {
+		t.Fatalf("nothing can start: %v", got)
+	}
+	if v, _ := GetVerificationSchedule(); !v.LastRun.Equal(paris(1, 3, 0)) {
+		t.Fatalf("a tour that could verify nothing is not recorded: %v", v.LastRun)
+	}
+
+	longAgo := time.Now().Add(-3 * time.Hour)
+	if err := os.Chtimes(left, longAgo, longAgo); err != nil {
+		t.Fatal(err)
+	}
+	RunDueVerifications(context.Background(), paris(8, 5, 0), client)
+	if got := client.seen(); strings.Join(got, ",") != "immich/s" {
+		t.Fatalf("once the workspace is reclaimed the tour runs: %v", got)
+	}
+	if v, _ := GetVerificationSchedule(); !v.LastRun.Equal(paris(8, 5, 0)) {
+		t.Fatalf("and is recorded: %v", v.LastRun)
 	}
 }

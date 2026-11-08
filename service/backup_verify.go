@@ -37,8 +37,10 @@ var (
 	ErrBackupVerificationNotFound   = errors.New("backup verification not found")
 	ErrBackupVerificationNotRunning = errors.New("backup verification is not running")
 	ErrBackupVerificationRestic     = errors.New("this destination keeps its backups with restic: use its repository check")
-	BackupVerificationLogPath       = "/var/lib/casaos/backups/verifications.json"
-	backupVerificationTasks         backupVerificationManager
+	// not busy: nothing runs, and it lasts until the workspace is reclaimed (verificationStaleAfter)
+	ErrBackupVerificationNeedsRecovery = errors.New("a previous verification transfer could not be confirmed stopped; its temporary data needs recovery")
+	BackupVerificationLogPath          = "/var/lib/casaos/backups/verifications.json"
+	backupVerificationTasks            backupVerificationManager
 	// replaced by tests; a destination kept with restic has its own repository check
 	resticHeld = func(name string) bool { return restic.New().Held(name) }
 )
@@ -140,7 +142,9 @@ func (m *backupVerificationManager) start(logPath string, opts BackupVerificatio
 	m.records = records
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	m.activeID, m.cancel, m.done = record.ID, cancel, make(chan struct{})
-	go m.run(ctx, client, record, m.done)
+	// listed before start returns, so whoever asks what runs on the app next sees it
+	unmark := markInProgress(record.App, "verification")
+	go m.run(ctx, client, record, m.done, unmark)
 	return record, nil
 }
 
@@ -261,9 +265,9 @@ type verificationFailure struct {
 func (e verificationFailure) Error() string { return e.stage }
 func (e verificationFailure) Unwrap() error { return e.cause }
 
-func (m *backupVerificationManager) run(ctx context.Context, client BackupVerificationClient, record BackupVerificationRecord, done chan struct{}) {
+func (m *backupVerificationManager) run(ctx context.Context, client BackupVerificationClient, record BackupVerificationRecord, done chan struct{}, unmark func()) {
 	defer close(done)
-	defer markInProgress(record.App, "verification")()
+	defer unmark()
 	err := m.verify(ctx, client, &record)
 	if failure := (verificationFailure{}); errors.As(err, &failure) && failure.cause != nil {
 		// the record keeps only the stage; the cause is for whoever reads the logs
@@ -512,7 +516,7 @@ func verificationWorkspaceAvailable(logPath string, records []BackupVerification
 		if !started.IsZero() && time.Since(started) > verificationStaleAfter && os.RemoveAll(filepath.Join(root, entry.Name())) == nil {
 			continue
 		}
-		return fmt.Errorf("%w: a previous verification transfer could not be confirmed stopped; its temporary data needs recovery", ErrBackupVerificationBusy)
+		return ErrBackupVerificationNeedsRecovery
 	}
 	return nil
 }

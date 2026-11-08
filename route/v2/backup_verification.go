@@ -75,7 +75,8 @@ func backupVerificationError(ctx echo.Context, err error) error {
 	switch {
 	case errors.Is(err, service.ErrBackupVerificationInvalid), errors.Is(err, service.ErrBackupVerificationRestic):
 		status, message = http.StatusBadRequest, err.Error()
-	case errors.Is(err, service.ErrBackupVerificationBusy), errors.Is(err, service.ErrBackupVerificationNotRunning):
+	case errors.Is(err, service.ErrBackupVerificationBusy), errors.Is(err, service.ErrBackupVerificationNeedsRecovery),
+		errors.Is(err, service.ErrBackupVerificationNotRunning):
 		status, message = http.StatusConflict, err.Error()
 	case errors.Is(err, service.ErrBackupVerificationNotFound):
 		status, message = http.StatusNotFound, service.ErrBackupVerificationNotFound.Error()

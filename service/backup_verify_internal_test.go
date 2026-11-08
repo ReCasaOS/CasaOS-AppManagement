@@ -198,11 +198,11 @@ func TestBackupVerificationRetainsWorkspaceWhenStopIsUncertain(t *testing.T) {
 	if _, err := os.Stat(client.paths[0]); err != nil {
 		t.Fatalf("workspace removed while the daemon may still write: %v", err)
 	}
-	if _, err := m.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationBusy) {
+	if _, err := m.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationNeedsRecovery) {
 		t.Fatalf("an unconfirmed old transfer must block a new job: %v", err)
 	}
 	var restarted backupVerificationManager
-	if _, err := restarted.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationBusy) {
+	if _, err := restarted.start(logPath, opts, client); !errors.Is(err, ErrBackupVerificationNeedsRecovery) {
 		t.Fatalf("restarting the service must not erase the uncertainty: %v", err)
 	}
 }
@@ -337,7 +337,7 @@ func TestBackupVerificationReclaimsAWorkspaceLeftLongAgo(t *testing.T) {
 			}
 			_, err := m.start(logPath, opts, client)
 			if tc.blocked {
-				if !errors.Is(err, ErrBackupVerificationBusy) {
+				if !errors.Is(err, ErrBackupVerificationNeedsRecovery) {
 					t.Fatalf("a recent workspace must block: %v", err)
 				}
 				return

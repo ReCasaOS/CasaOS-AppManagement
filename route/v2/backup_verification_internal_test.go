@@ -50,6 +50,7 @@ func TestVerificationAPIErrorsPreserveStatusWithoutTransportDetails(t *testing.T
 		{"invalid", fmt.Errorf("destination required: %w", service.ErrBackupVerificationInvalid), http.StatusBadRequest},
 		{"restic", service.ErrBackupVerificationRestic, http.StatusBadRequest},
 		{"busy", service.ErrBackupVerificationBusy, http.StatusConflict},
+		{"needs recovery", service.ErrBackupVerificationNeedsRecovery, http.StatusConflict},
 		{"finished", service.ErrBackupVerificationNotRunning, http.StatusConflict},
 		{"missing", service.ErrBackupVerificationNotFound, http.StatusNotFound},
 		{"transport", errors.New("https://example.invalid?access_token=do-not-return"), http.StatusInternalServerError},
