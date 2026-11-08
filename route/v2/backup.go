@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -824,11 +825,15 @@ func (a *AppManagement) SetBackupVerificationSchedule(ctx echo.Context) error {
 	}
 	decoder := json.NewDecoder(ctx.Request().Body)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&body); err != nil || body.Enabled == nil || body.EveryDays == nil || body.At == nil {
+	err := decoder.Decode(&body)
+	if err == nil && decoder.Decode(&struct{}{}) != io.EOF {
+		err = errors.New("trailing data")
+	}
+	if err != nil || body.Enabled == nil || body.EveryDays == nil || body.At == nil {
 		return backupBadRequest(ctx, errors.New("a verification schedule is JSON with enabled, every_days and at"))
 	}
 
-	err := service.SetVerificationSchedule(service.VerificationSchedule{Enabled: *body.Enabled, EveryDays: *body.EveryDays, At: *body.At})
+	err = service.SetVerificationSchedule(service.VerificationSchedule{Enabled: *body.Enabled, EveryDays: *body.EveryDays, At: *body.At})
 	if errors.Is(err, service.ErrInvalidVerificationSchedule) {
 		return backupBadRequest(ctx, err)
 	}

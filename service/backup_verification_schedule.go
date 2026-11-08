@@ -33,6 +33,10 @@ type VerificationSchedule struct {
 }
 
 var (
+	// a variable so a test can count what is said
+	logVerificationScheduleBroken     = logger.Error
+	lastVerificationScheduleBrokenLog time.Time
+
 	verificationScheduleLock sync.Mutex
 	verificationTour         sync.Mutex // held by the tour that is running
 )
@@ -86,11 +90,8 @@ func writeVerificationSchedule(v VerificationSchedule) error {
 // box's to keep. Switching it on spends the slot already passed, so the first verification
 // waits for the next one rather than starting the moment the switch is flipped.
 func SetVerificationSchedule(v VerificationSchedule) error {
-	if v.EveryDays < 1 || v.EveryDays > 30 {
-		return fmt.Errorf("%w: every_days is 1 to 30, not %d", ErrInvalidVerificationSchedule, v.EveryDays)
-	}
-	if _, _, err := parseAt(v.At); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidVerificationSchedule, err)
+	if err := checkVerificationSchedule(v); err != nil {
+		return err
 	}
 
 	verificationScheduleLock.Lock()
@@ -113,6 +114,18 @@ func SetVerificationSchedule(v VerificationSchedule) error {
 	return writeVerificationSchedule(v)
 }
 
+// checkVerificationSchedule refuses what PUT refuses; a file edited by hand is held to it too.
+func checkVerificationSchedule(v VerificationSchedule) error {
+	if v.EveryDays < 1 || v.EveryDays > 30 {
+		return fmt.Errorf("%w: every_days is 1 to 30, not %d", ErrInvalidVerificationSchedule, v.EveryDays)
+	}
+	if _, _, err := parseAt(v.At); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidVerificationSchedule, err)
+	}
+
+	return nil
+}
+
 // verificationSlot is today's time of day, or yesterday's when today's is still to come.
 func verificationSlot(v VerificationSchedule, now time.Time) (time.Time, error) {
 	return mostRecentSlot(BackupSchedule{Every: ScheduleDaily, At: v.At}, now)
@@ -124,6 +137,10 @@ func verificationSlot(v VerificationSchedule, now time.Time) (time.Time, error) 
 func VerificationDue(v VerificationSchedule, now time.Time) (bool, error) {
 	if !v.Enabled {
 		return false, nil
+	}
+	// every_days 0 would be due every minute, re-downloading every backup
+	if err := checkVerificationSchedule(v); err != nil {
+		return false, err
 	}
 	slot, err := verificationSlot(v, now)
 	if err != nil {
@@ -160,8 +177,8 @@ func RunDueVerifications(ctx context.Context, now time.Time, client BackupVerifi
 		return
 	}
 	if due, err := VerificationDue(v, now); err != nil || !due {
-		if err != nil {
-			logger.Error("the verification schedule cannot be understood and will never run", zap.Error(err))
+		if err != nil && verificationBrokenNoticeDue() {
+			logVerificationScheduleBroken("the verification schedule cannot be understood and will never run", zap.Error(err))
 		}
 		return
 	}
@@ -185,6 +202,18 @@ func RunDueVerifications(ctx context.Context, now time.Time, client BackupVerifi
 	if err := recordVerificationTour(now); err != nil {
 		logger.Error("could not record when the verifications ran, so they may run again", zap.Error(err))
 	}
+}
+
+// verificationBrokenNoticeDue lets a broken schedule be said once an hour, not every minute.
+// Only the tour, which runs one at a time, calls it.
+func verificationBrokenNoticeDue() bool {
+	now := backupClock()
+	if !lastVerificationScheduleBrokenLog.IsZero() && now.Sub(lastVerificationScheduleBrokenLog) < time.Hour {
+		return false
+	}
+	lastVerificationScheduleBrokenLog = now
+
+	return true
 }
 
 // verificationTargets is the newest successful backup of each couple an enabled backup

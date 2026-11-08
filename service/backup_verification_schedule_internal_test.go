@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/rclone"
+	"go.uber.org/zap"
 )
 
 // tourClient answers every app with a manifest of its own, writes down what it was asked to
@@ -398,5 +399,53 @@ func TestPutIgnoresClientLastRun(t *testing.T) {
 	}
 	if v, _ := GetVerificationSchedule(); !v.LastRun.Equal(paris(8, 3, 0)) {
 		t.Fatalf("the client's LastRun is not the slot spent: %v", v.LastRun)
+	}
+}
+
+// A hand-edited file with every_days out of range would otherwise be due every minute, and the
+// box would download every backup again and again.
+func TestACorruptEveryDaysNeverRunsAndIsSaidOnceAnHour(t *testing.T) {
+	verificationTourInTempDir(t)
+	said := 0
+	was := logVerificationScheduleBroken
+	logVerificationScheduleBroken = func(string, ...zap.Field) { said++ }
+	t.Cleanup(func() { logVerificationScheduleBroken = was; lastVerificationScheduleBrokenLog = time.Time{} })
+	_ = SaveBackupSchedules([]BackupSchedule{{App: "immich", Destination: "nas", Every: ScheduleDaily, At: "03:00", Enabled: true}})
+	recordRuns(t, BackupRunRecord{App: "immich", Destination: "nas", Stamp: "s", StartedAt: paris(7, 3, 0)})
+
+	client := &tourClient{}
+	for _, days := range []int{0, -3, 31} {
+		lastVerificationScheduleBrokenLog = time.Time{}
+		said = 0
+		stored := VerificationSchedule{Enabled: true, EveryDays: days, At: "03:00", LastRun: paris(1, 3, 0)}
+		saveVerificationSchedule(t, stored)
+		if _, err := VerificationDue(stored, paris(8, 3, 0)); err == nil {
+			t.Fatalf("every_days %d is an error", days)
+		}
+
+		clockAt(t, paris(8, 3, 0))
+		RunDueVerifications(context.Background(), paris(8, 3, 0), client)
+		clockAt(t, paris(8, 3, 1))
+		RunDueVerifications(context.Background(), paris(8, 3, 1), client)
+		clockAt(t, paris(8, 4, 1))
+		RunDueVerifications(context.Background(), paris(8, 4, 1), client)
+
+		if got := client.seen(); len(got) != 0 {
+			t.Fatalf("every_days %d: nothing verified, got %v", days, got)
+		}
+		if v, _ := GetVerificationSchedule(); !v.LastRun.Equal(paris(1, 3, 0)) {
+			t.Fatalf("every_days %d: nothing written, LastRun %v", days, v.LastRun)
+		}
+		if said != 2 {
+			t.Fatalf("every_days %d: said %d times over three ticks across an hour, want 2", days, said)
+		}
+	}
+
+	// repaired, it runs once, and a second tick in the same minute does not run it again
+	saveVerificationSchedule(t, VerificationSchedule{Enabled: true, EveryDays: 7, At: "03:00", LastRun: paris(1, 3, 0)})
+	RunDueVerifications(context.Background(), paris(8, 3, 0), client)
+	RunDueVerifications(context.Background(), paris(8, 3, 0), client)
+	if got := client.seen(); strings.Join(got, ",") != "immich/s" {
+		t.Fatalf("verified %v", got)
 	}
 }

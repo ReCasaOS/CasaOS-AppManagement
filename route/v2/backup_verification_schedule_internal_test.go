@@ -51,6 +51,8 @@ func TestTheVerificationScheduleRoutes(t *testing.T) {
 		`{"enabled":true,"every_days":7}`,
 		`{"enabled":true,"every_days":7,"at":"03:00","evry_days":3}`,
 		`not json`,
+		`{"enabled":true,"every_days":7,"at":"03:00"}xyz`,
+		`{"enabled":true,"every_days":7,"at":"03:00"}{}`,
 	} {
 		if code, _ := verificationScheduleCall(t, http.MethodPut, body); code != http.StatusBadRequest {
 			t.Fatalf("%s: %d, want 400", body, code)
