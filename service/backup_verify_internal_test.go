@@ -355,6 +355,7 @@ func TestBackupVerificationReclaimsAWorkspaceLeftLongAgo(t *testing.T) {
 		})
 	}
 }
+
 // A cancellation that arrives once every object is read and compared changes
 // nothing: the result is a pass, not a cancellation that hides one.
 func TestBackupVerificationThatFinishedIsNotRecordedAsCancelled(t *testing.T) {
