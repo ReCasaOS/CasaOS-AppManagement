@@ -216,6 +216,10 @@ func recordBackupRun(schedule BackupSchedule, now time.Time) error {
 // runScheduled takes the tick's `now` for the backup's stamp (the slot it answers) and the clock
 // for when it began: a tick chains backups, and the second begins hours after the tick did.
 func runScheduled(ctx context.Context, now time.Time, schedule BackupSchedule, runner backupRunner) {
+	// a force runs its schedules through here too, and has said so already
+	if _, said := ctx.Value(originKey{}).(BackupOrigin); !said {
+		ctx = WithBackupOrigin(ctx, OriginScheduled)
+	}
 	stamp := now.UTC().Format("2006-01-02T15-04-05Z")
 	record := BackupRunRecord{
 		App: schedule.App, Destination: schedule.Destination, Stamp: stamp,

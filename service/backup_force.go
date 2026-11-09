@@ -152,7 +152,7 @@ func ForceSchedules(ctx context.Context, request ForceRequest, runner backupRunn
 	}
 
 	started := result.Started
-	ctx = context.WithoutCancel(ctx)
+	ctx = WithBackupOrigin(context.WithoutCancel(ctx), OriginForced)
 
 	forcedRuns.Add(1)
 	go func() {
