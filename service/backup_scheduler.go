@@ -74,6 +74,30 @@ func writeSchedules(schedules []BackupSchedule) error {
 	return os.Rename(temp, BackupSchedulePath)
 }
 
+// forgetBackupSchedules removes every schedule of app, whatever its destination: what an
+// uninstall does, so the app does not fail at every slot after it is gone.
+func forgetBackupSchedules(app string) error {
+	backupScheduleLock.Lock()
+	defer backupScheduleLock.Unlock()
+
+	schedules, err := readSchedules()
+	if err != nil {
+		return err
+	}
+
+	kept := schedules[:0:0]
+	for _, schedule := range schedules {
+		if schedule.App != app {
+			kept = append(kept, schedule)
+		}
+	}
+	if len(kept) == len(schedules) {
+		return nil
+	}
+
+	return writeSchedules(kept)
+}
+
 // backupRunner is what a scheduled run needs, as an interface so the tick can be
 // tested without a daemon, a network or a clock.
 type backupRunner interface {
