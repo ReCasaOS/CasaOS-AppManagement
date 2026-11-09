@@ -36,3 +36,16 @@ func TestOtherLinesAreNotStatus(t *testing.T) {
 		}
 	}
 }
+
+// restic --json says its errors in JSON on stderr; the history must read the message.
+func TestResticErrorsSayTheirMessageNotTheirJSON(t *testing.T) {
+	stderr := `{"message_type":"error","error":{"message":"open /x: permission denied"},"during":"archival","item":"/x"}` + "\n" +
+		`{"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file"}` + "\n"
+
+	if got := resticMessage(stderr); got != "open /x: permission denied\nFatal: repository does not exist: unable to open config file" {
+		t.Fatalf("got %q", got)
+	}
+	if got := resticMessage("Fatal: wrong password\n"); got != "Fatal: wrong password" {
+		t.Fatalf("plain text stays as it is: %q", got)
+	}
+}

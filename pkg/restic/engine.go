@@ -244,6 +244,9 @@ func (e *Engine) callFollowed(ctx context.Context, destination string, args ...s
 		return err
 	}
 
+	// one status a second: left alone, restic prints some fifty, for the hours a copy takes
+	env = append(env, "RESTIC_PROGRESS_FPS=1")
+
 	return e.stream(ctx, env, func(line []byte) {
 		if stats, ok := parseStatus(line); ok {
 			backupprogress.Report(ctx, stats)

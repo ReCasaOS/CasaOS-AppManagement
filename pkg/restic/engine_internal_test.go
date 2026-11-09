@@ -435,3 +435,17 @@ func TestAKilledBackupDoesNotLockTheNext(t *testing.T) {
 		t.Fatal("the next backup waited on the lock of the killed one")
 	}
 }
+
+// Left alone, restic prints some fifty statuses a second for hours; one is plenty.
+func TestAFollowedBackupAsksForOneStatusASecond(t *testing.T) {
+	f := &fake{}
+	e := engineWith(t, f)
+
+	ctx := backupprogress.With(context.Background(), func(backupprogress.Stats) {})
+	if err := e.CopyDirectory(ctx, "/vol/data", "nas", "blog/20261001/volume-data"); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(f.calls[len(f.calls)-1].env, "RESTIC_PROGRESS_FPS=1") {
+		t.Fatalf("env: %v", f.calls[len(f.calls)-1].env)
+	}
+}

@@ -60,7 +60,7 @@ func execStreamer(ctx context.Context, env []string, line func([]byte), args ...
 	if err := command.Wait(); err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return &ExitError{Code: exit.ExitCode(), Message: lastLines(stderr.String())}
+			return &ExitError{Code: exit.ExitCode(), Message: lastLines(resticMessage(stderr.String()))}
 		}
 
 		return err
@@ -95,6 +95,32 @@ func readLine(reader *bufio.Reader) ([]byte, error) {
 			return nil, err
 		}
 	}
+}
+
+// resticMessage reads what restic said on stderr: with --json its errors are JSON objects, and
+// what the history keeps is their message, not the object.
+func resticMessage(stderr string) string {
+	lines := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(stderr), "\n") {
+		var said struct {
+			Message string `json:"message"`
+			Error   struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		switch {
+		case json.Unmarshal([]byte(line), &said) != nil:
+			lines = append(lines, line)
+		case said.Message != "":
+			lines = append(lines, said.Message)
+		case said.Error.Message != "":
+			lines = append(lines, said.Error.Message)
+		default:
+			lines = append(lines, line)
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // lastLines is the end of what restic said, the lines that say why.
