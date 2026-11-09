@@ -128,6 +128,9 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 		return
 	}
 
+	pass := startPass(OriginScheduled, due, backupClock())
+	defer func() { pass.end(backupClock()) }()
+
 	for done, schedule := range due {
 		// Listed as running BEFORE the flag is looked for. The core writes the flag and then
 		// asks what runs, so with this order one of the two always sees the other; a backup
@@ -136,6 +139,7 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 		listed, ok := markUnlessForced(schedule.App, schedule.Destination)
 		if !ok {
 			// a force runs it now; its slot stays unrun for the next tick, and nothing is recorded
+			pass.drop(done)
 			continue
 		}
 
@@ -148,10 +152,13 @@ func RunDueBackups(ctx context.Context, now time.Time, runner backupRunner) {
 					zap.Int("waiting", len(due)-done), zap.Error(err))
 			}
 
+			pass.hold(done)
+
 			break
 		}
 
-		runScheduled(ctx, now, schedule, runner)
+		pass.running(done, backupClock())
+		pass.finished(done, runScheduled(ctx, now, schedule, runner))
 		listed()
 
 		if err := recordBackupRun(schedule, now); err != nil {
@@ -215,7 +222,7 @@ func recordBackupRun(schedule BackupSchedule, now time.Time) error {
 
 // runScheduled takes the tick's `now` for the backup's stamp (the slot it answers) and the clock
 // for when it began: a tick chains backups, and the second begins hours after the tick did.
-func runScheduled(ctx context.Context, now time.Time, schedule BackupSchedule, runner backupRunner) {
+func runScheduled(ctx context.Context, now time.Time, schedule BackupSchedule, runner backupRunner) BackupRunRecord {
 	// a force runs its schedules through here too, and has said so already
 	if _, said := ctx.Value(originKey{}).(BackupOrigin); !said {
 		ctx = WithBackupOrigin(ctx, OriginScheduled)
@@ -235,10 +242,12 @@ func runScheduled(ctx context.Context, now time.Time, schedule BackupSchedule, r
 
 		// Nothing is deleted after a failure. Applying retention now could drop a
 		// good backup from last week in favour of a broken one from tonight.
-		return
+		return record
 	}
 
 	applyRetention(ctx, schedule, runner)
+
+	return record
 }
 
 func applyRetention(ctx context.Context, schedule BackupSchedule, runner backupRunner) {
