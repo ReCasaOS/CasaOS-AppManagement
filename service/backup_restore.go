@@ -163,7 +163,10 @@ func restoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 
 	// Where things go: worked out from the app as it is here and now, the same way
 	// a backup works it out, and never read from the manifest.
-	inventory := app.BackupInventory()
+	inventory, err := app.BackupInventoryHere()
+	if err != nil {
+		return report, fmt.Errorf("could not tell which folders this box leaves out, so nothing was restored: %w", err)
+	}
 	wanted := []string{}
 	byDockerName := map[string]string{}
 	for _, entry := range inventory {

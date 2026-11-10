@@ -857,3 +857,40 @@ func verificationScheduleOut(v service.VerificationSchedule) *codegen.BackupVeri
 
 	return out
 }
+
+// BackupExclusions lists the folders no backup of an app copies.
+func (a *AppManagement) BackupExclusions(ctx echo.Context) error {
+	paths, err := service.BackupExclusions()
+	if err != nil {
+		return backupError(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.BackupExclusionsOK{Data: &codegen.BackupExclusions{Paths: paths}})
+}
+
+// SetBackupExclusions replaces them. The body is read strictly: a misspelt field would
+// otherwise save an empty list, and the next backup would copy what had been left out.
+func (a *AppManagement) SetBackupExclusions(ctx echo.Context) error {
+	var body struct {
+		Paths *[]string `json:"paths"`
+	}
+	decoder := json.NewDecoder(ctx.Request().Body)
+	decoder.DisallowUnknownFields()
+	err := decoder.Decode(&body)
+	if err == nil && decoder.Decode(&struct{}{}) != io.EOF {
+		err = errors.New("trailing data")
+	}
+	if err != nil || body.Paths == nil {
+		return backupBadRequest(ctx, errors.New("backup exclusions are JSON with paths, a list of full paths"))
+	}
+
+	err = service.SetBackupExclusions(*body.Paths)
+	if errors.Is(err, service.ErrInvalidBackupExclusion) {
+		return backupBadRequest(ctx, err)
+	}
+	if err != nil {
+		return backupError(ctx, err)
+	}
+
+	return a.BackupExclusions(ctx)
+}

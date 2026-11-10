@@ -897,6 +897,40 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /backup/exclusions:
+    get:
+      summary: The folders no backup of an app copies
+      description: |-
+        One list for the box. A folder an app mounts from inside one of them is left
+        out of every backup of every app, and a restore does not write to it.
+      operationId: backupExclusions
+      tags:
+        - Backup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/BackupExclusionsOK"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    put:
+      summary: Replace the folders no backup of an app copies
+      operationId: setBackupExclusions
+      tags:
+        - Backup methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupExclusions"
+      responses:
+        "200":
+          $ref: "#/components/responses/BackupExclusionsOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /backup/signin:
     post:
       summary: Start signing in to a cloud drive from the interface
@@ -3227,6 +3261,17 @@ components:
                   data:
                     $ref: "#/components/schemas/BackupVerificationSchedule"
 
+    BackupExclusionsOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/BackupExclusions"
+
     BackupRunsOK:
       description: OK
       content:
@@ -4198,6 +4243,17 @@ components:
           type: string
           format: date-time
           readOnly: true
+
+    BackupExclusions:
+      type: object
+      required: [paths]
+      properties:
+        paths:
+          type: array
+          description: Full paths on the box. `/` alone is refused.
+          items:
+            type: string
+          example: ["/mnt/nas"]
 
     BackupForceTarget:
       type: object

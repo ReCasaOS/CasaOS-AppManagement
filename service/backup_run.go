@@ -95,7 +95,10 @@ func RunBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 // runBackup is the copy itself; RunBackup wraps it in what it says about it.
 func runBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier BackupCopier, opts BackupOptions) (BackupManifest, error) {
 
-	inventory := app.BackupInventory()
+	inventory, err := app.BackupInventoryHere()
+	if err != nil {
+		return BackupManifest{}, fmt.Errorf("could not tell which folders this box leaves out, so nothing was copied: %w", err)
+	}
 
 	// Which volumes, then where they are. Asked for all of them at once so one
 	// unreachable daemon is one failure rather than one per volume.
@@ -159,7 +162,7 @@ func runBackup(ctx context.Context, app *ComposeApp, docker backupDocker, copier
 		}
 	}
 
-	err := copyPlan(ctx, &manifest, copier, opts.Destination, RootFor(app.Name, opts.Stamp))
+	err = copyPlan(ctx, &manifest, copier, opts.Destination, RootFor(app.Name, opts.Stamp))
 
 	return manifest, err
 }
