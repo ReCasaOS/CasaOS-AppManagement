@@ -25,18 +25,22 @@ var (
 	backupExclusionsLock sync.Mutex
 )
 
-// backupExclusionSkip is the reason the manifest gives for a folder left out this way.
-const backupExclusionSkip = "left out by this box's backup settings"
+// The reasons the manifest gives for a folder left out this way.
+const (
+	backupExclusionSkip       = "left out by this box's backup settings"
+	backupExclusionInsideSkip = "left out whole: it holds a folder this box's backup settings leave out"
+)
 
 // BackupExclusions reads the list; a missing file is an empty one. A file that cannot be
 // understood is an error, and whoever asked copies nothing: carrying on without the list
-// would copy exactly what the owner asked to leave out.
+// would copy exactly what the owner asked to leave out. An empty file is one of those:
+// SetBackupExclusions never writes one, a power cut does.
 func BackupExclusions() ([]string, error) {
 	backupExclusionsLock.Lock()
 	defer backupExclusionsLock.Unlock()
 
 	content, err := os.ReadFile(BackupExclusionsPath)
-	if os.IsNotExist(err) || (err == nil && len(content) == 0) {
+	if os.IsNotExist(err) {
 		return []string{}, nil
 	}
 	if err != nil {
@@ -45,7 +49,7 @@ func BackupExclusions() ([]string, error) {
 
 	paths := []string{}
 	if err := stdjson.Unmarshal(content, &paths); err != nil {
-		return nil, fmt.Errorf("the backup exclusions cannot be read; they were left untouched: %w", err)
+		return nil, fmt.Errorf("the folders left out of backups cannot be read; save the list again in Backups: %w", err)
 	}
 
 	// a file edited by hand is held to what PUT refuses
@@ -69,12 +73,25 @@ func SetBackupExclusions(paths []string) error {
 	if err := os.MkdirAll(filepath.Dir(BackupExclusionsPath), 0o700); err != nil {
 		return err
 	}
-	temp := BackupExclusionsPath + ".tmp"
-	if err := os.WriteFile(temp, encoded, 0o600); err != nil {
+	// synced before it takes the name: a power cut must leave the old list or the new one,
+	// not an empty file
+	temp, err := os.OpenFile(BackupExclusionsPath+".tmp", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := temp.Write(encoded); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
 		return err
 	}
 
-	return os.Rename(temp, BackupExclusionsPath)
+	return os.Rename(temp.Name(), BackupExclusionsPath)
 }
 
 // cleanBackupExclusions is the list as it is kept: absolute host paths, written the short
@@ -100,8 +117,14 @@ func cleanBackupExclusions(paths []string) ([]string, error) {
 	return clean, nil
 }
 
-// withoutExcluded marks as skipped the folders an app mounts from inside an excluded one.
+// withoutExcluded marks as skipped the folders an app mounts from inside an excluded one,
+// and the ones that hold an excluded one: copying `/DATA` would copy `/DATA/nas` with it,
+// and restoring it would write there and delete what the backup does not hold.
 //
+// shortcut: a folder that holds an excluded one is left out whole, where the copy could
+// skip only the excluded part; hand the excluded sub-folders to rclone and restic as
+// filters, on the copy and on the restore, when leaving it out whole costs somebody a
+// backup they wanted.
 // shortcut: paths are compared as written, so a symlink to an excluded folder and a named
 // volume kept on one are still copied; resolve both when somebody is bitten by it.
 func withoutExcluded(entries []BackupEntry, excluded []string) []BackupEntry {
@@ -115,6 +138,10 @@ func withoutExcluded(entries []BackupEntry, excluded []string) []BackupEntry {
 				entries[i].Skip = backupExclusionSkip
 				break
 			}
+			if strings.HasPrefix(folder, entry.Path+"/") {
+				entries[i].Skip = backupExclusionInsideSkip
+				break
+			}
 		}
 	}
 
@@ -122,8 +149,8 @@ func withoutExcluded(entries []BackupEntry, excluded []string) []BackupEntry {
 }
 
 // BackupInventoryHere is the app's inventory less what this box's settings leave out. A
-// backup and a restore both go by it, so an excluded folder is neither copied nor written
-// over by an older backup that still holds it.
+// restore goes by the same list (see restoreBackup), so an excluded folder is neither
+// copied nor written over by an older backup that still holds it.
 func (a *ComposeApp) BackupInventoryHere() ([]BackupEntry, error) {
 	excluded, err := BackupExclusions()
 	if err != nil {

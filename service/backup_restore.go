@@ -138,6 +138,13 @@ func restoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 	}
 	delete(byIdentity, "")
 
+	// read before anything is installed: a list that cannot be read stops the restore, and
+	// must not leave a new, empty app behind
+	excluded, err := BackupExclusions()
+	if err != nil {
+		return report, fmt.Errorf("could not tell which folders this box leaves out, so nothing was restored: %w", err)
+	}
+
 	app := installed
 	if app == nil && len(opts.Paths) > 0 {
 		return report, ErrRestorePathsNeedApp
@@ -163,10 +170,7 @@ func restoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 
 	// Where things go: worked out from the app as it is here and now, the same way
 	// a backup works it out, and never read from the manifest.
-	inventory, err := app.BackupInventoryHere()
-	if err != nil {
-		return report, fmt.Errorf("could not tell which folders this box leaves out, so nothing was restored: %w", err)
-	}
+	inventory := withoutExcluded(app.BackupInventory(), excluded)
 	wanted := []string{}
 	byDockerName := map[string]string{}
 	for _, entry := range inventory {
