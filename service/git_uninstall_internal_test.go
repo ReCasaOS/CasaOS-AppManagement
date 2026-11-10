@@ -36,6 +36,23 @@ func TestUninstallingAGitAppDeletesOnlyWhatIsCasaOSToDelete(t *testing.T) {
 	assert.DeepEqual(t, cloned.uninstalledFolders(created, true), []string{"/DATA/AppData/jarvis"})
 }
 
+// With its config folder, an uninstall deletes <anywhere>/AppData/<app> and no other folder
+// a mount happens to name like the app: /etc/nginx is not the nginx app's to delete.
+func TestUninstallingDeletesTheAppDataFolderAndNoOtherFolderNamedLikeTheApp(t *testing.T) {
+	app := &ComposeApp{Name: "nginx", WorkingDir: "/var/lib/casaos/apps/nginx", Services: types.Services{"web": {Name: "web", Volumes: []types.ServiceVolumeConfig{
+		{Source: "/etc/nginx/nginx.conf", Target: "/etc/nginx/nginx.conf"},
+		{Source: "/mnt/nas/nginx/site", Target: "/site"},
+		{Type: "volume", Source: "nginx_cache", Target: "/cache"},
+		{Source: "/DATA/AppData/nginx-proxy/data", Target: "/proxy"},
+		{Source: "/DATA/AppData/nginx/config", Target: "/config"},
+		{Source: "/mnt/ssd/AppData/nginx", Target: "/data"},
+	}}}}
+
+	assert.DeepEqual(t, app.uninstalledFolders(nil, true),
+		[]string{"/var/lib/casaos/apps/nginx", "/DATA/AppData/nginx", "/mnt/ssd/AppData/nginx"})
+	assert.Equal(t, AppDataFolder("/DATA/AppData", ""), "", "an app without a name owns no folder, least of all AppData itself")
+}
+
 // An uninstall is refused while the app deploys, naming the deployment, which goes on. The
 // name is one no real compose project has: an uninstall that went ahead would reach the
 // daemon the tests run against.

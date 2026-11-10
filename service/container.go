@@ -816,15 +816,6 @@ func (ds *dockerService) RemoveContainer(name string, update bool) error {
 		return err
 	}
 
-	if update {
-		return nil
-	}
-
-	// 路径处理
-	if path := docker.GetDir(name, "/config"); !file.CheckNotExist(path) {
-		return file.RMDir(path)
-	}
-
 	return nil
 }
 
