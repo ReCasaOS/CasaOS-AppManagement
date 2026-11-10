@@ -77,6 +77,14 @@ func hostPathSkipReason(hostPath string) string {
 		}
 	}
 
+	// a VPN app mounts these so it can load a module; restored onto another
+	// machine they would be another kernel's
+	for _, modules := range []string{"/lib/modules", "/usr/lib/modules"} {
+		if clean == modules || strings.HasPrefix(clean, modules+"/") {
+			return "the kernel's modules belong to the host"
+		}
+	}
+
 	return ""
 }
 

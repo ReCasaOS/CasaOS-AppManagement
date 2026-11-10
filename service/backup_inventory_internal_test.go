@@ -42,6 +42,8 @@ func TestWhatIsNotAnAppsData(t *testing.T) {
 		{"/sys/fs/cgroup", "kernel interface, with no contents to copy"},
 		{"/proc", "kernel interface, with no contents to copy"},
 		{"/", "the whole filesystem is not an app's data"},
+		{"/lib/modules", "the kernel's modules belong to the host"},
+		{"/usr/lib/modules/6.17.0-1019-oracle", "the kernel's modules belong to the host"},
 		// the same paths written the long way round
 		{"/var/run/../run/docker.sock", "the Docker socket is a door, not data"},
 		{"/dev/../dev/net/tun", "kernel interface, with no contents to copy"},
