@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -142,6 +143,38 @@ func PlanBackup(app string, inventory []BackupEntry, volumeMountpoints map[strin
 	}
 
 	return manifest
+}
+
+// identity is what makes a copy in a backup and a place on this app the same
+// thing. A volume is its name, which its destination already is. A bind is the
+// service that mounts it and where in the container -- and, for a single file, the
+// file's name -- never its number: the numbers are given out in order over the
+// mounts the app had the day of the backup, so a mount added or dropped since
+// moves every number after it, and a restore that paired binds/1 with whatever
+// is binds/1 now emptied one folder to fill it with another's copy.
+//
+// A restore reads a bind's copy from where the manifest says it is, and a
+// manifest can be edited: a bind that does not say where it is mounted, or whose
+// copy is anywhere but binds/<n> (binds/<n>/<file> for a file), has no identity,
+// "", and is nothing a restore can place.
+func (o BackupOperation) identity() string {
+	if o.Kind != BackupKindBind {
+		return o.Destination
+	}
+
+	parts := strings.Split(o.Destination, "/")
+	file := ""
+	if !o.Directory && len(parts) == 3 {
+		file, parts = parts[2], parts[:2]
+	}
+	if o.Target == "" || len(parts) != 2 || parts[0] != "binds" || o.Directory == (file != "") {
+		return ""
+	}
+	if n, err := strconv.Atoi(parts[1]); err != nil || n < 1 {
+		return ""
+	}
+
+	return strings.Join([]string{"bind", o.Service, o.Target, file}, "\x00")
 }
 
 // MarkBindFiles corrects the operations whose source turned out to be a single

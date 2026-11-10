@@ -131,9 +131,12 @@ func restoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 	report.Skipped = append(report.Skipped, manifest.Skipped...)
 
 	byDestination := map[string]BackupOperation{}
+	byIdentity := map[string]BackupOperation{}
 	for _, operation := range manifest.Operations {
 		byDestination[operation.Destination] = operation
+		byIdentity[operation.identity()] = operation
 	}
+	delete(byIdentity, "")
 
 	app := installed
 	if app == nil && len(opts.Paths) > 0 {
@@ -219,10 +222,16 @@ func restoreBackup(ctx context.Context, installed *ComposeApp, docker backupDock
 			continue
 		}
 
-		if _, held := byDestination[operation.Destination]; !held {
+		// Paired by what it is, never by its number: see BackupOperation.identity.
+		// The place it goes is this app's; where it is read from is the backup's.
+		identity := operation.identity()
+		held, ok := byIdentity[identity]
+		if !ok {
 			continue
 		}
-		delete(byDestination, operation.Destination)
+		delete(byIdentity, identity)
+		delete(byDestination, held.Destination)
+		operation.Destination = held.Destination
 		publishBackupProgress(ctx, i, len(local.Operations), operation.Destination)
 
 		remote := path.Join(root, operation.Destination)

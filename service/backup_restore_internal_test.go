@@ -5,8 +5,11 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"path"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 )
@@ -326,5 +329,129 @@ func TestAFailedRestoreStartsTheAppAgainAndIsWrittenDown(t *testing.T) {
 	}
 	if len(runs) != 1 || !runs[0].Restore || runs[0].Error == "" {
 		t.Fatalf("a restore, failed, with its reason: %+v", runs)
+	}
+}
+
+// withABindAheadOfTheConfig is the app after it gained a mount since its backup,
+// declared before the config folder: the new mount is binds/1 now, and the
+// config folder, binds/1 in the backup, is binds/2.
+func withABindAheadOfTheConfig(app *ComposeApp, dir string) string {
+	media := dir + "/media"
+	service := app.Services["app"]
+	service.Volumes = append([]types.ServiceVolumeConfig{{Type: "bind", Source: media, Target: "/media"}}, service.Volumes...)
+	app.Services["app"] = service
+
+	return media
+}
+
+// A bind is the place a service mounts it at, never its number in the backup. The
+// numbers are given out in order over the mounts the app had that day, so one
+// mount added since moves every number after it -- and a restore deletes what
+// the copy does not hold.
+func TestABindAddedSinceTheBackupIsNotGivenAnotherBindsCopy(t *testing.T) {
+	logInTempDir(t)
+
+	app, dir := appWithOneBindAndOneVolume(t)
+	docker := &fakeBackupDocker{mountpoints: demoMountpoints()}
+	restorer, manifest := backupOf(t, app)
+	config := operationOf(t, manifest, BackupKindBind)
+	media := withABindAheadOfTheConfig(app, dir)
+
+	report, err := RestoreBackup(context.Background(), app, docker, restorer, noInstall, RestoreOptions{
+		Destination: "offsite", App: "demo", Stamp: restoreStamp, Containers: running("c1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	configCameBack := false
+	for _, call := range restorer.restored {
+		if call.host == media {
+			t.Fatalf("the config's copy was restored over the folder mounted since: %+v", call)
+		}
+		if call.remote == path.Join(RootFor("demo", restoreStamp), config.Destination) && call.host == dir+"/config" {
+			configCameBack = true
+		}
+	}
+	if !configCameBack {
+		t.Fatalf("the config did not come back to the config folder: %+v", restorer.restored)
+	}
+	if len(report.Restored) != 2 || len(report.Missing) != 0 {
+		t.Fatalf("the config and the volume restored, nothing missing: %+v", report)
+	}
+}
+
+// What the backup holds for a mount the app has moved or dropped is reported,
+// not restored into whichever bind now carries its number.
+func TestABindTheAppMountsElsewhereNowIsReportedNotRestored(t *testing.T) {
+	logInTempDir(t)
+
+	app, dir := appWithOneBindAndOneVolume(t)
+	docker := &fakeBackupDocker{mountpoints: demoMountpoints()}
+	restorer, _ := backupOf(t, app)
+
+	// same number, another place in the container: not the same thing any more
+	service := app.Services["app"]
+	service.Volumes[0] = types.ServiceVolumeConfig{Type: "bind", Source: dir + "/media", Target: "/media"}
+	app.Services["app"] = service
+
+	report, err := RestoreBackup(context.Background(), app, docker, restorer, noInstall, RestoreOptions{
+		Destination: "offsite", App: "demo", Stamp: restoreStamp, Containers: running("c1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, call := range restorer.restored {
+		if call.host == dir+"/media" {
+			t.Fatalf("a copy of /config was restored over what is mounted at /media: %+v", call)
+		}
+	}
+	if len(report.Restored) != 1 || len(report.Missing) != 1 || report.Missing[0].Target != "/config" {
+		t.Fatalf("the volume restored, the config reported: %+v", report)
+	}
+}
+
+// A manifest is a file on a remote that anyone with the credentials can edit. The
+// copy of a bind is read from where the manifest says it is, so a manifest that
+// says anywhere but where a backup puts one -- the whole run, another app's
+// copy, a volume's -- has that bind reported, not restored from there.
+func TestABindWhoseCopyIsNotWhereABackupPutsOneIsNotRestored(t *testing.T) {
+	logInTempDir(t)
+
+	app, dir := appWithOneBindAndOneVolume(t)
+	docker := &fakeBackupDocker{mountpoints: demoMountpoints()}
+	restorer, manifest := backupOf(t, app)
+
+	for _, destination := range []string{"", "../../other/" + restoreStamp + "/volumes/db", "binds/0", "binds/1/x", "binds/x", "volumes/data"} {
+		edited := manifest
+		edited.Operations = slices.Clone(manifest.Operations)
+		for i, operation := range edited.Operations {
+			if operation.Kind == BackupKindBind {
+				edited.Operations[i].Destination = destination
+			}
+		}
+		raw, err := stdjson.Marshal(edited)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restorer.files[path.Join(RootFor("demo", restoreStamp), ManifestFileName)] = raw
+		restorer.restored = nil
+
+		report, err := RestoreBackup(context.Background(), app, docker, restorer, noInstall, RestoreOptions{
+			Destination: "offsite", App: "demo", Stamp: restoreStamp, Containers: running("c1"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, call := range restorer.restored {
+			if call.host == dir+"/config" {
+				t.Fatalf("a bind said to be at %q was restored from there: %+v", destination, call)
+			}
+		}
+		if len(report.Restored) != 1 || report.Restored[0].Kind != BackupKindVolume {
+			t.Fatalf("at %q, only the volume restored: %+v", destination, report)
+		}
 	}
 }

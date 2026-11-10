@@ -184,7 +184,7 @@ func restorePaths(ctx context.Context, restorer BackupPartialRestorer, opts Rest
 	held := dataOperations(manifest)
 	here := map[string]BackupOperation{}
 	for _, operation := range local {
-		here[operation.Destination] = operation
+		here[operation.identity()] = operation
 	}
 
 	for i, wanted := range opts.Paths {
@@ -198,8 +198,10 @@ func restorePaths(ctx context.Context, restorer BackupPartialRestorer, opts Rest
 			return fmt.Errorf("%w: %q", ErrBackupPathNotHeld, wanted)
 		}
 
-		target, ok := here[operation.Destination]
-		if !ok {
+		// by what it is, never by its number: see BackupOperation.identity
+		identity := operation.identity()
+		target, ok := here[identity]
+		if !ok || identity == "" {
 			// in the backup and nowhere to go on this app: said, not guessed
 			report.Missing = append(report.Missing, operation)
 			continue

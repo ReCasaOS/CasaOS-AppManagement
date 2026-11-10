@@ -156,3 +156,38 @@ func TestWhereOneRunGoesOnADestination(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// What pairs a copy with a place on the app: the mount, never the number, and
+// nothing at all when the manifest puts the copy where no backup puts one.
+func TestABindsIdentityIsItsMountAndNeverItsNumber(t *testing.T) {
+	bind := func(destination string, directory bool) BackupOperation {
+		return BackupOperation{Kind: BackupKindBind, Service: "app", Target: "/config", Destination: destination, Directory: directory}
+	}
+
+	folder, file := bind("binds/1", true).identity(), bind("binds/1/php.ini", false).identity()
+	if folder == "" || folder != bind("binds/7", true).identity() {
+		t.Fatal("a folder is the same folder under another number")
+	}
+	if file == "" || file != bind("binds/7/php.ini", false).identity() {
+		t.Fatal("a file is the same file under another number")
+	}
+	if file == folder || file == bind("binds/1/other.ini", false).identity() {
+		t.Fatal("a file is not a folder, and not another file")
+	}
+	other := bind("binds/1", true)
+	other.Target = "/data"
+	if folder == other.identity() {
+		t.Fatal("another place in the container is another thing")
+	}
+
+	nowhere := BackupOperation{Kind: BackupKindBind, Service: "app", Destination: "binds/1", Directory: true}
+	for _, malformed := range []BackupOperation{
+		nowhere, bind("", true), bind("", false), bind("binds/1", false), bind("binds/1/", false),
+		bind("binds/1/x", true), bind("binds/0", true), bind("binds/x", true), bind("volumes/data", true),
+		bind("../binds/1", true), bind("binds/1/a/b", false),
+	} {
+		if got := malformed.identity(); got != "" {
+			t.Fatalf("%+v can be placed nowhere, got %q", malformed, got)
+		}
+	}
+}

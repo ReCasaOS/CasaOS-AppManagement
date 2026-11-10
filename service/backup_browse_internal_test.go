@@ -215,3 +215,28 @@ func TestACopyTheAppNoLongerDeclaresIsReportedNotWrittenSomewhereElse(t *testing
 		t.Fatalf("taken %+v, report %+v", browser.taken, report)
 	}
 }
+
+// Taking some files back pairs the copy with the app's mount the same way the
+// whole restore does: by where it is mounted, not by its number.
+func TestSomePathsOfABindGoToThatBindAfterAnotherWasAddedAheadOfIt(t *testing.T) {
+	browser, app, dir, manifest := browsableBackup(t)
+	config := operationOf(t, manifest, BackupKindBind)
+	docker := &fakeBackupDocker{mountpoints: demoMountpoints()}
+	withABindAheadOfTheConfig(app, dir)
+
+	_, err := RestoreBackup(context.Background(), app, docker, browser, noInstall, RestoreOptions{
+		Destination: "offsite", App: "demo", Stamp: restoreStamp, Containers: running("c1"),
+		Paths: []string{config.Destination + "/settings.json"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []restoredCall{{
+		kind: "settings.json", remote: path.Join(RootFor("demo", restoreStamp), config.Destination),
+		host: filepath.Join(dir+"/config", "settings.json"),
+	}}
+	if !reflect.DeepEqual(browser.taken, want) {
+		t.Fatalf("got %+v, want %+v", browser.taken, want)
+	}
+}
