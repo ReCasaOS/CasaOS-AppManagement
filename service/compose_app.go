@@ -1214,8 +1214,22 @@ func (a *ComposeApp) removeUninstalledFolders(ctx context.Context, deleteConfigF
 	}
 }
 
+// AppDataFolder is the folder a mount's host path keeps for the app by the store's
+// convention, <anywhere>/AppData/<app>, or "" when the path is not under one. Only whole
+// path components count: an app called nginx that mounts /etc/nginx/nginx.conf does not
+// own /etc/nginx, and a named volume called nginx_cache is not a folder at all.
+func AppDataFolder(source, app string) string {
+	folder := "/AppData/" + app
+	i := strings.Index(source+"/", folder+"/")
+	if app == "" || i < 0 || !strings.HasPrefix(source, "/") {
+		return ""
+	}
+
+	return source[:i+len(folder)]
+}
+
 // uninstalledFolders is what an uninstall deletes: the app's folder and, with
-// deleteConfigFolder, the folders its volumes name after it. A git app's folder is its
+// deleteConfigFolder, the AppData folders its volumes keep for it. A git app's folder is its
 // repository: a created app's goes with the config folder only, and an adopted app's is
 // its owner's and never goes.
 func (a *ComposeApp) uninstalledFolders(gitState *gitApp, deleteConfigFolder bool) []string {
@@ -1240,10 +1254,7 @@ func (a *ComposeApp) uninstalledFolders(gitState *gitApp, deleteConfigFolder boo
 
 	for _, name := range sortedServiceNames(a.Services) {
 		for _, volume := range a.Services[name].Volumes {
-			if !strings.Contains(volume.Source, a.Name) {
-				continue
-			}
-			if path := filepath.Join(strings.Split(volume.Source, a.Name)[0], a.Name); !keep(path) {
+			if path := AppDataFolder(volume.Source, a.Name); path != "" && !keep(path) {
 				folders = append(folders, path)
 			}
 		}

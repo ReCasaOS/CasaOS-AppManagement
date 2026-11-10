@@ -776,8 +776,8 @@ func uninstall(ctx context.Context, container *types.ContainerJSON, isDelete boo
 	if container.Config.Labels["origin"] != "custom" && isDelete {
 		// step: 删除文件夹
 		for _, v := range container.Mounts {
-			if strings.Contains(v.Source, container.Name) {
-				path := filepath.Join(strings.Split(v.Source, container.Name)[0], container.Name)
+			// Docker names a container "/nginx"; only <anywhere>/AppData/nginx is its to delete
+			if path := service.AppDataFolder(v.Source, strings.TrimPrefix(container.Name, "/")); path != "" {
 				if err := file.RMDir(path); err != nil {
 					return err
 				}
