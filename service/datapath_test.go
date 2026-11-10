@@ -10,10 +10,10 @@ import (
 
 func TestApplyDataPath(t *testing.T) {
 	prevStats, prevGit, prevLog, prevHold, prevSched, prevImg := StatsDir, gitAppsDir, BackupLogPath, BackupHoldPath, BackupSchedulePath, imageUpdateStatePath
-	prevKey, prevCache, prevChecks := restic.KeyDir, restic.CacheDir, ResticCheckPath
+	prevKey, prevCache, prevChecks, prevExclusions := restic.KeyDir, restic.CacheDir, ResticCheckPath, BackupExclusionsPath
 	t.Cleanup(func() {
 		StatsDir, gitAppsDir, BackupLogPath, BackupHoldPath, BackupSchedulePath, imageUpdateStatePath = prevStats, prevGit, prevLog, prevHold, prevSched, prevImg
-		restic.KeyDir, restic.CacheDir, ResticCheckPath = prevKey, prevCache, prevChecks
+		restic.KeyDir, restic.CacheDir, ResticCheckPath, BackupExclusionsPath = prevKey, prevCache, prevChecks, prevExclusions
 	})
 
 	root := t.TempDir()
@@ -27,6 +27,7 @@ func TestApplyDataPath(t *testing.T) {
 		"BackupLogPath":        filepath.Join(root, "backups", "runs.json"),
 		"BackupHoldPath":       filepath.Join(root, "backups", "holding.json"),
 		"BackupSchedulePath":   filepath.Join(root, "backups", "schedules.json"),
+		"BackupExclusionsPath": filepath.Join(root, "backups", "exclusions.json"),
 		"imageUpdateStatePath": filepath.Join(root, "image_updates.json"),
 		"ResticCheckPath":      filepath.Join(root, "backups", "restic-checks.json"),
 	}
@@ -36,6 +37,7 @@ func TestApplyDataPath(t *testing.T) {
 		"BackupLogPath":        BackupLogPath,
 		"BackupHoldPath":       BackupHoldPath,
 		"BackupSchedulePath":   BackupSchedulePath,
+		"BackupExclusionsPath": BackupExclusionsPath,
 		"imageUpdateStatePath": imageUpdateStatePath,
 		"ResticCheckPath":      ResticCheckPath,
 	}

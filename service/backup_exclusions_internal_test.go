@@ -1,0 +1,164 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/compose-spec/compose-go/v2/types"
+)
+
+func exclusionsInTempDir(t *testing.T) string {
+	t.Helper()
+
+	was := BackupExclusionsPath
+	BackupExclusionsPath = filepath.Join(t.TempDir(), "exclusions.json")
+	t.Cleanup(func() { BackupExclusionsPath = was })
+
+	return BackupExclusionsPath
+}
+
+// The list is kept as full paths, each once, and what would empty every backup is refused.
+func TestBackupExclusionsAreFullPathsKeptOnceAndSorted(t *testing.T) {
+	exclusionsInTempDir(t)
+
+	if got, err := BackupExclusions(); err != nil || len(got) != 0 {
+		t.Fatalf("no file is an empty list: %v %v", got, err)
+	}
+
+	for _, bad := range [][]string{{"mnt/nas"}, {"/"}, {"/mnt/.."}, {""}, {"/mnt/nas", "~/films"}} {
+		if err := SetBackupExclusions(bad); !errors.Is(err, ErrInvalidBackupExclusion) {
+			t.Fatalf("%q: want a refusal, got %v", bad, err)
+		}
+	}
+	if got, _ := BackupExclusions(); len(got) != 0 {
+		t.Fatalf("a refused list saves nothing: %v", got)
+	}
+
+	if err := SetBackupExclusions([]string{" /mnt/nas/ ", "/DATA/Media", "/mnt/x/../nas"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := BackupExclusions()
+	if err != nil || !slices.Equal(got, []string{"/DATA/Media", "/mnt/nas"}) {
+		t.Fatalf("cleaned, once each, sorted: %v %v", got, err)
+	}
+}
+
+// What an app mounts from inside an excluded folder is left out with the reason, and
+// nothing else is: not a neighbour whose name starts the same way, not a named volume.
+func TestAFolderInsideAnExcludedOneIsLeftOut(t *testing.T) {
+	exclusionsInTempDir(t)
+	if err := SetBackupExclusions([]string{"/mnt/nas", "/dev"}); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &ComposeApp{WorkingDir: appDir, Services: volumes(
+		types.ServiceVolumeConfig{Type: "bind", Source: "/mnt/nas", Target: "/a"},
+		types.ServiceVolumeConfig{Type: "bind", Source: "/mnt/nas/films", Target: "/b"},
+		types.ServiceVolumeConfig{Type: "bind", Source: "/mnt/nas2/films", Target: "/c"},
+		types.ServiceVolumeConfig{Type: "bind", Source: "/DATA/AppData/app", Target: "/d"},
+		types.ServiceVolumeConfig{Type: "bind", Source: "/dev/dri", Target: "/e"},
+		types.ServiceVolumeConfig{Type: "volume", Source: "data", Target: "/f"},
+		types.ServiceVolumeConfig{Type: "bind", Source: "/mnt", Target: "/g"},
+	)}
+
+	entries, err := app.BackupInventoryHere()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	skips := map[string]string{}
+	for _, entry := range entries {
+		skips[entry.Target] = entry.Skip
+	}
+	want := map[string]string{
+		"/a": backupExclusionSkip,
+		"/b": backupExclusionSkip,
+		"/c": "",
+		"/d": "",
+		"/e": "kernel interface, with no contents to copy", // its own reason stays
+		"/f": "",
+		"/g": backupExclusionInsideSkip, // copying /mnt would copy /mnt/nas
+	}
+	for target, skip := range want {
+		if skips[target] != skip {
+			t.Fatalf("%s: want skip %q, got %q", target, skip, skips[target])
+		}
+	}
+}
+
+// A list that cannot be read stops the backup: carrying on would copy what was left out.
+func TestAnUnreadableExclusionListIsAnErrorNotAnEmptyList(t *testing.T) {
+	file := exclusionsInTempDir(t)
+
+	// an empty file is what a power cut leaves of a list: it is not an empty list
+	for _, content := range []string{"{not a list", `["relative"]`, ""} {
+		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BackupExclusions(); err == nil {
+			t.Fatalf("%s: want an error", content)
+		}
+		if _, err := (&ComposeApp{}).BackupInventoryHere(); err == nil {
+			t.Fatalf("%s: the inventory must refuse too", content)
+		}
+	}
+}
+
+// A restore goes by the list too. A folder left out since the backup was taken is not
+// written over by it: not the folder itself, not one inside it, not one that holds it.
+func TestARestoreDoesNotWriteToAFolderLeftOut(t *testing.T) {
+	logInTempDir(t)
+	exclusionsInTempDir(t)
+
+	app, dir := appWithOneBindAndOneVolume(t)
+	slash := filepath.ToSlash(dir)
+	// taken before anything was left out: it holds the bind at <dir>/config
+	restorer, _ := backupOf(t, app)
+
+	for _, excluded := range []string{slash + "/config", slash, slash + "/config/cache"} {
+		if err := SetBackupExclusions([]string{excluded}); err != nil {
+			t.Fatal(err)
+		}
+		restorer.restored = nil
+
+		_, err := RestoreBackup(context.Background(), app, &fakeBackupDocker{mountpoints: demoMountpoints()}, restorer, noInstall, RestoreOptions{
+			Destination: "offsite", App: "demo", Stamp: restoreStamp, Containers: running("c1"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(restorer.restored) != 1 || restorer.restored[0].host != demoVolumePath {
+			t.Fatalf("with %s left out, only the volume comes back: %+v", excluded, restorer.restored)
+		}
+	}
+}
+
+// Read before the app is installed: a list that cannot be read must not leave a new,
+// empty app behind.
+func TestAnUnreadableExclusionListStopsARestoreBeforeAnythingIsInstalled(t *testing.T) {
+	logInTempDir(t)
+	file := exclusionsInTempDir(t)
+	if err := os.WriteFile(file, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app, _ := appWithOneBindAndOneVolume(t)
+	restorer, _ := backupOf(t, app)
+
+	// not installed here, so a restore would install it first
+	_, err := RestoreBackup(context.Background(), nil, &fakeBackupDocker{mountpoints: demoMountpoints()}, restorer, noInstall, RestoreOptions{
+		Destination: "offsite", App: "demo", Stamp: restoreStamp, Containers: running("c1"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "leaves out") {
+		t.Fatalf("want the refusal about the list, got %v", err)
+	}
+	if len(restorer.restored) != 0 {
+		t.Fatalf("nothing may be written: %+v", restorer.restored)
+	}
+}
