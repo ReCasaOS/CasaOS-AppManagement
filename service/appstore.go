@@ -360,7 +360,8 @@ func LoadRecommend(storeRoot string) []string {
 			return ""
 		}
 
-		return storeAppID.(string)
+		appID, _ := storeAppID.(string) // the list is a store's: anything but text is no app
+		return appID
 	})
 
 	return result

@@ -18,7 +18,7 @@ import (
 
 func (a *AppManagement) GetGlobalSettings(ctx echo.Context) error {
 	result := make([]codegen.GlobalSetting, 0)
-	for key, value := range config.Global {
+	for key, value := range config.Globals() {
 		result = append(result, codegen.GlobalSetting{
 			Key:         utils.Ptr(key),
 			Value:       value,
@@ -32,7 +32,7 @@ func (a *AppManagement) GetGlobalSettings(ctx echo.Context) error {
 }
 
 func (a *AppManagement) GetGlobalSetting(ctx echo.Context, key codegen.GlobalSettingKey) error {
-	value, ok := config.Global[string(key)]
+	value, ok := config.Globals()[string(key)]
 	if !ok {
 		message := "the key is not exist"
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})

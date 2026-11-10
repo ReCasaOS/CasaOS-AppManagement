@@ -69,11 +69,15 @@ func (a *AppStoreManagement) OnAppStoreUnregister(fn func(string) error) {
 }
 
 func (a *AppStoreManagement) ChangeGlobal(key string, value string) error {
-	config.Global[key] = value
+	// the file holds one line per variable, key=value: what it could not give back as it was is refused
+	if strings.ContainsAny(key, "=\r\n") || strings.ContainsAny(value, "\r\n") {
+		return errors.New("the key must not contain '=' or a line break, and the value no line break")
+	}
+	config.SetGlobal(key, value)
 
 	go func() {
 		if err := config.SaveGlobal(); err != nil {
-			logger.Error("failed to save global env", zap.Error(err), zap.String("key", key), zap.String("value", value))
+			logger.Error("failed to save global env", zap.Error(err), zap.String("key", key)) // not the value: it may be a secret
 			return
 		}
 	}()
@@ -82,11 +86,7 @@ func (a *AppStoreManagement) ChangeGlobal(key string, value string) error {
 }
 
 func (a *AppStoreManagement) DeleteGlobal(key string) error {
-	for k := range config.Global {
-		if k == key {
-			delete(config.Global, k)
-		}
-	}
+	config.DeleteGlobal(key)
 
 	go func() {
 		if err := config.SaveGlobal(); err != nil {
