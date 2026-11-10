@@ -260,6 +260,17 @@ func TestLoadRecommend(t *testing.T) {
 	}))
 }
 
+// The list comes from whatever store was added: an `appid` that is not text is
+// no app, and must not stop the service each time it reads that store.
+func TestLoadRecommendPassesOverAnAppIDThatIsNotText(t *testing.T) {
+	logger.LogInitConsoleOnly()
+	storeRoot := t.TempDir()
+	list := `[{"appid": 42}, {"appid": null}, {"appid": ["a"]}, {"appid": "app1"}]`
+	assert.NilError(t, os.WriteFile(filepath.Join(storeRoot, common.RecommendListFileName), []byte(list), 0o644))
+
+	assert.DeepEqual(t, service.LoadRecommend(storeRoot), []string{"", "", "", "app1"})
+}
+
 func TestBuildCatalog(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreTopFunction(topFunc1), goleak.IgnoreTopFunction(pollFunc1), goleak.IgnoreTopFunction(httpFunc1), goleak.IgnoreAnyFunction(ecacheClock)) // https://github.com/census-instrumentation/opencensus-go/issues/1191
 

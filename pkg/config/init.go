@@ -1,12 +1,14 @@
 package config
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"github.com/ReCasaOS/CasaOS-AppManagement/model"
@@ -36,8 +38,12 @@ var (
 		AppStoreList: []string{},
 	}
 
-	// Global is a map to inject environment variables to the app.
-	Global = make(map[string]string)
+	// Global is a map to inject environment variables to the app. Requests change it while
+	// the save after each change and every app that starts read it: outside this package,
+	// go through SetGlobal, DeleteGlobal and Globals.
+	Global   = make(map[string]string)
+	globalMu sync.RWMutex
+	saveMu   sync.Mutex
 
 	CasaOSGlobalVariables = &model.CasaOSGlobalVariables{}
 
@@ -114,42 +120,58 @@ func InitGlobal(config string) {
 
 	// from file read key and value
 	// set to Global
-	file, err := os.Open(GlobalEnvFilePath)
+	// the whole file at once: a line reader gives up at its first line over 64 KiB, and the variables after it were lost
+	content, err := os.ReadFile(GlobalEnvFilePath)
 	// there can't to panic err. because the env file is a new file
 	// very much user didn't have the file.
 	if err != nil {
 		// log.Fatal will exit the program. So we only can to log the error.
 		log.Println("open global env file error:", err)
-	} else {
-		defer file.Close()
-		scanner := bufio.NewScanner(file)
-		scanner.Split(bufio.ScanLines)
-
-		for scanner.Scan() {
-			line := scanner.Text()
-			parts := strings.Split(line, "=")
-			Global[parts[0]] = parts[1]
+		return
+	}
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	for _, line := range strings.Split(string(content), "\n") {
+		// a line that is not key=value is passed over; the value is all that follows the first "="
+		if key, value, ok := strings.Cut(strings.TrimSuffix(line, "\r"), "="); ok && key != "" {
+			Global[key] = value
 		}
 	}
 }
 
+func SetGlobal(key, value string) {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	Global[key] = value
+}
+
+func DeleteGlobal(key string) {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	delete(Global, key)
+}
+
+// Globals is a copy of the variables: the caller reads it while requests change them.
+func Globals() map[string]string {
+	globalMu.RLock()
+	defer globalMu.RUnlock()
+	return maps.Clone(Global)
+}
+
 func SaveGlobal() error {
+	// one save at a time, each from the variables as they are when it runs: the last to run leaves the file up to date
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
 	// file content like this:
 	// OPENAI_API_KEY=123456
-	file, err := os.Create(AppManagementGlobalEnvFilePath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-
-	for key, value := range Global {
-		fmt.Fprintf(writer, "%s=%s\n", key, value)
+	var content bytes.Buffer
+	for key, value := range Globals() {
+		fmt.Fprintf(&content, "%s=%s\n", key, value)
 	}
 
-	writer.Flush()
-	return err
+	// written in place: the file keeps the mode it was given, and may be a link or a file mounted on its own
+	return os.WriteFile(AppManagementGlobalEnvFilePath, content.Bytes(), 0o644)
 }
 
 func mapTo(section string, v interface{}) {

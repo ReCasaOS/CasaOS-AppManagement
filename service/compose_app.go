@@ -682,11 +682,12 @@ func pulledServiceNames(services types.Services) []string {
 }
 
 func (a *ComposeApp) injectEnvVariableToComposeApp() {
+	globals := config.Globals() // read once: every service of the app gets the same values
 	for name, service := range a.Services {
 		if service.Environment == nil {
 			service.Environment = types.MappingWithEquals{}
 		}
-		for k, v := range config.Global {
+		for k, v := range globals {
 			// if there is same name var declared in environment in compose yaml
 			// we should not reassign a value to it.
 			if service.Environment[k] == nil {
