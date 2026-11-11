@@ -17,9 +17,11 @@ type fakeCompose struct {
 	startErr     error
 	startCalled  bool
 	startOptions api.StartOptions
+	created      *types.Project
 }
 
-func (f *fakeCompose) Create(context.Context, *types.Project, api.CreateOptions) error {
+func (f *fakeCompose) Create(_ context.Context, project *types.Project, _ api.CreateOptions) error {
+	f.created = project
 	return f.createErr
 }
 
