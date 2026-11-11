@@ -617,6 +617,7 @@ func (ds *dockerService) RecreateContainer(ctx context.Context, id string, pull 
 		go PublishEventWrapper(ctx, common.EventTypeContainerCreateBegin, map[string]string{
 			common.PropertyTypeContainerName.Name: tempName,
 		})
+		PublishInstallStep(ctx, InstallStepCreate)
 
 		defer PublishEventWrapper(ctx, common.EventTypeContainerCreateEnd, map[string]string{
 			common.PropertyTypeContainerID.Name:   newID,
@@ -691,6 +692,7 @@ func (ds *dockerService) RecreateContainer(ctx context.Context, id string, pull 
 		go PublishEventWrapper(ctx, common.EventTypeContainerStartBegin, map[string]string{
 			common.PropertyTypeContainerID.Name: newID,
 		})
+		PublishInstallStep(ctx, InstallStepStart)
 
 		defer PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, map[string]string{
 			common.PropertyTypeContainerID.Name: newID,

@@ -623,7 +623,7 @@ func (a *ComposeApp) Pull(ctx context.Context) error {
 			})
 
 			if err := docker.PullImage(ctx, app.Image, func(out io.ReadCloser) {
-				pullImageProgress(ctx, out, "INSTALL", serviceNum, i+1)
+				pullImageProgress(ctx, out, app.Image, serviceNum, i+1)
 			}); err != nil {
 				go PublishEventWrapper(ctx, common.EventTypeImagePullError, map[string]string{
 					common.PropertyTypeImageName.Name: app.Image,
@@ -1065,6 +1065,7 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 	}
 
 	go PublishEventWrapper(ctx, common.EventTypeContainerStartBegin, nil)
+	PublishInstallStep(ctx, InstallStepStart)
 
 	defer PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, nil)
 
@@ -1109,6 +1110,7 @@ func (a *ComposeApp) PullAndInstall(ctx context.Context) error {
 	// create
 	if err := func() error {
 		go PublishEventWrapper(ctx, common.EventTypeContainerCreateBegin, nil)
+		PublishInstallStep(ctx, InstallStepCreate)
 
 		defer PublishEventWrapper(ctx, common.EventTypeContainerCreateEnd, nil)
 
@@ -1156,6 +1158,7 @@ func (a *ComposeApp) PullAndInstall(ctx context.Context) error {
 	}
 
 	go PublishEventWrapper(ctx, common.EventTypeContainerStartBegin, nil)
+	PublishInstallStep(ctx, InstallStepStart)
 
 	defer PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, nil)
 
