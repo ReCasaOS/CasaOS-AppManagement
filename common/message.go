@@ -39,6 +39,12 @@ var (
 		Example:     utils.Ptr("64"),
 	}
 
+	PropertyTypeAppInstallStep = message_bus.PropertyType{
+		Name:        "app:install:step",
+		Description: utils.Ptr("what the install is busy with: pull, extract, create or start"),
+		Example:     utils.Ptr("pull"),
+	}
+
 	PropertyTypeCheckPortConflict = message_bus.PropertyType{
 		Name:        "check_port_conflict",
 		Description: utils.Ptr("todo: the field should be remove in future. it is not need for most message"),
@@ -79,6 +85,30 @@ var (
 		Name:        "docker:image:name",
 		Description: utils.Ptr("name of the image"),
 		Example:     utils.Ptr("hello-world:latest"),
+	}
+
+	PropertyTypeImageIndex = message_bus.PropertyType{
+		Name:        "docker:image:index",
+		Description: utils.Ptr("place of the image among the images of the app, from 1"),
+		Example:     utils.Ptr("2"),
+	}
+
+	PropertyTypeImageCount = message_bus.PropertyType{
+		Name:        "docker:image:count",
+		Description: utils.Ptr("how many images the app is made of"),
+		Example:     utils.Ptr("3"),
+	}
+
+	PropertyTypeImageDownloaded = message_bus.PropertyType{
+		Name:        "docker:image:downloaded",
+		Description: utils.Ptr("bytes of the image downloaded so far"),
+		Example:     utils.Ptr("327155712"),
+	}
+
+	PropertyTypeImageSize = message_bus.PropertyType{
+		Name:        "docker:image:size",
+		Description: utils.Ptr("bytes to download for the image, absent until every layer has said its size"),
+		Example:     utils.Ptr("1503238553"),
 	}
 
 	PropertyTypeImageUpdated = message_bus.PropertyType{
@@ -192,6 +222,12 @@ var (
 			PropertyTypeAppIcon,
 			PropertyTypeAppProgress,
 			PropertyTypeAppTitle,
+			PropertyTypeAppInstallStep,
+			PropertyTypeImageName,
+			PropertyTypeImageIndex,
+			PropertyTypeImageCount,
+			PropertyTypeImageDownloaded,
+			PropertyTypeImageSize,
 			PropertyTypeCheckPortConflict,
 			PropertyTypeDryRun,
 		},

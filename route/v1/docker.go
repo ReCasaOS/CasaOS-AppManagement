@@ -674,6 +674,7 @@ func pullAndInstall(ctx context.Context, imageName string, m *model.Customizatio
 
 	if err := func() error {
 		go service.PublishEventWrapper(ctx, common.EventTypeContainerCreateBegin, nil)
+		service.PublishInstallStep(ctx, service.InstallStepCreate)
 
 		defer service.PublishEventWrapper(ctx, common.EventTypeContainerCreateEnd, nil)
 
@@ -697,6 +698,7 @@ func pullAndInstall(ctx context.Context, imageName string, m *model.Customizatio
 	// step：启动容器
 	if err := func() error {
 		go service.PublishEventWrapper(ctx, common.EventTypeContainerStartBegin, nil)
+		service.PublishInstallStep(ctx, service.InstallStepStart)
 
 		defer service.PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, nil)
 

@@ -47,7 +47,7 @@ func (ds *dockerService) PullImage(ctx context.Context, imageName string) error 
 	})
 
 	if err := docker.PullImage(ctx, imageName, func(out io.ReadCloser) {
-		pullImageProgress(ctx, out, "INSTALL", 1, 1)
+		pullImageProgress(ctx, out, imageName, 1, 1)
 	}); err != nil {
 		go PublishEventWrapper(ctx, common.EventTypeImagePullError, map[string]string{
 			common.PropertyTypeImageName.Name: imageName,
@@ -115,7 +115,7 @@ func (ds *dockerService) PullLatestImage(ctx context.Context, imageName string) 
 	}
 
 	if err = docker.PullImage(ctx, imageName, func(out io.ReadCloser) {
-		pullImageProgress(ctx, out, "UPDATE", 1, 1)
+		pullImageProgress(ctx, out, imageName, 1, 1)
 	}); err != nil {
 		go PublishEventWrapper(ctx, common.EventTypeImagePullError, map[string]string{
 			common.PropertyTypeImageName.Name: imageName,
@@ -164,26 +164,140 @@ Loop:
 	return err
 }
 
-type StatusType string
-
+// What an install is busy with, as the dashboard is told in `app:install:step`.
 const (
-	Pull         StatusType = "Pulling fs layer"
-	PullComplete StatusType = "Pull complete"
-	// AlreadyExists is what the daemon sends for a layer this host already has. It
-	// arrives INSTEAD of the pulling/complete pair, never alongside it, so a layer
-	// reported this way is one that is both known and finished.
-	AlreadyExists StatusType = "Already exists"
+	InstallStepPull    = "pull"
+	InstallStepExtract = "extract"
+	InstallStepCreate  = "create"
+	InstallStepStart   = "start"
 )
 
-type ProgressDetail struct {
-	Current int64 `json:"current"`
-	Total   int64 `json:"total"`
+// downloadShare is how much of a layer its download is, the rest being its unpacking. A
+// layer that has arrived is not ready: counted whole, the bar was full for as long as the
+// unpacking took, which is minutes for a large image.
+const downloadShare = 0.8
+
+// pullLayer is one layer of the image being pulled.
+type pullLayer struct {
+	current, total int64 // bytes downloaded, and to download: zero until the download starts
+	downloaded     bool
+	done           bool // unpacked, or on this host already
 }
 
-type PullOut struct {
-	Status         StatusType     `json:"status"`
-	ProgressDetail ProgressDetail `json:"progressDetail"`
-	Id             string         `json:"id"`
+// pullState follows the pull stream of one image, layer by layer.
+type pullState struct {
+	layers map[string]*pullLayer
+}
+
+func newPullState() *pullState {
+	return &pullState{layers: map[string]*pullLayer{}}
+}
+
+func (p *pullState) observe(message jsonmessage.JSONMessage) {
+	switch message.Status {
+	case "Pulling fs layer", "Waiting", "Downloading", "Download complete", "Extracting", "Pull complete", "Already exists":
+	default:
+		return // about the image, not about one of its layers
+	}
+
+	layer := p.layers[message.ID]
+	if layer == nil {
+		layer = &pullLayer{}
+		p.layers[message.ID] = layer
+	}
+
+	switch message.Status {
+	case "Downloading":
+		if message.Progress != nil {
+			layer.current, layer.total = message.Progress.Current, message.Progress.Total
+		}
+	case "Download complete", "Extracting":
+		// unpacking counts on the same field as the download: its figures are not read
+		layer.downloaded = true
+		layer.current = layer.total
+	// A layer this host already has arrives as `Already exists` INSTEAD of the
+	// pulling/complete pair, never alongside it: known and finished at once. Counting it
+	// nowhere left the bar at zero for the whole install of an image already on disk.
+	case "Pull complete", "Already exists":
+		layer.downloaded, layer.done = true, true
+		layer.current = layer.total
+	}
+}
+
+// properties is what `app:install-progress` says about the pull at this point, and false
+// while no layer has been announced: no layers means no fraction, not 0/0.
+//
+// currentImage is 1-based, so the images already done are currentImage-1: image 2 of 3
+// half pulled is (1+0.5)/3. Multiplying by currentImage/totalImageNum instead capped the
+// first image of two at 50% and then sent the bar back to zero for the second.
+func (p *pullState) properties(imageName string, totalImageNum, currentImage int) (map[string]string, bool) {
+	if len(p.layers) == 0 {
+		return nil, false
+	}
+
+	var fraction float32
+	var downloaded, size int64
+	sizeKnown, allDownloaded := true, true
+
+	for _, layer := range p.layers {
+		switch {
+		case layer.done:
+			fraction++
+		case layer.downloaded:
+			fraction += downloadShare
+		case layer.total > 0:
+			// a layer on its way counts for what has arrived of it: counting finished
+			// layers only left the bar still for as long as one big layer took
+			fraction += downloadShare * float32(layer.current) / float32(layer.total)
+		}
+
+		downloaded += layer.current
+		size += layer.total
+		sizeKnown = sizeKnown && (layer.downloaded || layer.total > 0)
+		allDownloaded = allDownloaded && layer.downloaded
+	}
+
+	progress := int((float32(currentImage-1) + fraction/float32(len(p.layers))) / float32(totalImageNum) * 100)
+	progress = max(0, min(100, progress))
+
+	// Nothing is left to download, whether or not anything was: an image this host
+	// already had is not downloading either.
+	step := InstallStepPull
+	if allDownloaded {
+		step = InstallStepExtract
+	}
+
+	properties := map[string]string{
+		common.PropertyTypeAppProgress.Name:     fmt.Sprint(progress),
+		common.PropertyTypeAppInstallStep.Name:  step,
+		common.PropertyTypeImageName.Name:       imageName,
+		common.PropertyTypeImageIndex.Name:      fmt.Sprint(currentImage),
+		common.PropertyTypeImageCount.Name:      fmt.Sprint(totalImageNum),
+		common.PropertyTypeImageDownloaded.Name: fmt.Sprint(downloaded),
+	}
+	// A layer says its size only once its download starts. Until every layer has, the sum
+	// is too small to be shown as the size of the image.
+	if sizeKnown {
+		properties[common.PropertyTypeImageSize.Name] = fmt.Sprint(size)
+	}
+	return properties, true
+}
+
+// installStepProperties is what `app:install-progress` says once the images are here.
+func installStepProperties(step string) map[string]string {
+	return map[string]string{
+		common.PropertyTypeAppProgress.Name:    "100",
+		common.PropertyTypeAppInstallStep.Name: step,
+	}
+}
+
+// PublishInstallStep tells the dashboard what an install moved on to after the pull.
+//
+// Not in a goroutine, unlike the events around it: the end of the install is published in
+// line by a defer, and a step that lands after it opens the card again with nothing left
+// to close it.
+func PublishInstallStep(ctx context.Context, step string) {
+	PublishEventWrapper(ctx, common.EventTypeAppInstallProgress, installStepProperties(step))
 }
 
 type Throttler struct {
@@ -204,16 +318,19 @@ func (t *Throttler) ThrottleFunc(f func()) {
 	}
 }
 
-func pullImageProgress(ctx context.Context, out io.ReadCloser, notificationType string, totalImageNum int, currentImage int) {
-	layerNum := 0
-	completedLayerNum := 0
+func pullImageProgress(ctx context.Context, out io.ReadCloser, imageName string, totalImageNum int, currentImage int) {
+	state := newPullState()
 	decoder := json.NewDecoder(out)
 	if decoder == nil {
 		logger.Error("failed to create json decoder")
 		return
 	}
 
+	// The first frame waits its turn too. The daemon names the layers one line at a time,
+	// and a first layer already on this host is, alone, an image that is all here: the bar
+	// opened at 100% and came back down as the others were named.
 	throttler := NewThrottler(500 * time.Millisecond)
+	throttler.LastInvokeTime = time.Now()
 
 	for decoder.More() {
 		var message jsonmessage.JSONMessage
@@ -222,55 +339,16 @@ func pullImageProgress(ctx context.Context, out io.ReadCloser, notificationType 
 			continue
 		}
 
-		switch message.Status {
-		// pull a new layer
-		case string(Pull):
-			layerNum++
-		// pull a layer complete
-		case string(PullComplete):
-			completedLayerNum++
-		// a layer this host already has: counted on both sides, because it is a layer
-		// of the image and there is nothing left to do about it. Counting it nowhere is
-		// what left the bar at zero for the whole install of an image already on disk --
-		// every layer `Already exists`, so nothing was ever counted and the fraction
-		// below was 0/0.
-		case string(AlreadyExists):
-			layerNum++
-			completedLayerNum++
-		}
+		state.observe(message)
 
-		// Nothing has been announced yet: no layers means no fraction, not 0/0, which
-		// is a NaN that survives both clamps below and lands as whatever the conversion
-		// to int makes of it.
-		if layerNum == 0 {
+		properties, ok := state.properties(imageName, totalImageNum, currentImage)
+		if !ok {
 			continue
 		}
 
-		// layer progress, within the image being pulled right now
-		completedFraction := float32(completedLayerNum) / float32(layerNum)
-
-		// and where that image sits in the whole job. currentImage is 1-based, so the
-		// images already done are currentImage-1: image 2 of 3 half pulled is (1+0.5)/3,
-		// half way through the second third. Multiplying by currentImage/totalImageNum
-		// instead capped the first image of two at 50% and then sent the bar back to
-		// zero for the second.
-		progress := (float32(currentImage-1) + completedFraction) / float32(totalImageNum) * 100
-
 		// reduce the event send frequency
 		throttler.ThrottleFunc(func() {
-			go func(progress int) {
-				// ensure progress is in [0, 100]
-				if progress < 0 {
-					progress = 0
-				}
-				if progress > 100 {
-					progress = 100
-				}
-
-				PublishEventWrapper(ctx, common.EventTypeAppInstallProgress, map[string]string{
-					common.PropertyTypeAppProgress.Name: fmt.Sprintf("%d", progress),
-				})
-			}(int(progress))
+			go PublishEventWrapper(ctx, common.EventTypeAppInstallProgress, properties)
 		})
 	}
 }
