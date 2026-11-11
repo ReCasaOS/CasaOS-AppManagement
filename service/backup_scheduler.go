@@ -199,7 +199,7 @@ var backupTick sync.Mutex
 // backupClock is the one clock a run's own times and the tick's hold notice are read from, a
 // variable so a test can move it while a fake backup "runs". The tick's `now` is not it: that is
 // when the tick began, which for the second backup of a tick can be hours before it did.
-var backupClock = time.Now
+var backupClock = BoxNow
 
 // lastUpgradeHoldLog is when the tick last said backups were waiting for an upgrade.
 var (

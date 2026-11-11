@@ -347,7 +347,7 @@ func (a *AppManagement) BackupSchedules(ctx echo.Context) error {
 		return backupError(ctx, err)
 	}
 
-	now := time.Now()
+	now := service.BoxNow()
 	out := make([]codegen.BackupSchedule, 0, len(schedules))
 	for _, schedule := range schedules {
 		out = append(out, toCodegenSchedule(schedule, now))
