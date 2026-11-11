@@ -10,53 +10,11 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/docker"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	client2 "github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"go.uber.org/zap"
 )
-
-// 检查镜像是否存在
-func (ds *dockerService) IsExistImage(imageName string) bool {
-	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
-	if err != nil {
-		return false
-	}
-	defer cli.Close()
-	filter := filters.NewArgs()
-	filter.Add("reference", imageName)
-
-	list, err := cli.ImageList(context.Background(), image.ListOptions{Filters: filter})
-
-	if err == nil && len(list) > 0 {
-		return true
-	}
-
-	return false
-}
-
-// 安装镜像
-func (ds *dockerService) PullImage(ctx context.Context, imageName string) error {
-	go PublishEventWrapper(ctx, common.EventTypeImagePullBegin, map[string]string{
-		common.PropertyTypeImageName.Name: imageName,
-	})
-
-	defer PublishEventWrapper(ctx, common.EventTypeImagePullEnd, map[string]string{
-		common.PropertyTypeImageName.Name: imageName,
-	})
-
-	if err := docker.PullImage(ctx, imageName, func(out io.ReadCloser) {
-		pullImageProgress(ctx, out, imageName, 1, 1)
-	}); err != nil {
-		go PublishEventWrapper(ctx, common.EventTypeImagePullError, map[string]string{
-			common.PropertyTypeImageName.Name: imageName,
-			common.PropertyTypeMessage.Name:   err.Error(),
-		})
-	}
-
-	return nil
-}
 
 // Try to pull latest image.
 //

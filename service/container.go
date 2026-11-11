@@ -34,7 +34,6 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/system"
 	client2 "github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 
@@ -50,8 +49,6 @@ var (
 
 type DockerService interface {
 	// image
-	IsExistImage(imageName string) bool
-	PullImage(ctx context.Context, imageName string) error
 	PullLatestImage(ctx context.Context, imageName string) (bool, error)
 	RemoveImage(name string) error
 
@@ -63,7 +60,6 @@ type DockerService interface {
 	GetContainer(id string) (types.Container, error)
 	GetContainerAppList(name, image, state *string) (*[]model.MyAppList, *[]model.MyAppList)
 	GetContainerByName(name string) (*types.Container, error)
-	GetContainerLog(name string) ([]byte, error)
 	GetContainerStats() []model.DockerStatsModel
 	RecreateContainer(ctx context.Context, id string, pull bool, force bool) error
 	RemoveContainer(name string, update bool) error
@@ -80,7 +76,6 @@ type DockerService interface {
 	GetNetworkList() []network.Summary
 
 	// docker server
-	GetServerInfo() (system.Info, error)
 }
 
 type dockerService struct{}
@@ -837,27 +832,6 @@ func (ds *dockerService) StartContainer(name string) error {
 	return docker.StartContainer(ctx, name)
 }
 
-// 查看日志
-func (ds *dockerService) GetContainerLog(name string) ([]byte, error) {
-	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
-	if err != nil {
-		return []byte(""), err
-	}
-	defer cli.Close()
-	// body, err := cli.ContainerAttach(context.Background(), name, types.ContainerAttachOptions{Logs: true, Stream: false, Stdin: false, Stdout: false, Stderr: false})
-	body, err := cli.ContainerLogs(context.Background(), name, container.LogsOptions{ShowStdout: true, ShowStderr: true})
-	if err != nil {
-		return []byte(""), err
-	}
-
-	defer body.Close()
-	content, err := io.ReadAll(body)
-	if err != nil {
-		return []byte(""), err
-	}
-	return content, nil
-}
-
 func (ds *dockerService) GetContainerByName(name string) (*types.Container, error) {
 	cli, _ := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
 	defer cli.Close()
@@ -892,16 +866,6 @@ func (ds *dockerService) GetNetworkList() []network.Summary {
 	defer cli.Close()
 	networks, _ := cli.NetworkList(context.Background(), network.ListOptions{})
 	return networks
-}
-
-func (ds *dockerService) GetServerInfo() (system.Info, error) {
-	cli, err := client2.NewClientWithOpts(client2.FromEnv, client2.WithAPIVersionNegotiation())
-	if err != nil {
-		return system.Info{}, err
-	}
-	defer cli.Close()
-
-	return cli.Info(context.Background())
 }
 
 func NewDockerService() DockerService {
