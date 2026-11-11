@@ -894,8 +894,26 @@ func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Compose
 // upWithCheckRequire is UpWithCheckRequire, removing the project's orphans when asked. Only a
 // git app's runtime asks: its repository's compose files are the whole app, so a container of a
 // service they no longer name is what a switch or a rollback left of the version it replaced.
-func (a *ComposeApp) upWithCheckRequire(ctx context.Context, service api.Compose, removeOrphans bool) error {
-	// prepare source path for volumes if not exist
+func (a *ComposeApp) upWithCheckRequire(ctx context.Context, service composeCreateStarter, removeOrphans bool) error {
+	if err := a.prepareSources(); err != nil {
+		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
+			common.PropertyTypeMessage.Name: err.Error(),
+		})
+		return err
+	}
+
+	if err := a.up(ctx, service, removeOrphans); err != nil {
+		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
+			common.PropertyTypeMessage.Name: err.Error(),
+		})
+		return err
+	}
+	return nil
+}
+
+// prepareSources makes the folders the app's volumes are bound to, and leaves out the devices
+// this box does not have.
+func (a *ComposeApp) prepareSources() error {
 	for name, app := range a.Services {
 		for _, volume := range app.Volumes {
 			if _, ok := a.Volumes[volume.Source]; ok {
@@ -903,11 +921,7 @@ func (a *ComposeApp) upWithCheckRequire(ctx context.Context, service api.Compose
 				continue
 			}
 
-			path := volume.Source
-			if err := file.IsNotExistMkDir(path); err != nil {
-				go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
-					common.PropertyTypeMessage.Name: err.Error(),
-				})
+			if err := file.IsNotExistMkDir(volume.Source); err != nil {
 				return err
 			}
 		}
@@ -925,14 +939,50 @@ func (a *ComposeApp) upWithCheckRequire(ctx context.Context, service api.Compose
 		app.Devices = deviceMapFiltered
 		a.Services[name] = app
 	}
+	return nil
+}
 
-	if err := a.up(ctx, service, removeOrphans); err != nil {
-		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
-			common.PropertyTypeMessage.Name: err.Error(),
-		})
+// ReapplyGlobals gives the app's containers the global variables as they are now, and leaves
+// the app as it was: a change of a variable is not a start button.
+func (a *ComposeApp) ReapplyGlobals(ctx context.Context, service api.Compose) error {
+	// in its turn: a backup that holds the app stopped starts the containers it stopped, and
+	// they must still be there
+	end, err := beginWaiting(ctx, a.Name, "global variables", backupPatience)
+	if err != nil {
 		return err
 	}
-	return nil
+	defer end()
+
+	containerLists, err := a.Containers(ctx)
+	if err != nil {
+		return err
+	}
+	return a.reapplyGlobals(ctx, service, containerLists)
+}
+
+// reapplyGlobals is ReapplyGlobals for the containers the app has. A running app is brought up
+// again. A stopped one only has its containers made again: a start reuses the containers that
+// are there, so that is where the next start finds the new values.
+func (a *ComposeApp) reapplyGlobals(ctx context.Context, service composeCreateStarter, containerLists map[string][]codegen.ContainerSummary) error {
+	if len(runningContainerIDs(containerLists)) > 0 {
+		return a.upWithCheckRequire(ctx, service, false)
+	}
+	stopped := 0
+	for _, containers := range containerLists {
+		for _, container := range containers {
+			if container.State != "exited" && container.State != "created" {
+				return nil // dead, removing: compose's create starts what is in neither state
+			}
+			stopped++
+		}
+	}
+	if stopped == 0 {
+		return nil // nothing to give the values to: what creates its containers reads them then
+	}
+	if err := a.prepareSources(); err != nil {
+		return err
+	}
+	return a.Create(ctx, api.CreateOptions{}, service)
 }
 
 func (a *ComposeApp) PullAndApply(ctx context.Context, newComposeYAML []byte) error {
@@ -1039,7 +1089,7 @@ func keepNewDefinition(err error) bool {
 	return err == nil || errors.Is(err, errUpNotConfirmed)
 }
 
-func (a *ComposeApp) Create(ctx context.Context, options api.CreateOptions, service api.Compose) error {
+func (a *ComposeApp) Create(ctx context.Context, options api.CreateOptions, service composeCreateStarter) error {
 	a.injectEnvVariableToComposeApp()
 	return service.Create(ctx, (*codegen.ComposeApp)(a), api.CreateOptions{})
 }
@@ -1367,9 +1417,9 @@ func (a *ComposeApp) SetStatus(ctx context.Context, status codegen.RequestCompos
 				}
 				isContainerExited := true
 				for _, containerSummary := range containerSummarys {
-					// to make sure every service of the container is stopped
-					// I think "exited" can be replace by constant value.
-					isContainerExited = isContainerExited && (containerSummary.State == "exited")
+					// to make sure every service of the container is stopped; "created" is one
+					// made again while the app was stopped, and never started since
+					isContainerExited = isContainerExited && (containerSummary.State == "exited" || containerSummary.State == "created")
 				}
 				if isContainerExited {
 					break

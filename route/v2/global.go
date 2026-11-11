@@ -75,21 +75,7 @@ func updateGlobalEnv(ctx echo.Context, key string, value string) error {
 		return err
 	}
 
-	// re up all containers to apply the new env var
-	go func() {
-		backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
-		composeAppsWithStoreInfo, err := service.MyService.Compose().List(backgroundCtx)
-		if err != nil {
-			logger.Error("Failed to get composeAppsWithStoreInfo", zap.Any("error", err))
-		}
-		for _, project := range composeAppsWithStoreInfo {
-			if service, _, err := service.ApiService(); err == nil {
-				project.UpWithCheckRequire(backgroundCtx, service)
-			} else {
-				logger.Error("Failed to get Api Service", zap.Any("error", err))
-			}
-		}
-	}()
+	reapplyGlobals(PropertiesFromQueryParams(ctx))
 
 	return nil
 }
@@ -100,23 +86,34 @@ func deleteGlobalEnv(ctx echo.Context, key string) error {
 		return err
 	}
 
-	// re up all containers to apply the new env var
+	reapplyGlobals(PropertiesFromQueryParams(ctx))
+
+	return nil
+}
+
+// reapplyGlobals gives every app the global variables as they are now, in the background. The
+// properties are read by the caller: echo takes its context back when the handler returns.
+func reapplyGlobals(properties map[string]string) {
 	go func() {
-		backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
-		composeAppsWithStoreInfo, err := service.MyService.Compose().List(backgroundCtx)
+		backgroundCtx := common.WithProperties(context.Background(), properties)
+		apps, err := service.MyService.Compose().List(backgroundCtx)
 		if err != nil {
-			logger.Error("Failed to get composeAppsWithStoreInfo", zap.Any("error", err))
+			logger.Error("failed to list the apps to give the global variables to", zap.Error(err))
+			return
 		}
-		for _, project := range composeAppsWithStoreInfo {
-			if service, _, err := service.ApiService(); err == nil {
-				project.UpWithCheckRequire(backgroundCtx, service)
-			} else {
-				logger.Error("Failed to get Api Service", zap.Any("error", err))
+		compose, dockerClient, err := service.ApiService()
+		if err != nil {
+			logger.Error("failed to get the compose service", zap.Error(err))
+			return
+		}
+		defer dockerClient.Close()
+
+		for name, app := range apps {
+			if err := app.ReapplyGlobals(backgroundCtx, compose); err != nil {
+				logger.Error("failed to give an app the global variables", zap.Error(err), zap.String("name", name))
 			}
 		}
 	}()
-
-	return nil
 }
 
 func (a *AppManagement) DeleteGlobalSetting(ctx echo.Context, key codegen.GlobalSettingKey) error {
