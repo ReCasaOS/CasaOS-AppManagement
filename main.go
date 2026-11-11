@@ -170,7 +170,7 @@ func main() {
 		// costs one file read.
 		backupRunner := service.NewScheduledBackupRunner()
 		if _, err := crontab.AddFunc("@every 1m", func() {
-			service.RunDueBackups(ctx, time.Now(), backupRunner)
+			service.RunDueBackups(ctx, service.BoxNow(), backupRunner)
 		}); err != nil {
 			panic(err)
 		}
@@ -179,7 +179,7 @@ func main() {
 		// its own, so a verification -- up to an hour each -- never holds up the backups' tick;
 		// the tour takes a lock of its own, as cron starts one a minute whether the last ended.
 		if _, err := crontab.AddFunc("@every 1m", func() {
-			service.RunDueVerifications(ctx, time.Now(), rclone.NewClient())
+			service.RunDueVerifications(ctx, service.BoxNow(), rclone.NewClient())
 		}); err != nil {
 			panic(err)
 		}
@@ -189,7 +189,7 @@ func main() {
 		// not due costs one file read.
 		resticChecker := service.NewResticChecker()
 		if _, err := crontab.AddFunc("@every 1h", func() {
-			service.RunDueResticChecks(ctx, time.Now(), resticChecker)
+			service.RunDueResticChecks(ctx, service.BoxNow(), resticChecker)
 		}); err != nil {
 			panic(err)
 		}

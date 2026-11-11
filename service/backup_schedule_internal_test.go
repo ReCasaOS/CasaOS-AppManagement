@@ -1,6 +1,8 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -273,5 +275,43 @@ func TestASlotInTheHourThatDoesNotExistStaysOnItsDay(t *testing.T) {
 	}
 	if y, m, d := next.Date(); y != 2026 || m != 3 || d != 29 {
 		t.Fatalf("next %v is not on the 29th", next)
+	}
+}
+
+// An owner who sets the box to São Paulo after this service started must get their 01:30
+// at their 01:30. Go reads the zone once per process, so the tick has to ask the box.
+func TestBoxNowFollowsTheZoneTheBoxHasNow(t *testing.T) {
+	t.Setenv("TZ", "") // puts back whatever was there
+	os.Unsetenv("TZ")
+
+	// the smallest zone file there is: one zone, UTC-3, no transitions
+	zone := append([]byte("TZif"), make([]byte, 40)...)
+	zone[39], zone[43] = 1, 4                         // one zone, four letters of abbreviation
+	zone = append(zone, 0xff, 0xff, 0xd5, 0xd0, 0, 0) // -10800 s, not summer time
+	zone = append(zone, '-', '0', '3', 0)
+
+	was := boxZoneFile
+	t.Cleanup(func() { boxZoneFile = was })
+
+	boxZoneFile = filepath.Join(t.TempDir(), "localtime")
+	if err := os.WriteFile(boxZoneFile, zone, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, offset := BoxNow().Zone(); offset != -3*60*60 {
+		t.Fatalf("the box is at UTC-3 and the clock answered an offset of %d s", offset)
+	}
+
+	// a box with no zone file keeps the zone the process started with
+	boxZoneFile = filepath.Join(t.TempDir(), "missing")
+	if got := BoxNow().Location(); got != time.Local {
+		t.Fatalf("no zone file, and the clock answered in %v", got)
+	}
+
+	// a zone given to the service itself wins, as it does for Go
+	boxZoneFile = was
+	t.Setenv("TZ", "UTC")
+	if got := BoxNow().Location(); got != time.Local {
+		t.Fatalf("TZ is set, and the clock answered in %v", got)
 	}
 }

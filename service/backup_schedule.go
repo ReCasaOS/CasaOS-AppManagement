@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,6 +66,35 @@ func parseAt(at string) (hour int, minute int, err error) {
 	}
 
 	return hour, minute, nil
+}
+
+// boxZoneFile is where the box keeps its time zone.
+var boxZoneFile = "/etc/localtime"
+
+// BoxNow is now, on the wall clock the box has at this moment.
+//
+// Go reads the time zone once per process. An owner who set the box to their own zone
+// after this service started kept getting "01:30" at 01:30 of the old zone until a
+// restart, so every clock a schedule is read against asks the box again.
+func BoxNow() time.Time {
+	now := time.Now()
+
+	// a zone given to the service itself wins, as it does for Go
+	if _, set := os.LookupEnv("TZ"); set {
+		return now
+	}
+
+	data, err := os.ReadFile(boxZoneFile)
+	if err != nil {
+		return now
+	}
+
+	zone, err := time.LoadLocationFromTZData("Local", data)
+	if err != nil {
+		return now
+	}
+
+	return now.In(zone)
 }
 
 // mostRecentSlot is the last moment this schedule was supposed to fire, at or
