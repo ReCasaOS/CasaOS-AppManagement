@@ -5521,6 +5521,11 @@ components:
           description: The application of a compose container, absent for any other
           type: string
           example: jarvis
+        removed:
+          description: |-
+            `true` when Docker no longer lists the container (the app was uninstalled):
+            only its recorded history is left, and `state` reads `stopped`. Absent otherwise.
+          type: boolean
         state:
           description: "`running`, `stopped`, `paused`, `crashed` or `unknown`"
           type: string
