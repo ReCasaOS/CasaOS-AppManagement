@@ -86,7 +86,12 @@ func waitNoFollower(t *testing.T) {
 
 func dayFile(t *testing.T, s *logstore.Store) string {
 	t.Helper()
-	b, err := os.ReadFile(logstore.DayFile(s.Root, "plex", "plex", testID, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)))
+	return dayFileOf(t, s, time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC))
+}
+
+func dayFileOf(t *testing.T, s *logstore.Store, day time.Time) string {
+	t.Helper()
+	b, err := os.ReadFile(logstore.DayFile(s.Root, "plex", "plex", testID, day))
 	if os.IsNotExist(err) {
 		return ""
 	}
@@ -151,14 +156,18 @@ func TestLogEventOfDockerActions(t *testing.T) {
 }
 
 func TestSinceForAndTheBoundaryDedupe(t *testing.T) {
-	last := time.Date(2026, 11, 5, 10, 0, 0, 500, time.UTC)
+	// yesterday at 10:00, so it stays inside the retention window whatever the day the test runs
+	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-14 * time.Hour)
+	last := day.Add(500)
+	stamp := day.Format("2006-01-02T15:04:05")
+	next := day.Add(time.Second).Format("2006-01-02T15:04:05")
 	assert.Equal(t, sinceFor(time.Time{}, false, time.Time{}), "")
-	assert.Equal(t, sinceFor(last, true, time.Time{}), "2026-11-05T10:00:00.000000501Z")
+	assert.Equal(t, sinceFor(last, true, time.Time{}), stamp+".000000501Z")
 	// the retention's start bounds a first follow, and a last line older than it
 	floor := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
 	assert.Equal(t, sinceFor(time.Time{}, false, floor), "2026-10-29T10:00:00Z")
 	assert.Equal(t, sinceFor(floor.Add(-time.Hour), true, floor), "2026-10-29T10:00:00Z")
-	assert.Equal(t, sinceFor(last, true, floor), "2026-11-05T10:00:00.000000501Z")
+	assert.Equal(t, sinceFor(last, true, floor), stamp+".000000501Z")
 
 	s := openLogs(t)
 	w := s.Writer("plex", "plex", testID)
@@ -166,12 +175,12 @@ func TestSinceForAndTheBoundaryDedupe(t *testing.T) {
 	assert.NilError(t, s.CloseWriter(testID))
 
 	docker := &fakeLogsDocker{tty: true, body: bodyOf(
-		"2026-11-05T10:00:00.0000005Z same\n2026-11-05T10:00:01Z next\n")}
+		stamp+".0000005Z same\n"+next+"Z next\n")}
 	follow(context.Background(), docker, testID, "plex", "plex", "plex", false)
 	waitNoFollower(t)
 
 	assert.Equal(t, docker.opts[0].Since, sinceFor(last, true, time.Time{}))
-	assert.Equal(t, dayFile(t, s), "2026-11-05T10:00:00.0000005Z o same\n2026-11-05T10:00:01Z o next\n")
+	assert.Equal(t, dayFileOf(t, s, day.Truncate(24*time.Hour)), stamp+".0000005Z o same\n"+next+"Z o next\n")
 }
 
 func TestATTYContainerIsReadRaw(t *testing.T) {

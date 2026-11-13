@@ -61,6 +61,9 @@ func (a *AppManagement) StatsList(ctx echo.Context) error {
 			Id: it.ID, Name: it.Name, Kind: it.Kind, Group: it.Group, State: it.State,
 			StartedAt: it.StartedAt, CpuPercent: it.CPUPercent, Alerts: it.Alerts,
 		}
+		if it.Removed {
+			item.Removed = utils.Ptr(true)
+		}
 		if it.App != "" {
 			item.App = utils.Ptr(it.App)
 		}

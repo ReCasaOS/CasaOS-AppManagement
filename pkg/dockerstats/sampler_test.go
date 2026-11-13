@@ -160,6 +160,7 @@ func TestAContainerThatDisappearsIsForgottenAfterTwoMissedTicks(t *testing.T) {
 	it := h.item(webID)
 	assert.Equal(t, it.State, "stopped")
 	assert.Equal(t, it.Name, "web")
+	assert.Assert(t, it.Removed, "a container Docker no longer lists is marked removed")
 	assert.Assert(t, it.StartedAt == nil && it.Detail == "")
 	v, err := h.s.Series(webID, stats.RangeLive)
 	assert.NilError(t, err)

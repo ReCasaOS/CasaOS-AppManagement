@@ -67,6 +67,7 @@ type ItemInfo struct {
 	Alerts      int
 	StartedAt   *time.Time // inspect State.StartedAt, nil when unknown (container known only from disk)
 	Detail      string     // image name, at most 200 characters, "" when unknown
+	Removed     bool       // docker no longer lists it; only its recorded history is left
 }
 
 type SeriesView struct {
@@ -462,7 +463,7 @@ func (s *Sampler) Items() ([]ItemInfo, error) {
 			continue
 		}
 		if who, ok := ParseID(id); ok {
-			out = append(out, ItemInfo{Identity: who, State: "stopped"})
+			out = append(out, ItemInfo{Identity: who, State: "stopped", Removed: true})
 		}
 	}
 	for i := range out {
