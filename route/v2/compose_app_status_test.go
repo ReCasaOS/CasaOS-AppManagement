@@ -48,3 +48,24 @@ func TestComposeAppStatusIsTheWorstOfEveryContainer(t *testing.T) {
 	// the one word the dashboard renders
 	assert.Equal(t, composeAppStatus(map[string][]codegen.ContainerSummary{}), "unknown")
 }
+
+// A one-shot service that finished cleanly is not a reason to show the app stopped.
+func TestComposeAppStatusIgnoresAServiceThatFinishedItsJob(t *testing.T) {
+	c := func(state, status string) codegen.ContainerSummary {
+		return codegen.ContainerSummary{State: containertypes.ContainerState(state), Status: status}
+	}
+	for name, tc := range map[string]struct {
+		containers map[string][]codegen.ContainerSummary
+		want       string
+	}{
+		"finished init, the app runs": {map[string][]codegen.ContainerSummary{"init": {c("exited", "Exited (0) 3 minutes ago")}, "app": {c("running", "Up 3 minutes")}}, "running"},
+		"crashed init, the app runs":  {map[string][]codegen.ContainerSummary{"init": {c("exited", "Exited (1) 3 minutes ago")}, "app": {c("running", "Up 3 minutes")}}, "exited"},
+		"stopped by hand, app runs":   {map[string][]codegen.ContainerSummary{"db": {c("exited", "Exited (137) 3 minutes ago")}, "app": {c("running", "Up 3 minutes")}}, "exited"},
+		"nothing runs, finished init": {map[string][]codegen.ContainerSummary{"init": {c("exited", "Exited (0) 3 minutes ago")}, "app": {c("exited", "Exited (0) 3 minutes ago")}}, "exited"},
+		"a restarting service counts": {map[string][]codegen.ContainerSummary{"init": {c("exited", "Exited (0) 3 minutes ago")}, "app": {c("running", "Up")}, "side": {c("restarting", "Restarting")}}, "restarting"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, composeAppStatus(tc.containers), tc.want)
+		})
+	}
+}
