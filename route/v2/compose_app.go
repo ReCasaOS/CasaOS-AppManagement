@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
@@ -817,11 +818,26 @@ var containerStateSeverity = map[string]int{
 //
 // No container at all is `unknown`: the app exists and nothing of it is up, which is
 // not a state any container reported.
+//
+// A container that finished its job (exited with code 0) is not counted while another
+// one of the app is running: a one-shot service (a migration, a secrets init) is done,
+// not broken. Once nothing runs, it counts again, so a stopped app still reads stopped.
 func composeAppStatus(containerLists map[string][]codegen.ContainerSummary) string {
 	worst, worstRank := "unknown", -1
 
+	anyRunning := false
 	for _, containers := range containerLists {
 		for _, container := range containers {
+			anyRunning = anyRunning || container.State == "running"
+		}
+	}
+
+	for _, containers := range containerLists {
+		for _, container := range containers {
+			if anyRunning && container.State == "exited" && strings.HasPrefix(container.Status, "Exited (0)") {
+				continue
+			}
+
 			rank, known := containerStateSeverity[string(container.State)]
 			if !known {
 				rank = len(containerStateSeverity)
