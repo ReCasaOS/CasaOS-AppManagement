@@ -105,3 +105,12 @@ func webUIPortOf(list []codegen.ContainerSummary) string {
 
 	return ""
 }
+
+// wantsInferredPort answers whether an app leaves its web interface to be guessed.
+//
+// An empty port alone does not: an app behind a reverse proxy names a hostname and
+// leaves the port empty on purpose, and a port Docker publishes on the box is not
+// one the proxy serves.
+func wantsInferredPort(item *codegen.WebAppGridItem) bool {
+	return (item.Port == nil || *item.Port == "") && (item.Hostname == nil || *item.Hostname == "")
+}

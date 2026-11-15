@@ -59,8 +59,8 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 		// A stack written by hand declares no web interface, so the card had nothing to
 		// open. Docker knows which ports it publishes, and for most such stacks that is
 		// the whole answer. Settings > Web UI still wins wherever it is filled in --
-		// this only speaks when nothing else has.
-		if item.Port == nil || *item.Port == "" {
+		// this only speaks when nothing else has, a hostname included.
+		if wantsInferredPort(item) {
 			composeApp := (*service.ComposeApp)(app.Compose)
 			if port := inferWebUIPort(containersByApp[composeApp.Name], composeApp.MainServiceName()); port != "" {
 				item.Port = &port

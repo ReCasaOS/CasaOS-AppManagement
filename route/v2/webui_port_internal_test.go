@@ -148,3 +148,27 @@ func TestInferWebUIPortIsStableAcrossMapOrder(t *testing.T) {
 		}
 	}
 }
+
+// A hostname in Settings > Web UI with an empty port is an app behind a reverse
+// proxy: the proxy serves it on the scheme's own port, and a port Docker publishes
+// on the box is not one the proxy answers on. Guessing is for an app that says
+// nothing at all.
+func TestAPortIsOnlyGuessedForAnAppThatNamesNoHostname(t *testing.T) {
+	str := func(s string) *string { return &s }
+
+	for _, c := range []struct {
+		name string
+		item codegen.WebAppGridItem
+		want bool
+	}{
+		{"nothing declared", codegen.WebAppGridItem{}, true},
+		{"empty port and hostname", codegen.WebAppGridItem{Port: str(""), Hostname: str("")}, true},
+		{"port declared", codegen.WebAppGridItem{Port: str("8080")}, false},
+		{"hostname declared, port empty", codegen.WebAppGridItem{Port: str(""), Hostname: str("app.example.com")}, false},
+		{"hostname declared, no port", codegen.WebAppGridItem{Hostname: str("app.example.com")}, false},
+	} {
+		if got := wantsInferredPort(&c.item); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
