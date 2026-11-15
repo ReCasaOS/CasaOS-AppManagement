@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/dockerlocation"
+	v2 "github.com/ReCasaOS/CasaOS-AppManagement/route/v2"
 	modelCommon "github.com/ReCasaOS/CasaOS-Common/model"
 	"github.com/ReCasaOS/CasaOS-Common/utils/common_err"
 	"github.com/labstack/echo/v4"
@@ -54,7 +56,27 @@ func CheckDockerLocation(ctx echo.Context) error {
 	} else if path == "" {
 		return dockerLocationFail(ctx, http.StatusBadRequest, errors.New("give a path, or default=true"))
 	}
-	return dockerLocationOK(ctx, dockerLocation().CheckTarget(ctx.Request().Context(), path))
+	// a caller no account can be told from gets no count: the hidden apps cannot be left out
+	hidden, ok := v2.HiddenApps(ctx)
+	if !ok {
+		return ctx.JSON(http.StatusForbidden, &modelCommon.Result{Success: common_err.INSUFFICIENT_PERMISSIONS, Message: common_err.GetMsg(common_err.INSUFFICIENT_PERMISSIONS)})
+	}
+	check := dockerLocation().CheckTarget(ctx.Request().Context(), path)
+	if !v2.IsOwner(ctx) {
+		check.Containers = max(0, check.Containers-hiddenContainers(ctx.Request().Context(), dockerLocation().Run, hidden))
+	}
+	return dockerLocationOK(ctx, check)
+}
+
+// hiddenContainers counts the containers of the apps given, the way CheckTarget counts them all.
+func hiddenContainers(ctx context.Context, run func(ctx context.Context, name string, args ...string) (string, error), apps []string) int {
+	n := 0
+	for _, app := range apps {
+		if out, err := run(ctx, "docker", "ps", "-aq", "--filter", "label=com.docker.compose.project="+app); err == nil {
+			n += len(strings.Fields(out))
+		}
+	}
+	return n
 }
 
 // MoveDockerLocation starts moving Docker's data to a folder; GET follows it.

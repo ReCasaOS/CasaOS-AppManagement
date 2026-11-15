@@ -25,7 +25,7 @@ func TestTheAccessTokenIsTakenBareOrAsBearer(t *testing.T) {
 	userService := httptest.NewServer(jwt.JWKSHandler(jwks))
 	defer userService.Close()
 	assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, external.UserServiceAddressFilename), []byte(userService.URL), 0o600))
-	token, err := jwt.GetAccessToken("admin", privateKey, 1)
+	token, err := jwt.GetAccessToken("admin", privateKey, 4242) // not an account of the role tests: the role cache is shared
 	assert.NilError(t, err)
 
 	for authorization, want := range map[string]int{

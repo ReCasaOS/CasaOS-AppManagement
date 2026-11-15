@@ -320,3 +320,21 @@ func TestAGitAppNameIsNeverAPath(t *testing.T) {
 	_, err = os.Stat(outside)
 	assert.NilError(t, err, "the file beside the state folder is still there")
 }
+
+// Removing a git app keeps who it is hidden from, as an uninstall does: the owner removes the
+// entry (visibility orphans).
+func TestRemovingAGitAppKeepsWhoItIsHiddenFrom(t *testing.T) {
+	gitAppsIn(t)
+	withFakeGitDocker(t)
+	was := VisibilityPath
+	VisibilityPath = filepath.Join(t.TempDir(), "visibility.json")
+	t.Cleanup(func() { VisibilityPath = was })
+	url, _ := newTestRemote(t)
+
+	_, err := CreateGitApp(context.Background(), GitAppRegistration{Name: "jarvis", URL: url, Access: "none"})
+	assert.NilError(t, err)
+	assert.NilError(t, AppVisibility.Hide("jarvis", []int{2}))
+
+	assert.NilError(t, DeleteGitApp(context.Background(), "jarvis"))
+	assert.Assert(t, AppVisibility.HiddenFor("jarvis", 2))
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -52,12 +53,12 @@ func logsFailure(ctx echo.Context, err error) error {
 
 // logsQueryOf reads the filter from the query itself: the generated params give each
 // route its own enum types for the same values.
-func logsQueryOf(ctx echo.Context, since *string, until *time.Time) (logstore.Query, error) {
+func logsQueryOf(ctx echo.Context, since *string, until *time.Time, hidden []string) (logstore.Query, error) {
 	values := ctx.QueryParams()
 	regex, _ := strconv.ParseBool(values.Get("regex")) // the validator has checked it
 	q := logstore.Query{Filter: logstore.Filter{
 		Apps: values["app"], Services: values["service"], Stream: values.Get("stream"),
-		Level: values.Get("level"), Q: values.Get("q"), Regex: regex,
+		Level: values.Get("level"), Q: values.Get("q"), Regex: regex, NotApps: hidden,
 	}}
 	if since != nil {
 		c, err := logstore.ParseCursor(*since)
@@ -89,6 +90,8 @@ func (a *AppManagement) LogsApps(ctx echo.Context) error {
 	if err != nil {
 		return logsFailure(ctx, err)
 	}
+	visible := visibleFilter(ctx)
+	summaries = slices.DeleteFunc(summaries, func(s logstore.AppSummary) bool { return !visible(s.App) })
 	// without the list nothing is called uninstalled: it is not known
 	var installed map[string]*service.ComposeApp
 	if service.MyService != nil {
@@ -130,7 +133,11 @@ func (a *AppManagement) LogsQuery(ctx echo.Context, params codegen.LogsQueryPara
 	if store == nil {
 		return logsClosed(ctx)
 	}
-	q, err := logsQueryOf(ctx, params.Since, params.Until)
+	hidden, ok := hiddenApps(ctx)
+	if !ok {
+		return forbidden(ctx)
+	}
+	q, err := logsQueryOf(ctx, params.Since, params.Until, hidden)
 	if err != nil {
 		return logsFailure(ctx, err)
 	}
@@ -158,7 +165,11 @@ func (a *AppManagement) LogsEvents(ctx echo.Context, params codegen.LogsEventsPa
 	if store == nil {
 		return logsClosed(ctx)
 	}
-	q := logstore.EventQuery{}
+	hidden, ok := hiddenApps(ctx)
+	if !ok {
+		return forbidden(ctx)
+	}
+	q := logstore.EventQuery{NotApps: hidden}
 	if params.App != nil {
 		q.Apps = *params.App
 	}
@@ -187,7 +198,11 @@ func (a *AppManagement) LogsExport(ctx echo.Context, params codegen.LogsExportPa
 	if store == nil {
 		return logsClosed(ctx)
 	}
-	q, err := logsQueryOf(ctx, params.Since, params.Until)
+	hidden, ok := hiddenApps(ctx)
+	if !ok {
+		return forbidden(ctx)
+	}
+	q, err := logsQueryOf(ctx, params.Since, params.Until, hidden)
 	if err != nil {
 		return logsFailure(ctx, err)
 	}
@@ -251,7 +266,7 @@ func logsSeveralServices(store *logstore.Store, f logstore.Filter) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	m, err := logstore.Filter{Apps: f.Apps, Services: f.Services}.Compile()
+	m, err := logstore.Filter{Apps: f.Apps, Services: f.Services, NotApps: f.NotApps}.Compile()
 	if err != nil {
 		return false, err
 	}
@@ -272,7 +287,11 @@ func (a *AppManagement) LogsStream(ctx echo.Context, _ codegen.LogsStreamParams)
 	if store == nil {
 		return logsClosed(ctx)
 	}
-	q, _ := logsQueryOf(ctx, nil, nil)
+	hidden, ok := hiddenApps(ctx)
+	if !ok {
+		return forbidden(ctx)
+	}
+	q, _ := logsQueryOf(ctx, nil, nil, hidden)
 	m, err := q.Compile()
 	if err != nil {
 		return logsFailure(ctx, err)

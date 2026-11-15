@@ -3,6 +3,8 @@ package v2
 import (
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/backupprogress"
@@ -13,26 +15,69 @@ import (
 
 // BackupRunning answers what runs and how far it has got, without an envelope, as /operations.
 func (a *AppManagement) BackupRunning(ctx echo.Context) error {
+	return ctx.JSON(http.StatusOK, runningFor(ctx, service.LiveBackups(), service.BackupPasses()))
+}
+
+// runningFor is runningOut for the caller of ctx: the apps it may see, and the paths for the owner only
+// (a backup reads the box's folders and files, which a user account does not browse).
+func runningFor(ctx echo.Context, lives []service.LiveBackup, passes []service.BackupPass) codegen.BackupRunningOK {
+	out := runningOut(visibleFilter(ctx), lives, passes)
+	if !isOwner(ctx) {
+		for i := range out.Backups {
+			out.Backups[i].Source = ""
+			if out.Backups[i].Stats != nil {
+				out.Backups[i].Stats.Current = nil
+			}
+		}
+		// the engine's error text can name the box's folders: the state says an item failed
+		for i := range out.Passes {
+			for j := range out.Passes[i].Items {
+				out.Passes[i].Items[j].Error = nil
+			}
+		}
+	}
+
+	return out
+}
+
+// runningOut is what runs, as a caller who sees the apps visible sees it.
+func runningOut(visible func(app string) bool, lives []service.LiveBackup, passes []service.BackupPass) codegen.BackupRunningOK {
 	out := codegen.BackupRunningOK{Backups: []codegen.LiveBackup{}, Passes: []codegen.BackupPass{}}
 
-	for _, live := range service.LiveBackups() {
+	// a path is shown only when no folder on it is named after an app the caller may not see
+	shown := func(p string) bool {
+		return !slices.ContainsFunc(strings.Split(p, "/"), func(part string) bool { return part != "" && !visible(part) })
+	}
+	for _, live := range lives {
+		if !visible(live.App) {
+			continue
+		}
 		backup := codegen.LiveBackup{
 			Id: live.ID, App: live.App, Destination: live.Destination, Stamp: live.Stamp,
 			Origin: string(live.Origin), StartedAt: live.StartedAt,
 			Operation: live.Operation, Operations: live.Operations, Source: live.Source,
 		}
+		if !shown(live.Source) {
+			backup.Source = ""
+		}
 		if live.Stats != nil {
 			backup.Stats = liveStatsOut(*live.Stats, live)
+			if backup.Stats.Current != nil && !shown(*backup.Stats.Current) {
+				backup.Stats.Current = nil
+			}
 		}
 		out.Backups = append(out.Backups, backup)
 	}
 
-	for _, pass := range service.BackupPasses() {
+	for _, pass := range passes {
 		passOut := codegen.BackupPass{
 			Origin: string(pass.Origin), StartedAt: pass.StartedAt, FinishedAt: pass.FinishedAt,
 			Items: []codegen.BackupPassItem{},
 		}
 		for _, item := range pass.Items {
+			if !visible(item.App) {
+				continue
+			}
 			itemOut := codegen.BackupPassItem{
 				App: item.App, Destination: item.Destination, State: string(item.State),
 				StartedAt: item.StartedAt, FinishedAt: item.FinishedAt,
@@ -45,10 +90,14 @@ func (a *AppManagement) BackupRunning(ctx echo.Context) error {
 			}
 			passOut.Items = append(passOut.Items, itemOut)
 		}
+		// a pass of hidden apps alone is, for this caller, no pass
+		if len(pass.Items) > 0 && len(passOut.Items) == 0 {
+			continue
+		}
 		out.Passes = append(out.Passes, passOut)
 	}
 
-	return ctx.JSON(http.StatusOK, out)
+	return out
 }
 
 // liveStatsOut leaves out what the engine has not said: a zero total is a total not known yet.

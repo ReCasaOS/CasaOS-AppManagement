@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/dockerstats"
@@ -45,6 +46,60 @@ func statsFailure(ctx echo.Context, err error) error {
 	return statsCode(ctx, http.StatusServiceUnavailable, "stats_unavailable")
 }
 
+// appOfStatsID is the app of an id `app:<app>:<service>:<n>`. The host, a virtual machine and a
+// container no app owns are not an app's, so they stay visible to everyone.
+func appOfStatsID(id string) (app string, ok bool) {
+	parts := strings.SplitN(id, ":", 3)
+	if len(parts) < 2 || parts[0] != "app" || parts[1] == "" {
+		return "", false
+	}
+
+	return parts[1], true
+}
+
+// probeStatsID is the id a hidden app's container is asked about as: the sampler answers
+// it, whatever the parameters, as it answers an id it does not know.
+const probeStatsID = "app:" + probeApp + ":probe:1"
+
+// statsHidden is true for an id of an app the caller may not see; such an id is answered as
+// the sampler answers one it does not know.
+//
+// app is the item's own app when the sampler knows it (a one-off container of an app keeps
+// its id `container:<name>`). One known only from disk has lost its labels: compose names a
+// one-off `<project>-<service>-run-<id>`, and that name is read instead.
+func statsHidden(visible func(app string) bool, id, app string) bool {
+	if fromID, ok := appOfStatsID(id); ok {
+		return !visible(fromID)
+	}
+	if app != "" {
+		return !visible(app)
+	}
+	name, other := strings.CutPrefix(id, "container:")
+	head, _, oneOff := strings.Cut(name, "-run-")
+	if !other || !oneOff {
+		return false
+	}
+	for i := range len(head) {
+		if head[i] == '-' && !visible(head[:i]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// statsAppOf is the app the sampler knows an item by, "" when none.
+func statsAppOf(s *dockerstats.Sampler, id string) string {
+	items, _ := s.Items()
+	for _, it := range items {
+		if it.ID == id {
+			return it.App
+		}
+	}
+
+	return ""
+}
+
 // StatsList lists the containers with their latest use. The body is bare, as the contract asks.
 func (a *AppManagement) StatsList(ctx echo.Context) error {
 	s := statsSampler(ctx)
@@ -55,8 +110,12 @@ func (a *AppManagement) StatsList(ctx echo.Context) error {
 	if err != nil {
 		return statsFailure(ctx, err)
 	}
+	visible := visibleFilter(ctx)
 	out := make([]codegen.StatsItem, 0, len(items))
 	for _, it := range items {
+		if statsHidden(visible, it.ID, it.App) {
+			continue
+		}
 		item := codegen.StatsItem{
 			Id: it.ID, Name: it.Name, Kind: it.Kind, Group: it.Group, State: it.State,
 			StartedAt: it.StartedAt, CpuPercent: it.CPUPercent, Alerts: it.Alerts,
@@ -104,6 +163,9 @@ func (a *AppManagement) StatsSeries(ctx echo.Context, id codegen.StatsItemID, _ 
 	if s == nil {
 		return statsCode(ctx, http.StatusServiceUnavailable, "stats_unavailable")
 	}
+	if statsHidden(visibleFilter(ctx), id, statsAppOf(s, id)) {
+		id = probeStatsID
+	}
 	r := stats.RangeLive
 	// read here, not from the bound params: `?range=` must be refused, not taken for
 	// absent. A repeated range never gets here: the generated binder refuses it.
@@ -147,6 +209,9 @@ func (a *AppManagement) StatsAlerts(ctx echo.Context, id codegen.StatsItemID) er
 	s := statsSampler(ctx)
 	if s == nil {
 		return statsCode(ctx, http.StatusServiceUnavailable, "stats_unavailable")
+	}
+	if statsHidden(visibleFilter(ctx), id, statsAppOf(s, id)) {
+		id = probeStatsID
 	}
 	return statsAlertsOf(ctx, s, id)
 }

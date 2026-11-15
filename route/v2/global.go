@@ -16,12 +16,22 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// globalValue is a global's value as the caller may read it: they hold API keys, so only
+// the owner reads them.
+func globalValue(ctx echo.Context, value string) string {
+	if !isOwner(ctx) {
+		return ""
+	}
+
+	return value
+}
+
 func (a *AppManagement) GetGlobalSettings(ctx echo.Context) error {
 	result := make([]codegen.GlobalSetting, 0)
 	for key, value := range config.Globals() {
 		result = append(result, codegen.GlobalSetting{
 			Key:         utils.Ptr(key),
-			Value:       value,
+			Value:       globalValue(ctx, value),
 			Description: utils.Ptr(key),
 		})
 	}
@@ -41,7 +51,7 @@ func (a *AppManagement) GetGlobalSetting(ctx echo.Context, key codegen.GlobalSet
 	return ctx.JSON(http.StatusOK, codegen.GlobalSettingOK{
 		Data: &codegen.GlobalSetting{
 			Key:         utils.Ptr(key),
-			Value:       value,
+			Value:       globalValue(ctx, value),
 			Description: utils.Ptr(key),
 		},
 	})

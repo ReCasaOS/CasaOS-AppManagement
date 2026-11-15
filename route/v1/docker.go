@@ -202,8 +202,12 @@ func UpdateSetting(ctx echo.Context) error {
 
 func GetDockerNetworks(ctx echo.Context) error {
 	networks := service.MyService.Docker().GetNetworkList()
+	visible := v2.VisibleFilter(ctx)
 	list := []map[string]string{}
 	for _, network := range networks {
+		if project := network.Labels["com.docker.compose.project"]; project != "" && !visible(project) {
+			continue
+		}
 		if network.Driver != "null" {
 			list = append(list, map[string]string{"name": network.Name, "driver": network.Driver, "id": network.ID})
 		}
@@ -212,17 +216,31 @@ func GetDockerNetworks(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, modelCommon.Result{Success: common_err.SUCCESS, Message: common_err.GetMsg(common_err.SUCCESS), Data: list})
 }
 
+// redactedContainer is, for a caller that is not the owner, the container with its
+// environment through v2.RedactEnvList and no command; the inspected value is copied, not changed.
+func redactedContainer(ctx echo.Context, info *types.ContainerJSON) types.ContainerJSON {
+	out := *info
+	if out.Config != nil && !v2.IsOwner(ctx) {
+		config := *out.Config
+		config.Env, config.Cmd = v2.RedactEnvList(false, config.Env), nil
+		out.Config = &config
+	}
+
+	return out
+}
+
 func ToComposeYAML(ctx echo.Context) error {
 	appID := ctx.Param("id")
 
 	httpCtx := common.WithProperties(context.Background(), v2.PropertiesFromQueryParams(ctx))
 
-	info, err := service.MyService.Docker().DescribeContainer(httpCtx, appID)
+	ask := v2.AskAboutContainer(ctx, appID)
+	info, err := service.MyService.Docker().DescribeContainer(httpCtx, ask.Ref)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
+		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: ask.Words(err.Error())})
 	}
 
-	m := v1.GetCustomizationPostData(*info)
+	m := v1.GetCustomizationPostData(redactedContainer(ctx, info))
 
 	return YAML(ctx, http.StatusOK, m.Compose())
 }
@@ -239,12 +257,13 @@ func ContainerUpdateInfo(ctx echo.Context) error {
 
 	httpCtx := common.WithProperties(context.Background(), v2.PropertiesFromQueryParams(ctx))
 
-	info, err := service.MyService.Docker().DescribeContainer(httpCtx, appID)
+	ask := v2.AskAboutContainer(ctx, appID)
+	info, err := service.MyService.Docker().DescribeContainer(httpCtx, ask.Ref)
 	if err != nil {
-		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
+		return ctx.JSON(http.StatusInternalServerError, modelCommon.Result{Success: common_err.SERVICE_ERROR, Message: ask.Words(err.Error())})
 	}
 
-	m := v1.GetCustomizationPostData(*info)
+	m := v1.GetCustomizationPostData(redactedContainer(ctx, info))
 
 	return ctx.JSON(http.StatusOK, modelCommon.Result{Success: common_err.SUCCESS, Message: common_err.GetMsg(common_err.SUCCESS), Data: m})
 }
@@ -285,7 +304,10 @@ func ArchiveContainer(ctx echo.Context) error {
 // @Success 200 {string} string "ok"
 // @Router /app/usage [get]
 func AppUsageList(ctx echo.Context) error {
-	list := service.MyService.Docker().GetContainerStats()
+	visible := v2.VisibleFilter(ctx)
+	list := lo.Filter(service.MyService.Docker().GetContainerStats(), func(stats model.DockerStatsModel, _ int) bool {
+		return stats.ComposeProject == "" || visible(stats.ComposeProject)
+	})
 	return ctx.JSON(common_err.SUCCESS, &modelCommon.Result{Success: common_err.SUCCESS, Message: common_err.GetMsg(common_err.SUCCESS), Data: list})
 	// return ctx.JSON(common_err.SUCCESS, &modelCommon.Result{Success: common_err.SUCCESS, Message: common_err.GetMsg(common_err.SUCCESS), Data: nil})
 }

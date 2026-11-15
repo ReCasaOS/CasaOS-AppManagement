@@ -162,6 +162,7 @@ func (a *AppManagement) ComposeAppStoreInfoList(ctx echo.Context, params codegen
 
 	// installed
 	installedComposeApps, err := service.MyService.Compose().List(ctx.Request().Context())
+	installedComposeApps = visibleApps(ctx, installedComposeApps)
 	if err != nil {
 		message := err.Error()
 		logger.Error("failed to list installed compose apps", zap.Error(err))
@@ -411,6 +412,7 @@ func upgradableAppTitle(storeInfo *codegen.ComposeAppStoreInfo, fallback string)
 
 func (a *AppManagement) UpgradableAppList(ctx echo.Context) error {
 	composeApps, err := service.MyService.Compose().List(ctx.Request().Context())
+	composeApps = visibleApps(ctx, composeApps)
 
 	var upgradableAppList []codegen.UpgradableAppInfo = []codegen.UpgradableAppInfo{}
 	if err != nil {

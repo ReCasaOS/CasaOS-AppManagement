@@ -30,11 +30,12 @@ type Event struct {
 var Kinds = []string{"created", "started", "stopped", "died", "oom-killed", "restarting", "unhealthy", "healthy", "installed", "uninstalled", "updated", "image-pulled"}
 
 type EventQuery struct {
-	Apps  []string
-	Kinds []string
-	Since time.Time // zero = no bound
-	Until time.Time // zero = no bound
-	Limit int       // ≤ 1000, default 500
+	Apps    []string
+	NotApps []string
+	Kinds   []string
+	Since   time.Time // zero = no bound
+	Until   time.Time // zero = no bound
+	Limit   int       // ≤ 1000, default 500
 }
 
 const (
@@ -108,7 +109,7 @@ func ReadEvents(root string, q EventQuery) ([]Event, error) {
 			if json.Unmarshal(lines[i], &e) != nil { // corrupt or empty line
 				continue
 			}
-			if (len(q.Apps) > 0 && !slices.Contains(q.Apps, e.App)) ||
+			if (len(q.Apps) > 0 && !slices.Contains(q.Apps, e.App)) || slices.Contains(q.NotApps, e.App) ||
 				(len(q.Kinds) > 0 && !slices.Contains(q.Kinds, e.Kind)) ||
 				(!q.Since.IsZero() && e.At.Before(q.Since)) ||
 				(!q.Until.IsZero() && e.At.After(q.Until)) {

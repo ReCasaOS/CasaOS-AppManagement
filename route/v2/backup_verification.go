@@ -31,8 +31,12 @@ func (a *AppManagement) BackupVerifications(ctx echo.Context) error {
 	if err != nil {
 		return backupVerificationError(ctx, err)
 	}
+	visible := visibleFilter(ctx)
 	out := make([]codegen.BackupVerificationRecord, 0, len(records))
 	for _, record := range records {
+		if !visible(record.App) {
+			continue
+		}
 		out = append(out, backupVerificationOut(record))
 	}
 	return ctx.JSON(http.StatusOK, codegen.BackupVerificationsOK{Message: utils.Ptr("OK"), Data: &out})

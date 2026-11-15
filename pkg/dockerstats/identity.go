@@ -51,7 +51,11 @@ func Identify(labels map[string]string, names []string) (Identity, bool) {
 	for _, raw := range names {
 		name := strings.TrimPrefix(raw, "/")
 		if token.MatchString(name) { // a link ("/a/b") has a '/' and fails here
-			return otherIdentity(name), true
+			id := otherIdentity(name)
+			if token.MatchString(project) { // a one-off (`docker compose run`) still belongs to its app
+				id.App = project
+			}
+			return id, true
 		}
 	}
 	return Identity{}, false

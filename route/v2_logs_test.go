@@ -67,7 +67,7 @@ func newLogsRig(t *testing.T) *logsRig {
 	users := httptest.NewServer(jwt.JWKSHandler(jwks))
 	t.Cleanup(users.Close)
 	assert.NilError(t, os.WriteFile(filepath.Join(runtime, external.UserServiceAddressFilename), []byte(users.URL), 0o600))
-	token, err := jwt.GetAccessToken("admin", private, 1)
+	token, err := jwt.GetAccessToken("admin", private, 4242) // not an account of the role tests: the role cache is shared
 	assert.NilError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

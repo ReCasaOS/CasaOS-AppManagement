@@ -2305,6 +2305,106 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /visibility/accounts/{id}:
+    delete:
+      summary: Drop an account from every list of hidden apps
+      description: |-
+        Internal only: user-service calls it when it deletes an account, so that
+        a later account given the same id does not inherit what was hidden from
+        this one. An id nothing mentions is answered the same way.
+      operationId: forgetVisibilityAccount
+      tags:
+        - Common methods
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /visibility-orphans:
+    get:
+      summary: Visibility entries of apps that are not installed
+      description: |-
+        Owner only. An uninstall keeps an app's entry, since its logs, stats and
+        backups stay; these are the entries left by apps no longer installed.
+      operationId: listVisibilityOrphans
+      tags:
+        - Common methods
+      responses:
+        "200":
+          $ref: "#/components/responses/VisibilityOrphansOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /visibility/{app}:
+    get:
+      summary: The accounts an app is hidden from
+      description: Owner only.
+      operationId: getVisibility
+      tags:
+        - Common methods
+      parameters:
+        - $ref: "#/components/parameters/VisibilityApp"
+      responses:
+        "200":
+          $ref: "#/components/responses/VisibilityOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    put:
+      summary: Replace the accounts an app is hidden from
+      description: Owner only. An empty list shows the app to everyone again.
+      operationId: setVisibility
+      tags:
+        - Common methods
+      parameters:
+        - $ref: "#/components/parameters/VisibilityApp"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Visibility"
+      responses:
+        "200":
+          $ref: "#/components/responses/VisibilityOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    delete:
+      summary: Remove an app's visibility entry
+      description: |-
+        Owner only. The app is shown to everyone again; an app with no entry is
+        answered the same way.
+      operationId: forgetVisibility
+      tags:
+        - Common methods
+      parameters:
+        - $ref: "#/components/parameters/VisibilityApp"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
 components:
   securitySchemes:
     access_token:
@@ -2313,6 +2413,13 @@ components:
       name: Authorization
 
   parameters:
+    VisibilityApp:
+      name: app
+      in: path
+      required: true
+      schema:
+        type: string
+
     GlobalSettingKey:
       name: key
       description: Key of the global setting
@@ -2795,6 +2902,40 @@ components:
             $ref: "#/components/schemas/LogsSettingsInput"
 
   responses:
+    ResponseForbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BaseResponse"
+          example:
+            message: "Forbidden"
+
+    VisibilityOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/Visibility"
+
+    VisibilityOrphansOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    type: array
+                    description: Names of the apps whose entry has no installed app.
+                    items:
+                      type: string
+
     ResponseOK:
       description: OK
       content:
@@ -3529,6 +3670,17 @@ components:
                     $ref: "#/components/schemas/LogsSettings"
 
   schemas:
+    Visibility:
+      type: object
+      required: [hidden_for]
+      properties:
+        hidden_for:
+          type: array
+          description: Ids of the accounts the app is hidden from.
+          items:
+            type: integer
+          example: [2, 3]
+
     LiveBackup:
       required: [id, app, destination, stamp, origin, started_at, operation, operations, source]
       properties:

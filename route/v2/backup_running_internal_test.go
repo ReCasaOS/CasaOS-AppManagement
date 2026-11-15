@@ -73,7 +73,7 @@ func runningDemo(t *testing.T, report bool) (<-chan error, string) {
 func running(t *testing.T) *httptest.ResponseRecorder {
 	t.Helper()
 
-	request := httptest.NewRequest(http.MethodGet, "/v2/app_management/backup/running", nil)
+	request := internalRequest(t, httptest.NewRequest(http.MethodGet, "/v2/app_management/backup/running", nil))
 	recorder := httptest.NewRecorder()
 	assert.NilError(t, (&AppManagement{}).BackupRunning(echo.New().NewContext(request, recorder)))
 

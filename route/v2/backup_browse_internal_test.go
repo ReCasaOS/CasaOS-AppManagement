@@ -25,7 +25,7 @@ func TestLookingInsideTheBackupOfTheBoxIsRefused(t *testing.T) {
 
 func TestAPathThatClimbsOutOfTheBackupIsABadRequestAndReachesNoDestination(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	ctx := echo.New().NewContext(httptest.NewRequest(http.MethodGet, "/", nil), recorder)
+	ctx := echo.New().NewContext(internalRequest(t, httptest.NewRequest(http.MethodGet, "/", nil)), recorder)
 
 	climbing := "volumes/../../etc"
 	if err := (&AppManagement{}).BrowseBackup(ctx, "nas", "blog", "2026-09-13T02-29-56Z", codegen.BrowseBackupParams{Path: &climbing}); err != nil {

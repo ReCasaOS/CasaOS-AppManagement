@@ -107,6 +107,20 @@ var updateAll struct {
 	run *codegen.ComposeAppUpdateRun
 }
 
+// ForgetFinishedUpdateAllRun forgets the last run once it is over, as a restart of this
+// service does; a run in progress is kept. It reports whether nothing is held any more.
+func ForgetFinishedUpdateAllRun() bool {
+	updateAll.Lock()
+	defer updateAll.Unlock()
+
+	if updateAll.run != nil && updateAll.run.FinishedAt == nil {
+		return false
+	}
+	updateAll.run = nil
+
+	return true
+}
+
 // CurrentUpdateAllRun is a copy of the run in progress or of the last one, or nil
 // when none has run since this service started.
 func CurrentUpdateAllRun() *codegen.ComposeAppUpdateRun {

@@ -25,11 +25,18 @@ var ErrComposeAppIDNotProvided = errors.New("compose AppID (compose project name
 func (a *AppManagement) MyComposeAppList(ctx echo.Context) error {
 	composeAppsWithStoreInfo, err := composeAppsWithStoreInfo(ctx.Request().Context(), composeAppsWithStoreInfoOpts{
 		checkIsUpdateAvailable: true,
+		visible:                visibleFilter(ctx),
 	})
 	if err != nil {
 		message := err.Error()
 		logger.Error("failed to list compose apps with store info", zap.Error(err))
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
+	owner := isOwner(ctx)
+	for id, app := range composeAppsWithStoreInfo {
+		app.Compose = (*codegen.ComposeApp)(redactProject(owner, (*types.Project)(app.Compose)))
+		composeAppsWithStoreInfo[id] = app
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppListOK{
@@ -52,7 +59,7 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -74,7 +81,7 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 		}
 
 		// generate yaml should to replace all yaml.Marshal. But for now, we just use it Setting Page API
-		yaml, err := service.GenerateYAMLFromComposeApp(*editing)
+		yaml, err := service.GenerateYAMLFromComposeApp(service.ComposeApp(*redactProject(isOwner(ctx), (*types.Project)(editing))))
 		if err != nil {
 			message := err.Error()
 			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{
@@ -118,7 +125,7 @@ func (a *AppManagement) MyComposeApp(ctx echo.Context, id codegen.ComposeAppID) 
 		Message: &message,
 		Data: &codegen.ComposeAppWithStoreInfo{
 			StoreInfo: storeInfo,
-			Compose:   (*types.Project)(composeApp),
+			Compose:   redactProject(isOwner(ctx), (*types.Project)(composeApp)),
 			Status:    &status,
 
 			// see above comment
@@ -173,7 +180,7 @@ func (a *AppManagement) ApplyComposeAppSettings(ctx echo.Context, id codegen.Com
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -323,7 +330,7 @@ func installedComposeApp(ctx echo.Context, id codegen.ComposeAppID) (*service.Co
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return nil, ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -343,7 +350,7 @@ func (a *AppManagement) ComposeAppEnv(ctx echo.Context, id codegen.ComposeAppID)
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
 
-	return ctx.String(http.StatusOK, string(text))
+	return ctx.String(http.StatusOK, string(redactEnvText(isOwner(ctx), text)))
 }
 
 func (a *AppManagement) ApplyComposeAppEnv(ctx echo.Context, id codegen.ComposeAppID, params codegen.ApplyComposeAppEnvParams) error {
@@ -501,7 +508,7 @@ func (a *AppManagement) UninstallComposeApp(ctx echo.Context, id codegen.Compose
 	}
 
 	composeApp, ok := appList[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -539,7 +546,7 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -616,7 +623,7 @@ func (a *AppManagement) SetComposeAppStatus(ctx echo.Context, id codegen.Compose
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -652,7 +659,7 @@ func (a *AppManagement) ComposeAppLogs(ctx echo.Context, id codegen.ComposeAppID
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -697,7 +704,7 @@ func (a *AppManagement) ComposeAppContainers(ctx echo.Context, id codegen.Compos
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -742,7 +749,7 @@ func (a *AppManagement) CheckComposeAppHealthByID(ctx echo.Context, id codegen.C
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}
@@ -794,6 +801,8 @@ func YAMLfromRequest(ctx echo.Context) ([]byte, error) {
 
 type composeAppsWithStoreInfoOpts struct {
 	checkIsUpdateAvailable bool
+	// visible, when set, says which apps the caller may see; the others are never read.
+	visible func(app string) bool
 	// The /web/appgrid endpoint does not require information about whether the application can be updated, so we added an option.
 	// This endpoint is called as soon as CasaOS is opened, and we don't have time to cache it in advance.
 	// We must ensure that this endpoint responds as quickly as possible.
@@ -856,6 +865,9 @@ func composeAppsWithStoreInfo(ctx context.Context, opts composeAppsWithStoreInfo
 	composeApps, err := service.MyService.Compose().List(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if opts.visible != nil {
+		composeApps = lo.PickBy(composeApps, func(id string, _ *service.ComposeApp) bool { return opts.visible(id) })
 	}
 
 	return lo.MapValues(composeApps, func(composeApp *service.ComposeApp, id string) codegen.ComposeAppWithStoreInfo {

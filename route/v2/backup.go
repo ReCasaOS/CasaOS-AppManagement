@@ -197,6 +197,9 @@ func (a *AppManagement) EnableBackupDestinationRestic(ctx echo.Context, name cod
 // BackupDestinationResticPassword reads back the password of a destination's
 // repository, for its owner to keep away from this box.
 func (a *AppManagement) BackupDestinationResticPassword(ctx echo.Context, name codegen.BackupDestinationName) error {
+	if !isOwner(ctx) {
+		return forbidden(ctx)
+	}
 	password, err := restic.New().Password(string(name))
 	if err != nil {
 		if errors.Is(err, restic.ErrNotKept) {
@@ -347,9 +350,13 @@ func (a *AppManagement) BackupSchedules(ctx echo.Context) error {
 		return backupError(ctx, err)
 	}
 
+	visible := visibleFilter(ctx)
 	now := service.BoxNow()
 	out := make([]codegen.BackupSchedule, 0, len(schedules))
 	for _, schedule := range schedules {
+		if !visible(schedule.App) {
+			continue
+		}
 		out = append(out, toCodegenSchedule(schedule, now))
 	}
 
@@ -465,14 +472,33 @@ func (a *AppManagement) BackupRuns(ctx echo.Context) error {
 		return backupError(ctx, err)
 	}
 
-	out := make([]codegen.BackupRunRecord, 0, len(records))
-	for _, record := range records {
-		out = append(out, backupRunOut(record))
-	}
-
+	out := runsFor(ctx, records)
 	return ctx.JSON(http.StatusOK, codegen.BackupRunsOK{
 		Message: utils.Ptr("OK"), Data: &out,
 	})
+}
+
+// runsFor is the runs of the apps the caller sees. The engine's error text can name the box's
+// folders: a user sees that a run failed (its error is not empty), not why.
+func runsFor(ctx echo.Context, records []service.BackupRunRecord) []codegen.BackupRunRecord {
+	visible, owner := visibleFilter(ctx), isOwner(ctx)
+	out := make([]codegen.BackupRunRecord, 0, len(records))
+	for _, record := range records {
+		if !visible(record.App) {
+			continue
+		}
+		// a stop from the interface keeps its first words, which the dashboard reads; never what follows (a folder)
+		if !owner && record.Error != "" {
+			if strings.HasPrefix(record.Error, service.ErrStoppedFromInterface.Error()) {
+				record.Error = service.ErrStoppedFromInterface.Error()
+			} else {
+				record.Error = "failed"
+			}
+		}
+		out = append(out, backupRunOut(record))
+	}
+
+	return out
 }
 
 func toCodegenSchedule(schedule service.BackupSchedule, now time.Time) codegen.BackupSchedule {
@@ -676,8 +702,12 @@ func (a *AppManagement) BackupDestinationRuns(ctx echo.Context, name codegen.Bac
 		return backupError(ctx, err)
 	}
 
+	visible := visibleFilter(ctx)
 	out := make([]codegen.BackupHeldApp, 0, len(held))
 	for _, app := range held {
+		if !visible(app.App) {
+			continue
+		}
 		out = append(out, codegen.BackupHeldApp{App: app.App, Installed: app.Installed, Stamps: app.Stamps})
 	}
 
@@ -685,6 +715,9 @@ func (a *AppManagement) BackupDestinationRuns(ctx echo.Context, name codegen.Bac
 		Message: utils.Ptr("OK"), Data: &out,
 	})
 }
+
+// backupBrowser reads the backups a destination holds; a var so a test can stand in for rclone.
+var backupBrowser = func() service.BackupBrowser { return restic.NewRouter() }
 
 // BrowseBackup lists one level inside a backup, to choose what to put back.
 func (a *AppManagement) BrowseBackup(ctx echo.Context, name codegen.BackupDestinationName, app codegen.BackupApp, stamp codegen.BackupStamp, params codegen.BrowseBackupParams) error {
@@ -697,7 +730,8 @@ func (a *AppManagement) BrowseBackup(ctx echo.Context, name codegen.BackupDestin
 		rel = *params.Path
 	}
 
-	files, err := service.BrowseBackup(ctx.Request().Context(), restic.NewRouter(), string(name), string(app), string(stamp), rel)
+	files, err := service.BrowseBackup(ctx.Request().Context(), backupBrowser(), string(name), askAs(ctx, string(app)), string(stamp), rel)
+	err = asked(string(app), err)
 	if err != nil {
 		if errors.Is(err, service.ErrBackupPathOutside) || errors.Is(err, service.ErrBackupPathNotHeld) {
 			return backupBadRequest(ctx, err)

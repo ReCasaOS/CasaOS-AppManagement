@@ -23,8 +23,9 @@ import (
 
 type Filter struct {
 	Apps, Services []string
-	Stream         string // "", "o", "e"
-	Level          string // "", "info", "warn", "error" (minimum level)
+	NotApps        []string // never matched, whatever Apps says: what an account may not see
+	Stream         string   // "", "o", "e"
+	Level          string   // "", "info", "warn", "error" (minimum level)
 	Q              string
 	Regex          bool
 }
@@ -38,6 +39,7 @@ var levelRank = map[string]int{"": 0, "info": 0, "warn": 1, "error": 2}
 
 type Matcher struct {
 	apps, services map[string]bool // SafeName'd, nil = any
+	notApps        map[string]bool
 	stream         string
 	minLevel       int
 	re             *regexp.Regexp
@@ -51,7 +53,7 @@ func (f Filter) Compile() (*Matcher, error) {
 	if f.Stream != "" && f.Stream != "o" && f.Stream != "e" {
 		return nil, fmt.Errorf("%w: stream %q", ErrBadFilter, f.Stream)
 	}
-	m := &Matcher{apps: nameSet(f.Apps), services: nameSet(f.Services), stream: f.Stream, minLevel: rank}
+	m := &Matcher{apps: nameSet(f.Apps), notApps: nameSet(f.NotApps), services: nameSet(f.Services), stream: f.Stream, minLevel: rank}
 	if f.Q != "" {
 		expr := "(?i)" + regexp.QuoteMeta(f.Q)
 		if f.Regex {
@@ -82,13 +84,15 @@ func inSet(set map[string]bool, name string) bool {
 }
 
 func (m *Matcher) Match(l Line) bool {
-	return inSet(m.apps, l.App) && inSet(m.services, l.Service) &&
+	return !m.skips(l.App) && inSet(m.apps, l.App) && inSet(m.services, l.Service) &&
 		(m.stream == "" || l.Stream == m.stream) &&
 		(m.minLevel == 0 || levelRank[GuessLevel(l.Stream, l.Text)] >= m.minLevel) &&
 		(m.re == nil || m.re.MatchString(l.Text))
 }
 
-func (m *Matcher) MatchEvent(e Event) bool { return inSet(m.apps, e.App) }
+func (m *Matcher) skips(app string) bool { return m.notApps[app] || m.notApps[SafeName(app)] }
+
+func (m *Matcher) MatchEvent(e Event) bool { return !m.skips(e.App) && inSet(m.apps, e.App) }
 
 type Cursor struct {
 	At   time.Time
@@ -168,6 +172,7 @@ func read(ctx context.Context, root string, q Query, now time.Time) (Page, error
 	p.limit = min(p.limit, 1000)
 
 	files, err := listLogs(root, m.apps, m.services)
+	files = slices.DeleteFunc(files, func(f logFile) bool { return m.skips(f.app) })
 	if err != nil {
 		return Page{}, err
 	}
@@ -232,7 +237,7 @@ func read(ctx context.Context, root string, q Query, now time.Time) (Page, error
 			until = q.Until
 		}
 	}
-	page.Events, err = ReadEvents(root, EventQuery{Apps: q.Apps, Since: since, Until: until, Limit: maxPageEvents})
+	page.Events, err = ReadEvents(root, EventQuery{Apps: q.Apps, NotApps: q.NotApps, Since: since, Until: until, Limit: maxPageEvents})
 	if err != nil {
 		return Page{}, err
 	}

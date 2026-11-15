@@ -8,22 +8,28 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/service"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/labstack/echo/v4"
+	"github.com/samber/lo"
 	"go.uber.org/zap"
 )
 
 // Every app at once: the plan, the run, and what became of it. See
 // service/compose_update_all.go.
 
+// CheckImageUpdates is the registry sweep `check=true` asks for; a var so a test can see it run.
+var CheckImageUpdates = service.CheckImageUpdates
+
 func (a *AppManagement) ComposeAppUpdatePlan(ctx echo.Context, params codegen.ComposeAppUpdatePlanParams) error {
 	requestCtx := ctx.Request().Context()
+	// a sweep acts on every app and writes the shared cache: only the owner starts one
+	check := params.Check != nil && *params.Check && isOwner(ctx)
 
 	// The plan is only as fresh as the last image check, and a person about to
 	// update everything wants it fresh: the same sweep the `Check for image
 	// updates` button runs, on the request's context so that a closed tab stops
 	// it. A registry that does not answer is not fatal; the catalogue still has
 	// something to say.
-	if params.Check != nil && *params.Check {
-		if _, err := service.CheckImageUpdates(requestCtx); err != nil {
+	if check {
+		if _, err := CheckImageUpdates(requestCtx); err != nil {
 			logger.Info("could not check images before planning an update of every app", zap.Error(err))
 		}
 	}
@@ -33,9 +39,10 @@ func (a *AppManagement) ComposeAppUpdatePlan(ctx echo.Context, params codegen.Co
 		message := err.Error()
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
+	apps = visibleApps(ctx, apps)
 
 	store := service.MyService.AppStoreManagement()
-	if params.Check != nil && *params.Check {
+	if check {
 		// the cached answers are an hour old at most, which outlives the check just made
 		for id := range apps {
 			store.ForgetUpgradable(id)
@@ -71,11 +78,18 @@ func (a *AppManagement) UpdateComposeApps(ctx echo.Context) error {
 	return ctx.JSON(http.StatusAccepted, codegen.ComposeAppUpdateRunOK{Data: run})
 }
 
+var noUpdateRun = "no update of every app has run since this service started"
+
 func (a *AppManagement) ComposeAppUpdateRun(ctx echo.Context) error {
 	run := service.CurrentUpdateAllRun()
 	if run == nil {
-		message := "no update of every app has run since this service started"
-		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
+		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &noUpdateRun})
+	}
+	visible := visibleFilter(ctx)
+	run.Apps = lo.Filter(run.Apps, func(app codegen.ComposeAppUpdateRunApp, _ int) bool { return visible(app.Id) })
+	// a run of hidden apps alone is, for this caller, no run at all
+	if len(run.Apps) == 0 {
+		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &noUpdateRun})
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateRunOK{Data: run})
