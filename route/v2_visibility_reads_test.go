@@ -57,6 +57,12 @@ type readsDocker struct {
 	loose     []model.MyAppList
 }
 
+// SampleContainerStats samples nothing: a host with a Docker daemon lists the app's containers (none), and the
+// route then asks for their usage; without a daemon the route stops before.
+func (d readsDocker) SampleContainerStats(context.Context, []string) map[string]*container.StatsResponse {
+	return map[string]*container.StatsResponse{}
+}
+
 func (d readsDocker) GetContainerAppList(_, _, _ *string) (*[]model.MyAppList, *[]model.MyAppList) {
 	v1, loose := []model.MyAppList{}, slices.Clone(d.loose)
 	return &v1, &loose
