@@ -16,9 +16,10 @@ import (
 )
 
 func (a *AppManagement) CheckContainerHealthByID(ctx echo.Context, id codegen.ContainerID) error {
-	result, err := service.MyService.Docker().CheckContainerHealth(id)
+	ask := AskAboutContainer(ctx, string(id))
+	result, err := service.MyService.Docker().CheckContainerHealth(ask.Ref)
 	if err != nil {
-		message := err.Error()
+		message := ask.Words(err.Error())
 		return ctx.JSON(http.StatusServiceUnavailable, codegen.ResponseServiceUnavailable{Message: &message})
 	}
 

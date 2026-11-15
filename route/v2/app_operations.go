@@ -11,8 +11,12 @@ import (
 // AppOperations answers what runs on each app right now. The core asks before it updates the
 // box by itself, as an internal request.
 func (a *AppManagement) AppOperations(ctx echo.Context) error {
+	visible := visibleFilter(ctx)
 	operations := []codegen.AppOperation{}
 	for _, operation := range service.RunningOperations() {
+		if !visible(operation.App) {
+			continue
+		}
 		operations = append(operations, codegen.AppOperation{App: operation.App, Kind: operation.Kind})
 	}
 

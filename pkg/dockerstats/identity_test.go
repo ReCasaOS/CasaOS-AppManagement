@@ -51,6 +51,8 @@ func TestAComposeRunOneOffIsAnOtherContainer(t *testing.T) {
 	assert.Assert(t, ok)
 	assert.Equal(t, id.ID, "container:jarvis-web-run-ab12")
 	assert.Equal(t, id.Kind, "container")
+	// still the app's: what hides the app hides it too
+	assert.Equal(t, id.App, "jarvis")
 }
 
 func TestNoNameMeansNoIdentity(t *testing.T) {

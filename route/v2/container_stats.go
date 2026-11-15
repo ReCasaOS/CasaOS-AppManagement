@@ -38,7 +38,7 @@ func (a *AppManagement) ComposeAppContainerStats(ctx echo.Context, id codegen.Co
 	}
 
 	composeApp, ok := composeApps[id]
-	if !ok {
+	if !ok || !visibleTo(ctx, id) {
 		message := fmt.Sprintf("compose app `%s` not found", id)
 		return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 	}

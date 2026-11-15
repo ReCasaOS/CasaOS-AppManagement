@@ -458,7 +458,11 @@ func DeleteGitApp(ctx context.Context, name string) error {
 		}
 	}
 
-	return forgetGitApp(name)
+	if err := forgetGitApp(name); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // forgetUninstalledGitApp removes what CasaOS kept of a git app that was uninstalled: the

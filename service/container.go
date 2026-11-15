@@ -143,6 +143,7 @@ func getContainerStats() {
 				}
 
 				dockerStats.Data = data
+				dockerStats.ComposeProject = v.Labels["com.docker.compose.project"]
 				dockerStats.Title = strings.ReplaceAll(v.Names[0], "/", "")
 
 				// @tiger - 不建议直接把依赖的数据结构封装返回。

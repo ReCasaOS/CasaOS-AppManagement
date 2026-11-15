@@ -10,10 +10,10 @@ import (
 
 func TestApplyDataPath(t *testing.T) {
 	prevStats, prevGit, prevLog, prevHold, prevSched, prevImg := StatsDir, gitAppsDir, BackupLogPath, BackupHoldPath, BackupSchedulePath, imageUpdateStatePath
-	prevKey, prevCache, prevChecks, prevExclusions := restic.KeyDir, restic.CacheDir, ResticCheckPath, BackupExclusionsPath
+	prevKey, prevCache, prevChecks, prevExclusions, prevVisibility := restic.KeyDir, restic.CacheDir, ResticCheckPath, BackupExclusionsPath, VisibilityPath
 	t.Cleanup(func() {
 		StatsDir, gitAppsDir, BackupLogPath, BackupHoldPath, BackupSchedulePath, imageUpdateStatePath = prevStats, prevGit, prevLog, prevHold, prevSched, prevImg
-		restic.KeyDir, restic.CacheDir, ResticCheckPath, BackupExclusionsPath = prevKey, prevCache, prevChecks, prevExclusions
+		restic.KeyDir, restic.CacheDir, ResticCheckPath, BackupExclusionsPath, VisibilityPath = prevKey, prevCache, prevChecks, prevExclusions, prevVisibility
 	})
 
 	root := t.TempDir()
@@ -30,6 +30,7 @@ func TestApplyDataPath(t *testing.T) {
 		"BackupExclusionsPath": filepath.Join(root, "backups", "exclusions.json"),
 		"imageUpdateStatePath": filepath.Join(root, "image_updates.json"),
 		"ResticCheckPath":      filepath.Join(root, "backups", "restic-checks.json"),
+		"VisibilityPath":       filepath.Join(root, "visibility.json"),
 	}
 	gotPaths := map[string]string{
 		"StatsDir":             StatsDir,
@@ -40,6 +41,7 @@ func TestApplyDataPath(t *testing.T) {
 		"BackupExclusionsPath": BackupExclusionsPath,
 		"imageUpdateStatePath": imageUpdateStatePath,
 		"ResticCheckPath":      ResticCheckPath,
+		"VisibilityPath":       VisibilityPath,
 	}
 	for name, w := range want {
 		if gotPaths[name] != w {

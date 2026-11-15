@@ -42,7 +42,8 @@ func InitV1Router() http.Handler {
 		},
 		ParseTokenFunc: func(c echo.Context, token string) (interface{}, error) {
 			valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(config.CommonInfo.RuntimePath) })
-			if err != nil || !valid {
+			// a token of an account user-service says no longer exists is refused too
+			if err != nil || !valid || external.AccountGone(config.CommonInfo.RuntimePath, claims.ID) {
 				return nil, echo.ErrUnauthorized
 			}
 
@@ -59,6 +60,7 @@ func InitV1Router() http.Handler {
 			},
 		},
 	}))
+	v1Group.Use(rejectWritesFromUsers())
 	{
 		v1ContainerGroup := v1Group.Group("/container")
 		v1ContainerGroup.Use()

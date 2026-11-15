@@ -11,6 +11,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/service"
 	"github.com/ReCasaOS/CasaOS-Common/utils"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/errdefs"
 	"github.com/labstack/echo/v4"
 )
 
@@ -23,10 +24,11 @@ import (
 
 // ContainerDetail describes one container.
 func (a *AppManagement) ContainerDetail(ctx echo.Context, id codegen.ContainerID) error {
-	inspected, err := service.MyService.Docker().DescribeContainer(ctx.Request().Context(), string(id))
+	ask := AskAboutContainer(ctx, string(id))
+	inspected, err := service.MyService.Docker().DescribeContainer(ctx.Request().Context(), ask.Ref)
 	if err != nil {
-		message := err.Error()
-		if strings.Contains(strings.ToLower(message), "no such container") {
+		message := ask.Words(err.Error())
+		if errdefs.IsNotFound(err) {
 			return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
 		}
 
@@ -34,6 +36,10 @@ func (a *AppManagement) ContainerDetail(ctx echo.Context, id codegen.ContainerID
 	}
 
 	detail := describeContainer(ctx.Request().Context(), inspected)
+	if detail.Env != nil && !isOwner(ctx) { // set together with the command
+		env := RedactEnvList(false, *detail.Env)
+		detail.Env, detail.Command = &env, new(string)
+	}
 
 	return ctx.JSON(http.StatusOK, codegen.ContainerDetailOK{
 		Message: utils.Ptr("OK"), Data: &detail,

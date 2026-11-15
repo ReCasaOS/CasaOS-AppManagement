@@ -14,4 +14,8 @@ type DockerStatsModel struct {
 	Title    string      `json:"title"`
 	Data     interface{} `json:"data"`
 	Previous interface{} `json:"previous"`
+
+	// ComposeProject is the project the container belongs to, kept to leave out what a
+	// caller may not see; it is not sent.
+	ComposeProject string `json:"-"`
 }

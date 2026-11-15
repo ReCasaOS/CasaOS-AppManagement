@@ -47,7 +47,8 @@ func gitAppRegistration(body codegen.GitAppCreateRequest) service.GitAppRegistra
 }
 
 func (a *AppManagement) GetGitApp(ctx echo.Context, app codegen.GitAppName) error {
-	view, err := service.GetGitApp(ctx.Request().Context(), app)
+	view, err := service.GetGitApp(ctx.Request().Context(), askAs(ctx, app))
+	err = asked(app, err)
 
 	return gitAppAnswer(ctx, http.StatusOK, view, err)
 }
@@ -110,7 +111,8 @@ func (a *AppManagement) DeployGitApp(ctx echo.Context, app codegen.GitAppName) e
 }
 
 func (a *AppManagement) GetGitAppTags(ctx echo.Context, app codegen.GitAppName) error {
-	tags, err := service.GitAppTags(ctx.Request().Context(), app)
+	tags, err := service.GitAppTags(ctx.Request().Context(), askAs(ctx, app))
+	err = asked(app, err)
 
 	return gitAppTagsAnswer(ctx, tags, err)
 }
@@ -156,6 +158,9 @@ func gitWebhookAnswer(ctx echo.Context, answer string, err error) error {
 func gitAppAnswer(ctx echo.Context, status int, view *service.GitAppView, err error) error {
 	if err != nil {
 		return gitAppError(ctx, err)
+	}
+	if view != nil && !isOwner(ctx) {
+		view.Webhook.Secret = "" // the forge's shared secret stays with the owner
 	}
 
 	return ctx.JSON(status, gitAppOK{Data: view})

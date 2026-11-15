@@ -17,9 +17,12 @@ import (
 )
 
 func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
+	visible := visibleFilter(ctx)
+
 	// v2 Apps
 	composeAppsWithStoreInfo, err := composeAppsWithStoreInfo(ctx.Request().Context(), composeAppsWithStoreInfoOpts{
 		checkIsUpdateAvailable: false,
+		visible:                visible,
 	})
 	if err != nil {
 		message := err.Error()
@@ -73,17 +76,22 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 	// v1 Apps
 	casaOSApps, containers := service.MyService.Docker().GetContainerAppList(nil, nil, nil)
 
-	v1AppGridItems := lo.Map(*casaOSApps, func(app model.MyAppList, i int) codegen.WebAppGridItem {
+	v1AppGridItems := lo.FilterMap(*casaOSApps, func(app model.MyAppList, i int) (codegen.WebAppGridItem, bool) {
 		item, err := WebAppGridItemAdapterV1(&app)
 		if err != nil {
 			logger.Error("failed to adapt web app grid item", zap.Error(err), zap.String("app", app.Name))
-			return codegen.WebAppGridItem{}
+			return codegen.WebAppGridItem{}, false
 		}
-		return *item
+		return *item, app.ComposeProject == "" || visible(app.ComposeProject)
 	})
 
 	composeLoadErrors := composeLoadErrorCache{}
 	containerAppGridItems := lo.FilterMap(*containers, func(app model.MyAppList, i int) (codegen.WebAppGridItem, bool) {
+		// a container of a project hidden from the caller, one the compose list did not claim included
+		if app.ComposeProject != "" && !visible(app.ComposeProject) {
+			return codegen.WebAppGridItem{}, false
+		}
+
 		if lo.ContainsBy(composeAppContainers, func(container codegen.ContainerSummary) bool { return container.ID == app.ID }) {
 			// already exists as compose app, skipping...
 			return codegen.WebAppGridItem{}, false
@@ -127,7 +135,9 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 	// merge v1 and v2 apps
 	var appGridItems []codegen.WebAppGridItem
 	appGridItems = append(appGridItems, v2AppGridItems...)
-	appGridItems = append(appGridItems, service.GitAppsWithoutContainers(lo.Keys(composeAppsWithStoreInfo))...)
+	appGridItems = append(appGridItems, lo.Filter(service.GitAppsWithoutContainers(lo.Keys(composeAppsWithStoreInfo)), func(item codegen.WebAppGridItem, _ int) bool {
+		return item.Name == nil || visible(*item.Name)
+	})...)
 	appGridItems = append(appGridItems, v1AppGridItems...)
 	appGridItems = append(appGridItems, containerAppGridItems...)
 

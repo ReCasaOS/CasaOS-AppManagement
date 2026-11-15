@@ -211,16 +211,20 @@ func (s *ComposeService) Status(ctx context.Context, appID string) (string, erro
 	return "", ErrComposeAppNotFound
 }
 
-func (s *ComposeService) List(ctx context.Context) (map[string]*ComposeApp, error) {
+// ListComposeStacks is what Docker Compose reports; a route test replaces it, as there is no
+// daemon to ask there.
+var ListComposeStacks = func(ctx context.Context) ([]api.Stack, error) {
 	service, dockerClient, err := apiService()
 	if err != nil {
 		return nil, err
 	}
 	defer dockerClient.Close()
 
-	stackList, err := service.List(ctx, api.ListOptions{
-		All: true,
-	})
+	return service.List(ctx, api.ListOptions{All: true})
+}
+
+func (s *ComposeService) List(ctx context.Context) (map[string]*ComposeApp, error) {
+	stackList, err := ListComposeStacks(ctx)
 	if err != nil {
 		return nil, err
 	}
