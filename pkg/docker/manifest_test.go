@@ -64,6 +64,22 @@ func TestBuildManifestURL(t *testing.T) {
 			"acme/app@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 			"https://index.docker.io/v2/acme/app/manifests/sha256:0000000000000000000000000000000000000000000000000000000000000000",
 		},
+
+		// pinned by digest AND tagged, which is how a store template pins an image:
+		// the tag is not part of the repository, and a registry answers 404 for a
+		// path that carries one
+		{
+			"ghcr.io/immich-app/postgres:14-vectorchord0.3.0@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+			"https://ghcr.io/v2/immich-app/postgres/manifests/sha256:2222222222222222222222222222222222222222222222222222222222222222",
+		},
+		{
+			"redis:6.2.20-alpine@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+			"https://index.docker.io/v2/library/redis/manifests/sha256:3333333333333333333333333333333333333333333333333333333333333333",
+		},
+		{
+			"registry.local:5000/img:2.0@sha256:4444444444444444444444444444444444444444444444444444444444444444",
+			"https://registry.local:5000/v2/img/manifests/sha256:4444444444444444444444444444444444444444444444444444444444444444",
+		},
 	} {
 		t.Run(c.image, func(t *testing.T) {
 			got, err := docker.BuildManifestURL(c.image)

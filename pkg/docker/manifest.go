@@ -31,7 +31,10 @@ func BuildManifestURL(imageName string) (string, error) {
 	// for an empty reference and could never be checked.
 	img, reference := ExtractImageAndTag(withoutHost)
 	if repository, digest, pinned := strings.Cut(withoutHost, "@"); pinned {
-		img, reference = repository, digest
+		// A pinned image may still carry its tag (`img:1.2@sha256:...`). The tag is
+		// not part of the repository: left in the path, every registry answers 404.
+		img, _ = ExtractImageAndTag(repository)
+		reference = digest
 	}
 
 	img = GetScopeFromImageName(img, host)
