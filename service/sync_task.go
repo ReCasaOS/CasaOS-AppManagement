@@ -407,6 +407,21 @@ func checkSyncTask(task SyncTask, others []SyncTask) error {
 	return nil
 }
 
+// syncDue says whether a task has a slot it has not run yet. Whether it may run (first pass,
+// deletions to confirm) is the scheduler's question, not this one's.
+func syncDue(task SyncTask, now time.Time) (bool, error) {
+	if !task.Enabled {
+		return false, nil
+	}
+
+	slot, err := mostRecentSlot(BackupSchedule{Every: task.Every, At: task.At, Weekday: task.Weekday}, now)
+	if err != nil {
+		return false, err
+	}
+
+	return task.LastRun.Before(slot), nil
+}
+
 // within says whether child is folder or lies under it ("" is the root of everything).
 func within(child, folder string) bool {
 	return folder == "" || child == folder || strings.HasPrefix(child, strings.TrimSuffix(folder, "/")+"/")

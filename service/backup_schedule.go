@@ -120,6 +120,15 @@ func mostRecentSlot(schedule BackupSchedule, now time.Time) (time.Time, error) {
 	slot := slotOn(0)
 
 	switch schedule.Every {
+	case ScheduleHourly:
+		// only the minute counts: the last time the clock showed it
+		slot = time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), minute, 0, 0, now.Location())
+		if slot.After(now) {
+			slot = slot.Add(-time.Hour)
+		}
+
+		return slot, nil
+
 	case ScheduleDaily:
 		if slot.After(now) {
 			slot = slotOn(-1)
@@ -141,9 +150,19 @@ func mostRecentSlot(schedule BackupSchedule, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("%q is not a frequency this understands", schedule.Every)
 }
 
+// backupSlot is mostRecentSlot for a backup: hourly belongs to sync tasks, and a backup
+// schedule that says it is treated like any frequency this does not know.
+func backupSlot(schedule BackupSchedule, now time.Time) (time.Time, error) {
+	if schedule.Every == ScheduleHourly {
+		return time.Time{}, fmt.Errorf("%q is not a frequency this understands", schedule.Every)
+	}
+
+	return mostRecentSlot(schedule, now)
+}
+
 // ScheduleSlots is the last slot a schedule was due at, and the one after it.
 func ScheduleSlots(schedule BackupSchedule, now time.Time) (last, next time.Time, err error) {
-	last, err = mostRecentSlot(schedule, now)
+	last, err = backupSlot(schedule, now)
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
@@ -172,7 +191,7 @@ func IsDue(schedule BackupSchedule, now time.Time) (bool, error) {
 		return false, fmt.Errorf("a schedule needs an app and a destination")
 	}
 
-	slot, err := mostRecentSlot(schedule, now)
+	slot, err := backupSlot(schedule, now)
 	if err != nil {
 		return false, err
 	}

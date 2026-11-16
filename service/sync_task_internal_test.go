@@ -379,3 +379,27 @@ func TestTwoTasksOfOnePutNeverShareAnId(t *testing.T) {
 	_, err = SaveSyncTasks([]SyncTask{saved[0], twin})
 	refused(t, err, "same id twice")
 }
+
+func TestADisabledTaskIsNeverDue(t *testing.T) {
+	task := goodTask("/DATA")
+	task.Enabled = false
+
+	if due, err := syncDue(task, at(10, 7, 0)); due || err != nil {
+		t.Errorf("got %v, %v", due, err)
+	}
+}
+
+func TestAMissedSlotIsCaughtUpOnce(t *testing.T) {
+	task := goodTask("/DATA")
+	now := at(10, 7, 0)
+
+	task.LastRun = at(8, 3, 0)
+	if due, err := syncDue(task, now); !due || err != nil {
+		t.Errorf("a slot missed since the day before yesterday: got %v, %v", due, err)
+	}
+
+	task.LastRun = now
+	if due, _ := syncDue(task, now); due {
+		t.Error("a slot already run is not due again")
+	}
+}
