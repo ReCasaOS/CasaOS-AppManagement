@@ -242,8 +242,9 @@ func SaveSyncTasks(wanted []SyncTask) ([]SyncTask, error) {
 	}
 
 	tasks := make([]SyncTask, len(wanted))
-	var restart []string // work folders to clear once the file is written
-	var create []string  // download folders new in this save
+	var restart []string              // work folders to clear once the file is written
+	var create []string               // download folders new in this save
+	list := make([]bool, len(wanted)) // whose destination is listed for backups: new or moved there in this save
 	for i, task := range wanted {
 		before, known := SyncTask{}, false
 		for _, s := range stored {
@@ -301,12 +302,15 @@ func SaveSyncTasks(wanted []SyncTask) ([]SyncTask, error) {
 		if task.Direction == SyncDownload && (!known || task.LocalPath != before.LocalPath || task.Direction != before.Direction) {
 			create = append(create, task.LocalPath)
 		}
+		// an untouched task's destination is not listed again: one offline would block every save,
+		// under the lock the passes write their results with; each pass lists it anyway
+		list[i] = !known || task.Destination != before.Destination || task.RemotePath != before.RemotePath
 
 		tasks[i] = task
 	}
 
 	for i, task := range tasks {
-		if err := checkSyncTask(task, slices.Concat(tasks[:i], tasks[i+1:])); err != nil {
+		if err := checkSyncTaskListing(task, slices.Concat(tasks[:i], tasks[i+1:]), list[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -349,6 +353,11 @@ func cleanRemotePath(raw string) (string, error) {
 // checkSyncTask is every reason to refuse a task, against the other tasks. Each pass asks again:
 // the file can have been edited, an app installed, a disk mounted since it was saved.
 func checkSyncTask(task SyncTask, others []SyncTask) error {
+	return checkSyncTaskListing(task, others, true)
+}
+
+// checkSyncTaskListing is checkSyncTask, the listing of the destination for backups only when list.
+func checkSyncTaskListing(task SyncTask, others []SyncTask, list bool) error {
 	if strings.TrimSpace(task.Name) == "" {
 		return SyncRefusal("a sync task needs a name")
 	}
@@ -412,6 +421,8 @@ func checkSyncTask(task SyncTask, others []SyncTask) error {
 				return SyncRefusal(fmt.Sprintf("%q belongs to the backups: pick another folder", first))
 			}
 		}
+	}
+	if remote != "" && list {
 		// an app's backups this box does not know of: another box's, an uninstalled app's
 		first, _, _ := strings.Cut(remote, "/")
 		folders, err := syncStampFolders(task.Destination, first)

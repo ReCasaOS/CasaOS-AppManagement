@@ -164,7 +164,8 @@ func syncModeFits(task SyncTask, mode syncMode) bool {
 	case syncConfirmDeletes:
 		return task.NeedsDeleteConfirm
 	case syncFirstPass:
-		return task.Direction == SyncBoth && (task.NeedsFirstPass || !task.FirstPassDone)
+		// as the pass's belt: a task waiting for deletes to be confirmed is not one for a first pass
+		return task.Direction == SyncBoth && (task.NeedsFirstPass || (!task.FirstPassDone && !task.NeedsDeleteConfirm))
 	default:
 		return !task.NeedsFirstPass && !task.NeedsDeleteConfirm
 	}

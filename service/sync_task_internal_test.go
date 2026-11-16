@@ -571,3 +571,55 @@ func TestAFolderHoldingStampsIsABackupFolder(t *testing.T) {
 		t.Fatalf("asked %v, want %v", asked, want)
 	}
 }
+
+// A save sends the whole list back: an untouched task's destination is not listed again, so an
+// offline one blocks neither switching another task off nor deleting one. A task new or moved
+// in the destination is still listed, and each pass lists its own.
+func TestSavingAnUntouchedTaskDoesNotListItsDestination(t *testing.T) {
+	data := syncBox(t)
+	listings := 0
+	offline := false
+	syncStampFolders = func(string, string) ([]string, error) {
+		listings++
+		if offline {
+			return nil, errors.New("rclone: couldn't connect")
+		}
+
+		return nil, errors.New("error in ListJSON: directory not found")
+	}
+
+	other := goodTask(data)
+	other.Name, other.RemotePath, other.LocalPath = "videos", "Videos", filepath.Join(data, "Gallery", "Videos")
+	saved, err := SaveSyncTasks([]SyncTask{goodTask(data), other})
+	if err != nil || listings != 2 {
+		t.Fatalf("two new tasks are listed: %d, %v", listings, err)
+	}
+
+	offline, listings = true, 0
+	toggled := saved[0]
+	toggled.Enabled = false
+	if saved, err = SaveSyncTasks([]SyncTask{toggled, saved[1]}); err != nil || listings != 0 {
+		t.Fatalf("switching a task off: %d listings, %v", listings, err)
+	}
+	if saved, err = SaveSyncTasks([]SyncTask{saved[0]}); err != nil || listings != 0 {
+		t.Fatalf("deleting a task: %d listings, %v", listings, err)
+	}
+	// a stored path written by hand is no move either
+	if err := updateSyncTask(saved[0].ID, func(task *SyncTask) { task.RemotePath = "/" + task.RemotePath + "/" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = SaveSyncTasks([]SyncTask{saved[0]}); err != nil || listings != 0 {
+		t.Fatalf("a hand-written path: %d listings, %v", listings, err)
+	}
+
+	moved := saved[0]
+	moved.RemotePath = "Pictures"
+	refused(t, func() error { _, err := SaveSyncTasks([]SyncTask{moved}); return err }(), "a moved remote path is listed")
+	elsewhere := saved[0]
+	elsewhere.Destination = "vault"
+	refused(t, func() error { _, err := SaveSyncTasks([]SyncTask{elsewhere}); return err }(), "another destination is listed")
+	refused(t, func() error { _, err := SaveSyncTasks([]SyncTask{saved[0], other}); return err }(), "a new task is listed")
+
+	// and the pass lists it, whatever the save did
+	refused(t, checkSyncTask(saved[0], nil), "the pass lists")
+}

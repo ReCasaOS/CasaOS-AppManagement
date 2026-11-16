@@ -259,7 +259,9 @@ func TestRunNowRefusesWhatItShould(t *testing.T) {
 		waiting.NeedsDeleteConfirm = true
 		off := dueTask("s4", "off")
 		off.Enabled = false
-		passes, _ := syncTickIn(t, false, plain, both, waiting, off)
+		parked := dueTask("s5", "parked both")
+		parked.Direction, parked.NeedsDeleteConfirm = SyncBoth, true
+		passes, _ := syncTickIn(t, false, plain, both, waiting, off, parked)
 
 		for _, c := range []struct {
 			id   string
@@ -269,6 +271,7 @@ func TestRunNowRefusesWhatItShould(t *testing.T) {
 			{"s1", syncFirstPass},      // one way has no first pass
 			{"s2", syncFirstPass},      // done already, and not asked for again
 			{"s3", syncNormal},         // the owner answers the banner first
+			{"s5", syncFirstPass},      // a first pass is no answer to deletes to confirm
 		} {
 			if err := StartSync(c.id, c.mode, nil); !errors.Is(err, ErrSyncWrongState) {
 				t.Fatalf("%s in mode %d: got %v", c.id, c.mode, err)
