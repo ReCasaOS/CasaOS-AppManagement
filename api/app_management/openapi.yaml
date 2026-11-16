@@ -1150,6 +1150,8 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -1173,6 +1175,125 @@ paths:
           $ref: "#/components/responses/BackupDestinationCheckOK"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
+
+  /sync/tasks:
+    get:
+      summary: The scheduled folder syncs
+      description: Owner only. What the box writes (last run, result, what waits for the owner) comes with each task.
+      operationId: syncTasks
+      tags:
+        - Backup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncTasksOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    put:
+      summary: Replace the scheduled folder syncs
+      description: |
+        Owner only. The body is read strictly: an unknown field is refused. What only the box
+        writes is kept from the stored task, and a task without a known id gets a new one.
+        The answer is the saved list. A task the box refuses is a 400 with the reason.
+      operationId: setSyncTasks
+      tags:
+        - Backup methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncTaskList"
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncTasksOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /sync/tasks/{id}/run:
+    post:
+      summary: Run a sync task now
+      description: Owner only. Answers as soon as the pass has started; its result is read from the task.
+      operationId: runSyncTask
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/SyncTaskID"
+      responses:
+        "202":
+          $ref: "#/components/responses/SyncStarted"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+
+  /sync/tasks/{id}/first-pass:
+    post:
+      summary: Run the first pass of a sync task
+      description: Owner only. For a task that waits for its first pass to be started by hand.
+      operationId: firstPassSyncTask
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/SyncTaskID"
+      responses:
+        "202":
+          $ref: "#/components/responses/SyncStarted"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+
+  /sync/tasks/{id}/confirm-deletes:
+    post:
+      summary: Let a sync task delete what it held back
+      description: Owner only. For a task that stopped because a pass would have deleted too many files.
+      operationId: confirmSyncTaskDeletes
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/SyncTaskID"
+      responses:
+        "202":
+          $ref: "#/components/responses/SyncStarted"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+
+  /backup/destinations/{name}/folders:
+    get:
+      summary: The folders of a destination
+      description: Owner only. The folders directly under `path` (the root of the destination when left out), by name.
+      operationId: backupDestinationFolders
+      tags:
+        - Backup methods
+      parameters:
+        - $ref: "#/components/parameters/BackupDestinationName"
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncFoldersOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
 
   /backup/destinations/{name}/restic:
     get:
@@ -2536,6 +2657,14 @@ components:
       schema:
         type: string
 
+    SyncTaskID:
+      name: id
+      description: Id of a sync task
+      in: path
+      required: true
+      schema:
+        type: string
+
     BackupApp:
       name: app
       description: The app a backup is of
@@ -3454,6 +3583,37 @@ components:
                   data:
                     $ref: "#/components/schemas/BackupVerificationSchedule"
 
+    SyncTasksOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SyncTask"
+
+    SyncStarted:
+      description: Accepted
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BaseResponse"
+
+    SyncFoldersOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/SyncFolders"
+
     BackupExclusionsOK:
       description: OK
       content:
@@ -3742,7 +3902,7 @@ components:
           example: [2, 3]
 
     LiveBackup:
-      required: [id, app, destination, stamp, origin, started_at, operation, operations, source]
+      required: [id, app, destination, stamp, origin, started_at, operation, operations, source, kind]
       properties:
         id:
           type: string
@@ -3770,8 +3930,95 @@ components:
         source:
           type: string
           example: /DATA/AppData/overseerr/config
+        kind:
+          description: What runs, `backup` or `sync` (a pass of a sync task, whose `app` is then the task's name). A sync is listed to the owner only.
+          type: string
+          example: backup
         stats:
           $ref: "#/components/schemas/LiveBackupStats"
+
+    SyncTaskList:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/SyncTask"
+
+    SyncFolders:
+      type: object
+      required: [folders]
+      properties:
+        folders:
+          type: array
+          items:
+            type: string
+          example: [Photos, Documents]
+
+    SyncTask:
+      description: One folder kept in step with one folder of a destination. The id and the last eight fields are written by the box only (readOnly), so a new task is sent without them and a task read is sent back whole.
+      required: [id, name, destination, remote_path, local_path, direction, mirror, archive, archive_days, every, at, weekday, enabled, last_run, last_result, last_error, last_files, last_bytes, first_pass_done, needs_first_pass, needs_delete_confirm]
+      properties:
+        id:
+          readOnly: true
+          type: string
+        name:
+          type: string
+        destination:
+          type: string
+        remote_path:
+          type: string
+        local_path:
+          type: string
+        direction:
+          type: string
+          description: "`download`, `upload` or `both`."
+        mirror:
+          type: boolean
+        archive:
+          type: boolean
+        archive_days:
+          type: integer
+        every:
+          type: string
+          description: Not an enum, as the backup schedules.
+        at:
+          type: string
+          example: "03:00"
+        weekday:
+          type: integer
+          description: 0 is Sunday.
+        enabled:
+          type: boolean
+        last_run:
+          readOnly: true
+          type: string
+          format: date-time
+        last_result:
+          readOnly: true
+          type: string
+          description: "`ok`, `recovered`, `failed`, `stopped`, or empty."
+        last_error:
+          readOnly: true
+          type: string
+        last_files:
+          readOnly: true
+          type: integer
+          format: int64
+        last_bytes:
+          readOnly: true
+          type: integer
+          format: int64
+        first_pass_done:
+          readOnly: true
+          type: boolean
+        needs_first_pass:
+          readOnly: true
+          type: boolean
+        needs_delete_confirm:
+          readOnly: true
+          type: boolean
 
     LiveBackupStats:
       description: The engine's counters for the operation under way. A total left out is still being taken stock of.

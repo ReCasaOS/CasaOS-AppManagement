@@ -21,6 +21,10 @@ func (a *AppManagement) BackupRunning(ctx echo.Context) error {
 // runningFor is runningOut for the caller of ctx: the apps it may see, and the paths for the owner only
 // (a backup reads the box's folders and files, which a user account does not browse).
 func runningFor(ctx echo.Context, lives []service.LiveBackup, passes []service.BackupPass) codegen.BackupRunningOK {
+	// a sync is the owner's: its App is a task name, never an app to filter by
+	if !isOwner(ctx) {
+		lives = slices.DeleteFunc(slices.Clone(lives), func(l service.LiveBackup) bool { return l.Kind == "sync" })
+	}
 	out := runningOut(visibleFilter(ctx), lives, passes)
 	if !isOwner(ctx) {
 		for i := range out.Backups {
@@ -49,20 +53,24 @@ func runningOut(visible func(app string) bool, lives []service.LiveBackup, passe
 		return !slices.ContainsFunc(strings.Split(p, "/"), func(part string) bool { return part != "" && !visible(part) })
 	}
 	for _, live := range lives {
-		if !visible(live.App) {
+		isSync := live.Kind == "sync"
+		// a sync is not an app: the filter and the hidden-app paths do not apply (runningFor keeps it from non-owners)
+		if !isSync && !visible(live.App) {
 			continue
 		}
 		backup := codegen.LiveBackup{
-			Id: live.ID, App: live.App, Destination: live.Destination, Stamp: live.Stamp,
+			Kind: "backup", Id: live.ID, App: live.App, Destination: live.Destination, Stamp: live.Stamp,
 			Origin: string(live.Origin), StartedAt: live.StartedAt,
 			Operation: live.Operation, Operations: live.Operations, Source: live.Source,
 		}
-		if !shown(live.Source) {
+		if isSync {
+			backup.Kind = "sync"
+		} else if !shown(live.Source) {
 			backup.Source = ""
 		}
 		if live.Stats != nil {
 			backup.Stats = liveStatsOut(*live.Stats, live)
-			if backup.Stats.Current != nil && !shown(*backup.Stats.Current) {
+			if backup.Stats.Current != nil && !isSync && !shown(*backup.Stats.Current) {
 				backup.Stats.Current = nil
 			}
 		}

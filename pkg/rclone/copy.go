@@ -72,24 +72,31 @@ func (c *Client) StopJob(id int64) error {
 // abandoning a running transfer leaves it writing to the destination long after
 // whoever asked for it has gone, and the next run then races it.
 func (c *Client) waitForJob(ctx context.Context, id int64) error {
+	_, err := c.waitForJobOutput(ctx, id)
+
+	return err
+}
+
+// waitForJobOutput is waitForJob, with the endpoint's own answer once the job succeeded.
+func (c *Client) waitForJobOutput(ctx context.Context, id int64) (json.RawMessage, error) {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	for {
 		status, err := c.JobStatus(id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if status.Finished {
 			if status.Success {
-				return nil
+				return status.Output, nil
 			}
 			if status.Error != "" {
-				return fmt.Errorf("rclone: %s", status.Error)
+				return nil, fmt.Errorf("rclone: %s", status.Error)
 			}
 
-			return fmt.Errorf("rclone job %d failed without saying why", id)
+			return nil, fmt.Errorf("rclone job %d failed without saying why", id)
 		}
 
 		// only when somebody follows the copy; a figure that cannot be read costs the copy nothing
@@ -102,10 +109,10 @@ func (c *Client) waitForJob(ctx context.Context, id int64) error {
 		select {
 		case <-ctx.Done():
 			if stopErr := c.StopJob(id); stopErr != nil {
-				return errors.Join(ctx.Err(), fmt.Errorf("and job %d could not be stopped: %w", id, stopErr))
+				return nil, errors.Join(ctx.Err(), fmt.Errorf("and job %d could not be stopped: %w", id, stopErr))
 			}
 
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-ticker.C:
 		}
 	}

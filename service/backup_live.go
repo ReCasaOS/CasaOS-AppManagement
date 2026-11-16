@@ -63,12 +63,15 @@ type LiveBackup struct {
 	Source      string
 	Stats       *backupprogress.Stats
 	StatsAt     time.Time
+	Kind        string // "" for a backup, "sync" for a pass of a sync task
 }
 
 type liveEntry struct {
 	LiveBackup
 	cancel      context.CancelCauseFunc
 	publishedAt time.Time
+	// what the jobs before the one under way moved, for liveFigures
+	doneFiles, doneBytes int64
 }
 
 var live = struct {
@@ -88,6 +91,12 @@ var publishProgressFraction = publishBackupFraction
 // beginLive lists one backup as running until end is called, and returns the context its
 // copies run under: Stop cancels it, and the engines report their counters to it.
 func beginLive(ctx context.Context, app, destination, stamp string) (context.Context, func()) {
+	return beginLiveKind(ctx, "", app, destination, stamp)
+}
+
+// beginLiveKind is beginLive for what is not a backup: listed with its kind from the start, so
+// no list ever shows it as a backup.
+func beginLiveKind(ctx context.Context, kind, app, destination, stamp string) (context.Context, func()) {
 	ctx, cancel := context.WithCancelCause(ctx)
 
 	live.Lock()
@@ -95,7 +104,7 @@ func beginLive(ctx context.Context, app, destination, stamp string) (context.Con
 	entry := &liveEntry{
 		LiveBackup: LiveBackup{
 			ID: "b" + strconv.FormatInt(live.next, 10), App: app, Destination: destination, Stamp: stamp,
-			Origin: backupOriginOf(ctx), StartedAt: backupClock(),
+			Origin: backupOriginOf(ctx), StartedAt: backupClock(), Kind: kind,
 		},
 		cancel: cancel,
 	}
@@ -127,12 +136,48 @@ func liveOperation(ctx context.Context, operation, operations int, source string
 	entry.Stats, entry.StatsAt = nil, time.Time{}
 }
 
+// liveNextJob says the engine's next job counts from zero: what the last one moved is kept
+// aside, for liveFigures to add.
+func liveNextJob(ctx context.Context) {
+	entry, ok := ctx.Value(liveKey{}).(*liveEntry)
+	if !ok {
+		return
+	}
+
+	live.Lock()
+	defer live.Unlock()
+	if entry.Stats != nil {
+		entry.doneFiles += entry.Stats.Files
+		entry.doneBytes += entry.Stats.Bytes
+	}
+	entry.Stats, entry.StatsAt = nil, time.Time{}
+}
+
+// liveFigures is what the engine said it had moved: files and bytes, the jobs before the last
+// one's included.
+func liveFigures(ctx context.Context) (files, bytes int64) {
+	entry, ok := ctx.Value(liveKey{}).(*liveEntry)
+	if !ok {
+		return 0, 0
+	}
+
+	live.Lock()
+	defer live.Unlock()
+	files, bytes = entry.doneFiles, entry.doneBytes
+	if entry.Stats != nil {
+		files, bytes = files+entry.Stats.Files, bytes+entry.Stats.Bytes
+	}
+
+	return files, bytes
+}
+
 func liveStats(ctx context.Context, entry *liveEntry, stats backupprogress.Stats) {
 	now := backupClock()
 
 	live.Lock()
 	entry.Stats, entry.StatsAt = &stats, now
-	due := entry.publishedAt.IsZero() || now.Sub(entry.publishedAt) >= progressEvery
+	// a sync has no operations to share its progress out, nor a backup's events to say it on
+	due := entry.Kind == "" && (entry.publishedAt.IsZero() || now.Sub(entry.publishedAt) >= progressEvery)
 	var fraction float64
 	if due {
 		entry.publishedAt = now

@@ -296,3 +296,34 @@ func TestBoxNowFollowsTheZoneTheBoxHasNow(t *testing.T) {
 		t.Fatalf("TZ is set, and the clock answered in %v", got)
 	}
 }
+
+func TestAnHourlySlotIsTheLastPassedMinute(t *testing.T) {
+	schedule := BackupSchedule{Every: ScheduleHourly, At: "00:20"}
+	for _, c := range []struct{ now, want time.Time }{
+		{at(10, 14, 35), at(10, 14, 20)},
+		{at(10, 14, 5), at(10, 13, 20)},
+		{at(10, 0, 10), at(9, 23, 20)},
+		{at(10, 14, 20), at(10, 14, 20)},
+	} {
+		got, err := mostRecentSlot(schedule, c.now)
+		if err != nil || !got.Equal(c.want) {
+			t.Errorf("now %v: got %v, %v; want %v", c.now, got, err, c.want)
+		}
+	}
+}
+
+func TestBackupsDoNotGoHourly(t *testing.T) {
+	schedule := daily(time.Time{})
+	schedule.Every = ScheduleHourly
+
+	if _, err := IsDue(schedule, at(10, 7, 0)); err == nil {
+		t.Error("an hourly backup must be refused like an unknown frequency")
+	}
+	if _, _, err := ScheduleSlots(schedule, at(10, 7, 0)); err == nil {
+		t.Error("an hourly backup has no slots")
+	}
+	due, broken := DueSchedules([]BackupSchedule{schedule}, at(10, 7, 0))
+	if len(due) != 0 || len(broken) != 1 {
+		t.Errorf("want it reported broken and never run, got %v and %v", due, broken)
+	}
+}

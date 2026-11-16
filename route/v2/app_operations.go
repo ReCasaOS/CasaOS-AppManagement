@@ -11,13 +11,18 @@ import (
 // AppOperations answers what runs on each app right now. The core asks before it updates the
 // box by itself, as an internal request.
 func (a *AppManagement) AppOperations(ctx echo.Context) error {
-	visible := visibleFilter(ctx)
+	visible, owner := visibleFilter(ctx), isOwner(ctx)
 	operations := []codegen.AppOperation{}
-	for _, operation := range service.RunningOperations() {
+	for _, operation := range runningOperations() {
 		if !visible(operation.App) {
 			continue
 		}
-		operations = append(operations, codegen.AppOperation{App: operation.App, Kind: operation.Kind})
+		app := operation.App
+		// a sync is listed, the core counts it, but its task's name is the owner's
+		if operation.Kind == "sync" && !owner {
+			app = "sync"
+		}
+		operations = append(operations, codegen.AppOperation{App: app, Kind: operation.Kind})
 	}
 
 	// an upgrade that cannot be ruled out is told as open, as the scheduler reads it
@@ -28,3 +33,6 @@ func (a *AppManagement) AppOperations(ctx echo.Context) error {
 
 // osUpgradeOpen is a variable so a test can open an upgrade without the core's file.
 var osUpgradeOpen = service.OSUpgradeOpen
+
+// runningOperations is a variable so a test can run a sync without a pass.
+var runningOperations = service.RunningOperations

@@ -102,6 +102,18 @@ func (a *AppManagement) DeleteBackupRun(ctx echo.Context, name codegen.BackupDes
 
 // DeleteBackupDestination forgets one. What was copied there stays there.
 func (a *AppManagement) DeleteBackupDestination(ctx echo.Context, name codegen.BackupDestinationName) error {
+	user, err := syncUsing(string(name))
+	if err != nil {
+		return backupBadRequest(ctx, err)
+	}
+	if user != "" {
+		// the task's name is the owner's
+		if !isOwner(ctx) {
+			return backupBadRequest(ctx, errors.New("used by a sync task"))
+		}
+
+		return backupBadRequest(ctx, fmt.Errorf("used by the sync task %s", user))
+	}
 	if err := rclone.NewClient().DeleteDestination(string(name)); err != nil {
 		return backupError(ctx, err)
 	}
