@@ -2346,6 +2346,47 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /dashboard-hidden/{app}:
+    get:
+      summary: Whether the dashboard leaves an app's icon out
+      description: Owner only.
+      operationId: getDashboardHidden
+      tags:
+        - Common methods
+      parameters:
+        - $ref: "#/components/parameters/VisibilityApp"
+      responses:
+        "200":
+          $ref: "#/components/responses/DashboardHiddenOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+
+    put:
+      summary: Hide an app's icon from the dashboard, or show it again
+      description: |-
+        Owner only. A display choice for every account of the box: the app keeps
+        running and stays in every other list. An uninstall shows the app again.
+      operationId: setDashboardHidden
+      tags:
+        - Common methods
+      parameters:
+        - $ref: "#/components/parameters/VisibilityApp"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DashboardHidden"
+      responses:
+        "200":
+          $ref: "#/components/responses/DashboardHiddenOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /visibility/{app}:
     get:
       summary: The accounts an app is hidden from
@@ -2910,6 +2951,17 @@ components:
             $ref: "#/components/schemas/BaseResponse"
           example:
             message: "Forbidden"
+
+    DashboardHiddenOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/DashboardHidden"
 
     VisibilityOK:
       description: OK
@@ -3670,6 +3722,14 @@ components:
                     $ref: "#/components/schemas/LogsSettings"
 
   schemas:
+    DashboardHidden:
+      type: object
+      required: [hidden]
+      properties:
+        hidden:
+          type: boolean
+          description: Whether the dashboard leaves the app's icon out, for every account.
+
     Visibility:
       type: object
       required: [hidden_for]
@@ -5572,6 +5632,12 @@ components:
             this app has not been checked since the service started.
           type: boolean
           example: true
+        hidden_on_dashboard:
+          description: |
+            The owner chose to leave this app's icon out of the dashboard, for every
+            account. Display only: the item is still sent, for the screens that count
+            or manage apps. Absent means shown.
+          type: boolean
         store_app_id:
           $ref: "#/components/schemas/StoreAppID"
         scheme:
