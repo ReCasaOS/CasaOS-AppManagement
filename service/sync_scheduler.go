@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/rclone"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
 )
@@ -196,4 +197,13 @@ func StartSync(id string, mode syncMode, engine syncEngine) error {
 	}()
 
 	return nil
+}
+
+// The three passes the routes ask for, with the box's own rclone.
+func RunSyncNow(id string) error { return StartSync(id, syncNormal, rclone.NewClient()) }
+
+func RunSyncFirstPass(id string) error { return StartSync(id, syncFirstPass, rclone.NewClient()) }
+
+func ConfirmSyncDeletes(id string) error {
+	return StartSync(id, syncConfirmDeletes, rclone.NewClient())
 }
