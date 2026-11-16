@@ -11,7 +11,7 @@
 // Two things about that daemon are worth knowing before trusting it with
 // credentials. It listens with --rc-no-auth, so any local process can read and
 // write every remote it holds; that is already true of the cloud drives CasaOS
-// stores there today. And it is pinned at v1.61.1, which is old but long predates
+// stores there today. And it is pinned at v1.75.1, which has
 // every backend used here.
 package rclone
 
