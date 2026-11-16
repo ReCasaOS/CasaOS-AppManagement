@@ -166,25 +166,25 @@ func TestRedactProjectEmptiesBuildArgumentsConfigsAndSecrets(t *testing.T) {
 	assert.Equal(t, redactProject(true, project), project)
 }
 
-// A one-off container known only from disk has lost its labels: its compose name says whose it is.
-func TestStatsHiddenReadsTheOneOffName(t *testing.T) {
-	visible := func(app string) bool { return app != "immich" && app != "my-app" }
+// What no app owns, a one-off container known only from disk included, is the owner's alone.
+func TestStatsHiddenKeepsWhatNoAppOwnsForTheOwner(t *testing.T) {
+	visible := func(app string) bool { return app != "immich" }
 	for id, want := range map[string]bool{
 		"app:immich:db:1":               true,
 		"app:jarvis:db:1":               false,
-		"container:immich-web-run-ab12": true,
-		"container:my-app-web-run-ab12": true,
-		"container:jarvis-web-run-ab12": false,
-		"container:immich":              false, // a container no app owns
-		"container:my.db_1":             false,
-		"container:immichweb-run-1":     false,
-		"host":                          false,
+		"container:jarvis-web-run-ab12": true,
+		"container:my.db_1":             true,
+		"host":                          true,
 	} {
-		assert.Equal(t, statsHidden(visible, id, ""), want, id)
+		assert.Equal(t, statsHidden(false, visible, id, ""), want, id)
 	}
-	// the sampler's own app wins over the name
-	assert.Assert(t, statsHidden(visible, "container:custom-name", "immich"))
-	assert.Assert(t, !statsHidden(visible, "container:custom-name", "jarvis"))
+	everything := func(string) bool { return true }
+	for _, id := range []string{"app:immich:db:1", "container:my.db_1", "container:jarvis-web-run-ab12"} {
+		assert.Assert(t, !statsHidden(true, everything, id, ""), id)
+	}
+	// the sampler's own app decides for a container it knows the app of
+	assert.Assert(t, statsHidden(false, visible, "container:custom-name", "immich"))
+	assert.Assert(t, !statsHidden(false, visible, "container:custom-name", "jarvis"))
 }
 
 // A name the services trim or read without case is hidden as the name itself is.
