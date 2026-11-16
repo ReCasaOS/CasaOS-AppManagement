@@ -209,16 +209,19 @@ var (
 
 // holdNoticeDue says whether the tick should say it is holding backups back, and counts it as
 // said. Once an hour: a hold can last days, and a line a minute buries the reason in the journal.
-func holdNoticeDue() bool {
+func holdNoticeDue() bool { return noticeDue(&lastUpgradeHoldLog) }
+
+// noticeDue is holdNoticeDue for any line that keeps its own last time, under lastUpgradeHoldLogMu.
+func noticeDue(last *time.Time) bool {
 	lastUpgradeHoldLogMu.Lock()
 	defer lastUpgradeHoldLogMu.Unlock()
 
 	now := backupClock()
-	if !lastUpgradeHoldLog.IsZero() && now.Sub(lastUpgradeHoldLog) < time.Hour {
+	if !last.IsZero() && now.Sub(*last) < time.Hour {
 		return false
 	}
 
-	lastUpgradeHoldLog = now
+	*last = now
 
 	return true
 }

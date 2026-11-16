@@ -184,6 +184,14 @@ func main() {
 			panic(err)
 		}
 
+		// The folders kept in step with a destination. A job of its own, so a long backup never
+		// holds up a sync's slot, nor a sync a backup's; what is not due costs one file read.
+		if _, err := crontab.AddFunc("@every 1m", func() {
+			service.RunDueSyncs(ctx, service.BoxNow(), rclone.NewClient())
+		}); err != nil {
+			panic(err)
+		}
+
 		// The repositories kept with restic, looked at once a week. An hour because that is how
 		// soon a check that found a fault, or a destination just switched, is picked up; what is
 		// not due costs one file read.
