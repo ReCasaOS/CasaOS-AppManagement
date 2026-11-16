@@ -23,6 +23,7 @@ func ApplyDataPath(root string) string {
 	BackupSchedulePath = filepath.Join(root, "backups", "schedules.json")
 	BackupExclusionsPath = filepath.Join(root, "backups", "exclusions.json")
 	VisibilityPath = filepath.Join(root, "visibility.json")
+	DashboardHiddenPath = filepath.Join(root, "dashboard-hidden.json")
 	imageUpdateStatePath = filepath.Join(root, "image_updates.json")
 	ResticCheckPath = filepath.Join(root, "backups", "restic-checks.json")
 	restic.KeyDir = filepath.Join(root, "backups", "restic")
