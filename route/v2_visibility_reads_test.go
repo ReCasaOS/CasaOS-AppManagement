@@ -428,6 +428,28 @@ func TestLogsAppsLogsStreamEventsExportOmitHiddenApps(t *testing.T) {
 	assert.Assert(t, strings.Contains(bodyOf(r.as("admin", "/logs/export")), "from immich"))
 }
 
+// The settings of the logs are read by every account; where the logs are kept is the owner's alone.
+func TestTheLogsSettingsGiveTheirFolderToTheOwnerAlone(t *testing.T) {
+	r := newReadsRig(t)
+
+	pathOf := func(who string) any {
+		got := r.as(who, "/logs/settings")
+		assert.Equal(t, got.Code, http.StatusOK, "%s: %s", who, bodyOf(got))
+		var body struct{ Data map[string]any }
+		assert.NilError(t, json.Unmarshal(got.Body.Bytes(), &body))
+		_, kept := body.Data["retention_days"]
+		assert.Assert(t, kept, "%s: %s", who, bodyOf(got))
+
+		return body.Data["path"]
+	}
+	owner := pathOf("admin")
+	assert.Assert(t, owner != "", "the owner reads the folder")
+	assert.Equal(t, pathOf("internal"), owner)
+	for _, who := range []string{"user", "other"} {
+		assert.Equal(t, pathOf(who), "", who)
+	}
+}
+
 func TestTheLogStreamOmitsHiddenApps(t *testing.T) {
 	r := newReadsRig(t)
 	server := httptest.NewServer(r.v2)
