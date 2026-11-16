@@ -172,6 +172,12 @@ func TestADestinationInUseIsNotForgotten(t *testing.T) {
 	assert.Equal(t, rec.Code, http.StatusBadRequest)
 	assert.Assert(t, strings.Contains(rec.Body.String(), "used by the sync task Photos"), rec.Body.String())
 
+	// not the owner: still refused, without the task's name
+	user := visibilityCaller(t, "2")
+	assert.NilError(t, a.DeleteBackupDestination(user, "nas"))
+	assert.Equal(t, user.Response().Status, http.StatusBadRequest)
+	assert.Equal(t, user.Response().Writer.(*httptest.ResponseRecorder).Body.String(), "{\"message\":\"used by a sync task\"}\n")
+
 	// a tasks file nobody can read: the destination is not deleted blindly
 	assert.NilError(t, os.WriteFile(service.SyncTasksPath, []byte("not json"), 0o600))
 	ctx, rec = ownerCall(t, http.MethodDelete, "/", "")

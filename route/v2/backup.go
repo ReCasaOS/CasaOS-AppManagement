@@ -107,6 +107,11 @@ func (a *AppManagement) DeleteBackupDestination(ctx echo.Context, name codegen.B
 		return backupBadRequest(ctx, err)
 	}
 	if user != "" {
+		// the task's name is the owner's
+		if !isOwner(ctx) {
+			return backupBadRequest(ctx, errors.New("used by a sync task"))
+		}
+
 		return backupBadRequest(ctx, fmt.Errorf("used by the sync task %s", user))
 	}
 	if err := rclone.NewClient().DeleteDestination(string(name)); err != nil {
