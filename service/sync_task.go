@@ -145,7 +145,16 @@ func (t SyncTask) remoteArchive(stamp string) string {
 		return ""
 	}
 
-	return path.Join(t.RemotePath+"-archive", stamp)
+	return path.Join(t.remoteArchiveFolder(), stamp)
+}
+
+// remoteArchiveFolder holds every pass's archive in the destination; "" without a remote_path.
+func (t SyncTask) remoteArchiveFolder() string {
+	if t.RemotePath == "" {
+		return ""
+	}
+
+	return t.RemotePath + "-archive"
 }
 
 // SyncTasks reads the file. One that will not parse is an error, never an empty list.

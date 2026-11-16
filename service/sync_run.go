@@ -55,7 +55,8 @@ func runSync(ctx context.Context, task SyncTask, mode syncMode, engine syncEngin
 	now := backupClock()
 	stamp := now.UTC().Format(syncStampLayout)
 
-	if err := syncGuards(task, mode, engine); err != nil {
+	task, err := syncGuards(task, mode, engine)
+	if err != nil {
 		writeSyncResult(task, now, err, false, 0, 0)
 		return
 	}
@@ -63,7 +64,6 @@ func runSync(ctx context.Context, task SyncTask, mode syncMode, engine syncEngin
 	running, endLive := beginLive(ctx, task.Name, task.Destination, stamp)
 	liveKind(running, "sync")
 
-	var err error
 	firstPassDone := false
 	if task.Direction == SyncBoth {
 		firstPassDone, err = twoWayPass(running, task, mode, stamp, engine)
@@ -88,26 +88,33 @@ func runSync(ctx context.Context, task SyncTask, mode syncMode, engine syncEngin
 	}
 }
 
-// syncGuards is every reason not to touch either side, asked again at each pass.
-func syncGuards(task SyncTask, mode syncMode, engine syncEngine) error {
+// syncGuards is every reason not to touch either side, asked again at each pass. It returns the
+// task the pass runs on: its local folder resolved, as the overlap checks saw it, so the folder
+// and its archive are the ones no other task may reach.
+func syncGuards(task SyncTask, mode syncMode, engine syncEngine) (SyncTask, error) {
 	tasks, err := SyncTasks()
 	if err != nil {
-		return err
+		return task, err
 	}
 	others := slices.DeleteFunc(tasks, func(other SyncTask) bool { return other.ID == task.ID })
 	if err := checkSyncTask(task, others); err != nil {
-		return err
+		return task, err
 	}
+	real, err := checkSyncLocal(task.LocalPath)
+	if err != nil {
+		return task, err
+	}
+	task.LocalPath = real
 
 	if info, err := os.Stat(task.LocalPath); err != nil || !info.IsDir() {
-		return errors.New("the folder on this box is missing")
+		return task, errors.New("the folder on this box is missing")
 	}
 
 	if task.Direction == SyncBoth && task.workdir() == "" {
-		return errors.New("this task's id was not issued by the box, so it has nowhere to keep its state: save it again")
+		return task, errors.New("this task's id was not issued by the box, so it has nowhere to keep its state: save it again")
 	}
 
-	return checkSyncSides(task, mode, engine)
+	return task, checkSyncSides(task, mode, engine)
 }
 
 // checkSyncSides refuses a pass that would carry an empty side over a full one.
@@ -159,7 +166,8 @@ func checkSyncSides(task SyncTask, mode syncMode, engine syncEngine) error {
 		if err != nil {
 			return err
 		}
-		if empty != boxEmpty && mode != syncFirstPass {
+		// a first pass is a resync, which unites both sides and deletes nothing
+		if empty != boxEmpty && mode != syncFirstPass && task.FirstPassDone {
 			return errSyncSourceEmpty
 		}
 	}
@@ -168,6 +176,7 @@ func checkSyncSides(task SyncTask, mode syncMode, engine syncEngine) error {
 }
 
 // isNotFound is rclone saying a folder is not there yet, which for a sync is a folder with nothing in it.
+// shortcut: matches rclone's message text (fs.ErrorDirNotFound), not a code; upgrade if the rc API ever returns an error code for it.
 func isNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "directory not found")
 }

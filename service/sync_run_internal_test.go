@@ -584,3 +584,85 @@ func TestARunningSyncIsListedAsSync(t *testing.T) {
 		t.Fatal("still listed after the pass")
 	}
 }
+
+func TestAMissingCloudFolderIsAnEmptySource(t *testing.T) {
+	for _, direction := range []SyncDirection{SyncDownload, SyncBoth} {
+		task, engine := syncRunBox(t, direction)
+		task.Mirror = true
+		storeSyncTask(t, task)
+		engine.emptyErr = map[string]error{cloudOf(task): errors.New("error in ListJSON: directory not found")}
+
+		runSync(context.Background(), task, syncNormal, engine)
+
+		wantFailed(t, storedSyncTask(t, task.ID), "the source is empty")
+		if engine.touchedRclone() {
+			t.Fatalf("%s: rclone was asked %v", direction, engine.calls)
+		}
+	}
+}
+
+func TestANewTwoWayTaskWithAnEmptySideStillRunsItsFirstPass(t *testing.T) {
+	task, engine := syncRunBox(t, SyncBoth)
+	task.FirstPassDone = false
+	storeSyncTask(t, task)
+	engine.empty = map[string]bool{cloudOf(task): true}
+
+	runSync(context.Background(), task, syncNormal, engine)
+
+	if len(engine.bisyncs) != 2 || !engine.bisyncs[0].o.Resync || engine.bisyncs[1].o.Resync {
+		t.Fatalf("want a resync then a normal pass, got %v", engine.calls)
+	}
+	if stored := storedSyncTask(t, task.ID); stored.LastResult != "ok" || !stored.FirstPassDone {
+		t.Fatalf("got %+v", stored)
+	}
+}
+
+func TestAPassThroughALinkArchivesBesideTheRealFolder(t *testing.T) {
+	task, engine := syncRunBox(t, SyncDownload)
+	real, err := filepath.EvalSymlinks(task.LocalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(filepath.Dir(filepath.Dir(task.LocalPath)), "Link")
+	if err := os.Symlink(task.LocalPath, link); err != nil {
+		t.Fatal(err)
+	}
+	task.LocalPath, task.Archive = link, true
+	storeSyncTask(t, task)
+
+	runSync(context.Background(), task, syncNormal, engine)
+
+	want := filepath.Join(filepath.Dir(real), "."+filepath.Base(real)+"-archive", syncRunStamp)
+	if len(engine.syncs) != 1 || engine.syncs[0].dst != real || engine.syncs[0].o.BackupDir != want {
+		t.Fatalf("want %s archived in %s, got %+v", real, want, engine.syncs)
+	}
+}
+
+func TestEachSidePurgesOnlyTheArchivesItWrote(t *testing.T) {
+	old := syncRunNow.Add(-31 * 24 * time.Hour).Format(syncStampLayout)
+	for _, direction := range []SyncDirection{SyncDownload, SyncUpload} {
+		task, engine := syncRunBox(t, direction)
+		task.Archive, task.ArchiveDays = true, 7
+		storeSyncTask(t, task)
+		box := filepath.Join(syncArchiveFolder(task.LocalPath), old)
+		if err := os.MkdirAll(box, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		engine.folders = map[string][]string{rclone.Destination(task.Destination, "") + task.RemotePath + "-archive": {old}}
+
+		runSync(context.Background(), task, syncNormal, engine)
+
+		_, statErr := os.Stat(box)
+		listedCloud := slices.ContainsFunc(engine.calls, func(c string) bool { return strings.HasPrefix(c, "folders ") })
+		switch direction {
+		case SyncDownload:
+			if listedCloud || len(engine.purged) != 0 || !os.IsNotExist(statErr) {
+				t.Fatalf("download: cloud %v %v, box %v", engine.calls, engine.purged, statErr)
+			}
+		case SyncUpload:
+			if statErr != nil || len(engine.purged) != 1 {
+				t.Fatalf("upload: box %v, cloud %v", statErr, engine.purged)
+			}
+		}
+	}
+}

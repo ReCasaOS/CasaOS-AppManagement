@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"os"
-	"path"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
@@ -24,6 +23,32 @@ func purgeSyncArchive(ctx context.Context, task SyncTask, now time.Time, engine 
 		return err == nil && stamp.Before(oldest)
 	}
 
+	// each side keeps only the archives this task wrote there: an upload writes none on the box,
+	// a download none in the destination, where another box's task may keep its own
+	if task.Direction != SyncUpload {
+		purgeBoxArchive(task, expired)
+	}
+	if task.Direction == SyncDownload || task.RemotePath == "" {
+		return
+	}
+	names, err := engine.Folders(rclone.Destination(task.Destination, ""), task.remoteArchiveFolder())
+	if isNotFound(err) {
+		return
+	}
+	if err != nil {
+		logger.Error("the sync archive in the destination could not be read", zap.Error(err), zap.String("task", task.Name))
+		return
+	}
+	for _, name := range names {
+		if expired(name) {
+			if err := engine.Purge(ctx, task.Destination, task.remoteArchive(name)); err != nil {
+				logger.Error("an old sync archive could not be removed", zap.Error(err), zap.String("task", task.Name))
+			}
+		}
+	}
+}
+
+func purgeBoxArchive(task SyncTask, expired func(name string) bool) {
 	// a link in its place could lead anywhere
 	folder := syncArchiveFolder(task.LocalPath)
 	if info, err := os.Lstat(folder); err == nil && info.IsDir() {
@@ -36,26 +61,6 @@ func purgeSyncArchive(ctx context.Context, task SyncTask, now time.Time, engine 
 				if err := os.RemoveAll(task.localArchive(entry.Name())); err != nil {
 					logger.Error("an old sync archive could not be removed", zap.Error(err), zap.String("task", task.Name))
 				}
-			}
-		}
-	}
-
-	// a task with no folder in the destination has no archive there
-	if task.RemotePath == "" {
-		return
-	}
-	names, err := engine.Folders(rclone.Destination(task.Destination, ""), path.Dir(task.remoteArchive(syncStampLayout)))
-	if isNotFound(err) {
-		return
-	}
-	if err != nil {
-		logger.Error("the sync archive in the destination could not be read", zap.Error(err), zap.String("task", task.Name))
-		return
-	}
-	for _, name := range names {
-		if expired(name) {
-			if err := engine.Purge(ctx, task.Destination, task.remoteArchive(name)); err != nil {
-				logger.Error("an old sync archive could not be removed", zap.Error(err), zap.String("task", task.Name))
 			}
 		}
 	}
