@@ -162,25 +162,8 @@ func TestDueSchedulesAnswerInAStableOrder(t *testing.T) {
 	}
 }
 
-// inParis makes the box's zone Paris for one test, because the slots are wall-clock
-// times and a DST change only exists in a zone that has one.
-func inParis(t *testing.T) *time.Location {
-	t.Helper()
-
-	paris, err := time.LoadLocation("Europe/Paris")
-	if err != nil {
-		t.Skipf("no tz database: %v", err)
-	}
-
-	was := time.Local
-	time.Local = paris
-	t.Cleanup(func() { time.Local = was })
-
-	return paris
-}
-
 func TestADailyScheduleSaysItsLastAndNextSlot(t *testing.T) {
-	paris := inParis(t)
+	paris := parisZone
 	now := time.Date(2026, 9, 9, 7, 0, 0, 0, paris)
 
 	last, next, err := ScheduleSlots(daily(time.Time{}), now)
@@ -197,7 +180,7 @@ func TestADailyScheduleSaysItsLastAndNextSlot(t *testing.T) {
 }
 
 func TestAWeeklyScheduleSaysItsLastAndNextSlot(t *testing.T) {
-	paris := inParis(t)
+	paris := parisZone
 	// a Wednesday, on a schedule for Mondays
 	now := time.Date(2026, 9, 9, 12, 0, 0, 0, paris)
 	schedule := BackupSchedule{Every: ScheduleWeekly, Weekday: time.Monday, At: "03:00", Enabled: true}
@@ -216,8 +199,6 @@ func TestAWeeklyScheduleSaysItsLastAndNextSlot(t *testing.T) {
 }
 
 func TestSlotsOfAnUnreadableTimeOfDayAreAnError(t *testing.T) {
-	inParis(t)
-
 	schedule := daily(time.Time{})
 	schedule.At = "three"
 
@@ -229,7 +210,7 @@ func TestSlotsOfAnUnreadableTimeOfDayAreAnError(t *testing.T) {
 // The slot is a wall-clock time. The night the clocks go forward is 23 hours long,
 // and "03:00 tomorrow" is still 03:00 on the wall, not 04:00.
 func TestTheNextSlotKeepsTheWallClockAcrossDST(t *testing.T) {
-	paris := inParis(t)
+	paris := parisZone
 	now := time.Date(2026, 3, 28, 7, 0, 0, 0, paris) // the day before spring-forward
 
 	last, next, err := ScheduleSlots(daily(time.Time{}), now)
@@ -249,7 +230,7 @@ func TestTheNextSlotKeepsTheWallClockAcrossDST(t *testing.T) {
 // has to stay on that calendar day, and the days around it must not inherit the
 // shifted hour.
 func TestASlotInTheHourThatDoesNotExistStaysOnItsDay(t *testing.T) {
-	paris := inParis(t)
+	paris := parisZone
 	schedule := daily(time.Time{})
 	schedule.At = "02:30"
 
