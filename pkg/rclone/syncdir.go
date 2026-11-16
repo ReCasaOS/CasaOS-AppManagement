@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/backupprogress"
 )
 
 // Folder sync: the calls one pass of a scheduled sync is made of.
@@ -110,16 +112,36 @@ func (c *Client) runJob(ctx context.Context, endpoint string, params map[string]
 		return err
 	}
 
-	return c.waitForJob(ctx, id)
+	err = c.waitForJob(ctx, id)
+	// the job's last figures: a short job ends between two polls, and its figures are what the
+	// pass says it moved. Only the syncs ask; the backups say what they said before.
+	if backupprogress.Wanted(ctx) && ctx.Err() == nil {
+		if stats, statsErr := c.jobStats(ctx, id); statsErr == nil {
+			backupprogress.Report(ctx, stats)
+		}
+	}
+
+	return err
 }
 
-// CountFiles is how many files lie under fs.
+// CountFiles is how many files lie under fs. A job, not a call: the listing is recursive, and
+// a large cloud tree takes longer than the client waits for an answer.
 func (c *Client) CountFiles(ctx context.Context, fs string) (int64, error) {
+	id, err := c.startJob("/operations/size", map[string]string{"fs": fs})
+	if err != nil {
+		return 0, err
+	}
+	// a count is not the pass's progress: its figures are kept out of what the pass reports
+	output, err := c.waitForJobOutput(backupprogress.With(ctx, func(backupprogress.Stats) {}), id)
+	if err != nil {
+		return 0, err
+	}
+
 	var size struct {
 		Count int64 `json:"count"`
 	}
-	if err := c.callContext(ctx, "/operations/size", map[string]string{"fs": fs}, &size); err != nil {
-		return 0, err
+	if err := json.Unmarshal(output, &size); err != nil {
+		return 0, fmt.Errorf("rclone counted the files without saying how many: %w", err)
 	}
 
 	return size.Count, nil

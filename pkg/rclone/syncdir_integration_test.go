@@ -9,9 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/backupprogress"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -82,6 +84,62 @@ func TestSyncWithRealRclone(t *testing.T) {
 	}
 	// bisync compares modtime and size: a later edit must land on a later second
 	later := func() { time.Sleep(1100 * time.Millisecond) }
+
+	t.Run("a count is a job, and a missing folder is not found", func(t *testing.T) {
+		src := folder("src")
+		for _, name := range []string{"a", "b", "c"} {
+			write(src, name, "x")
+		}
+		if count, err := client.CountFiles(ctx, src); err != nil || count != 3 {
+			t.Fatalf("count %d, %v", count, err)
+		}
+		if _, err := client.CountFiles(ctx, filepath.Join(src, "missing")); err == nil || !strings.Contains(err.Error(), "directory not found") {
+			t.Fatalf("a missing folder must say directory not found: %v", err)
+		}
+	})
+
+	// what core/stats answers for a job's group once the job has ended, per endpoint
+	t.Run("a job's figures are read after it ended", func(t *testing.T) {
+		var last backupprogress.Stats
+		reported := backupprogress.With(ctx, func(stats backupprogress.Stats) { last = stats })
+		check := func(what string, run func() error) {
+			t.Helper()
+			last = backupprogress.Stats{}
+			if err := run(); err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+			t.Logf("%s: files %d, bytes %d", what, last.Files, last.Bytes)
+			if last.Files == 0 || last.Bytes == 0 {
+				t.Errorf("%s: no figures after the job ended: %+v", what, last)
+			}
+		}
+		src := folder("src")
+		write(src, "a", "content of a")
+		write(src, "b", "content of b")
+		check("sync/copy", func() error { return client.SyncDirectory(reported, src, folder("dst"), SyncOptions{MaxDelete: -1}) })
+		check("sync/sync", func() error {
+			return client.SyncDirectory(reported, src, folder("dst"), SyncOptions{Mirror: true, MaxDelete: -1})
+		})
+		p2, workdir := folder("p2"), folder("work")
+		last = backupprogress.Stats{}
+		if err := client.BisyncDirectory(reported, src, p2, BisyncOptions{Workdir: workdir, Resync: true}); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("sync/bisync resync: files %d, bytes %d", last.Files, last.Bytes)
+		if last.Files == 0 || last.Bytes == 0 {
+			t.Errorf("sync/bisync resync: no figures after the job ended: %+v", last)
+		}
+		later()
+		write(src, "c", "content of c")
+		last = backupprogress.Stats{}
+		if err := client.BisyncDirectory(reported, src, p2, BisyncOptions{Workdir: workdir}); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("sync/bisync: files %d, bytes %d", last.Files, last.Bytes)
+		if last.Files == 0 || last.Bytes == 0 {
+			t.Errorf("sync/bisync: no figures after the job ended: %+v", last)
+		}
+	})
 
 	t.Run("copy keeps the overwritten version", func(t *testing.T) {
 		src, dst, archive := folder("src"), folder("dst"), folder("archive")

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/backupprogress"
 )
 
 // job answers a started job as finished, with the given error text ("" = success).
@@ -133,5 +135,56 @@ func TestAnEncryptedDestinationIsTold(t *testing.T) {
 	}
 	if (*seen)[1].PostForm.Get("name") != "casaos-backup-x-raw" {
 		t.Fatalf("the backend sits under the raw name: %v", (*seen)[1].PostForm)
+	}
+}
+
+// A count is a recursive listing: a large cloud tree takes longer than the client waits for an
+// answer, so it runs as a job and its figure is read from the job's output.
+func TestTheFileCountIsAJob(t *testing.T) {
+	fastPolling(t)
+	client, seen := serverFor(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/job/status" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 4, "finished": true, "success": true, "output": map[string]any{"count": 5, "bytes": 99}})
+
+			return
+		}
+		_, _ = w.Write([]byte(`{"jobid":4}`))
+	})
+
+	count, err := client.CountFiles(t.Context(), "/a")
+	if err != nil || count != 5 {
+		t.Fatalf("count %d, %v", count, err)
+	}
+	first := (*seen)[0]
+	if first.URL.Path != "/operations/size" || first.PostForm.Get("_async") != "true" || first.PostForm.Get("fs") != "/a" {
+		t.Fatalf("not a job: %s %v", first.URL.Path, first.PostForm)
+	}
+}
+
+// A sync job's figures are read once more after it ended: a short job ends between two polls.
+// A count reports nothing, it is not what the pass moved.
+func TestASyncJobReportsItsLastFigures(t *testing.T) {
+	fastPolling(t)
+	client, _ := serverFor(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/job/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "finished": true, "success": true, "output": map[string]any{"count": 2}})
+		case "/core/stats":
+			_ = json.NewEncoder(w).Encode(map[string]any{"bytes": 42, "transfers": 3})
+		default:
+			_, _ = w.Write([]byte(`{"jobid":1}`))
+		}
+	})
+
+	var got []backupprogress.Stats
+	ctx := backupprogress.With(t.Context(), func(stats backupprogress.Stats) { got = append(got, stats) })
+	if err := client.SyncDirectory(ctx, "/a", "/b", SyncOptions{MaxDelete: -1}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Files != 3 || got[0].Bytes != 42 {
+		t.Fatalf("the last figures of the job: %+v", got)
+	}
+	if _, err := client.CountFiles(ctx, "/a"); err != nil || len(got) != 1 {
+		t.Fatalf("a count reported %+v, %v", got, err)
 	}
 }
