@@ -361,6 +361,10 @@ func (a *AppManagement) SetLogsSettings(ctx echo.Context) error {
 
 func logsSettings(ctx echo.Context) error {
 	s := service.GetLogsSettings()
+	// where the logs are kept on the box is the owner's alone
+	if !isOwner(ctx) {
+		s.Path = ""
+	}
 	return ctx.JSON(http.StatusOK, echo.Map{"data": codegen.LogsSettings{
 		RetentionDays: s.RetentionDays, MaxSizeMb: s.MaxSizeMB, IncludeOthers: s.IncludeOthers,
 		UsedMb: s.UsedMB, OldestAt: s.OldestAt, Path: s.Path,
