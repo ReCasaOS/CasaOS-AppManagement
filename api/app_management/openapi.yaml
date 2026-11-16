@@ -3957,10 +3957,11 @@ components:
           example: [Photos, Documents]
 
     SyncTask:
-      description: One folder kept in step with one folder of a destination. The last nine fields are written by the box only.
+      description: One folder kept in step with one folder of a destination. The id and the last eight fields are written by the box only (readOnly), so a new task is sent without them and a task read is sent back whole.
       required: [id, name, destination, remote_path, local_path, direction, mirror, archive, archive_days, every, at, weekday, enabled, last_run, last_result, last_error, last_files, last_bytes, first_pass_done, needs_first_pass, needs_delete_confirm]
       properties:
         id:
+          readOnly: true
           type: string
         name:
           type: string
@@ -3991,24 +3992,32 @@ components:
         enabled:
           type: boolean
         last_run:
+          readOnly: true
           type: string
           format: date-time
         last_result:
+          readOnly: true
           type: string
           description: "`ok`, `recovered`, `failed`, `stopped`, or empty."
         last_error:
+          readOnly: true
           type: string
         last_files:
+          readOnly: true
           type: integer
           format: int64
         last_bytes:
+          readOnly: true
           type: integer
           format: int64
         first_pass_done:
+          readOnly: true
           type: boolean
         needs_first_pass:
+          readOnly: true
           type: boolean
         needs_delete_confirm:
+          readOnly: true
           type: boolean
 
     LiveBackupStats:
