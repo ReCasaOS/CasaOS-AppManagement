@@ -108,7 +108,24 @@ var (
 	}
 )
 
-func (t SyncTask) workdir() string { return filepath.Join(BisyncStateDir, t.ID) }
+// validSyncID is the shape of the ids the box issues; anything else could name a folder it should not.
+func validSyncID(id string) bool {
+	if len(id) != 17 || id[0] != 's' {
+		return false
+	}
+	_, err := hex.DecodeString(id[1:])
+
+	return err == nil && strings.ToLower(id) == id
+}
+
+// workdir is "" for an id the box did not issue: callers skip it.
+func (t SyncTask) workdir() string {
+	if !validSyncID(t.ID) {
+		return ""
+	}
+
+	return filepath.Join(BisyncStateDir, t.ID)
+}
 
 // localArchive is where a pass puts what it overwrites or deletes on the box: beside the synced
 // folder, never in it (rclone refuses a backup dir that overlaps the destination, and anything
@@ -209,8 +226,13 @@ func SaveSyncTasks(wanted []SyncTask) ([]SyncTask, error) {
 	for i, task := range wanted {
 		before, known := SyncTask{}, false
 		for _, s := range stored {
-			if task.ID != "" && s.ID == task.ID {
+			if validSyncID(task.ID) && s.ID == task.ID {
 				before, known = s, true
+			}
+		}
+		if known {
+			if slices.ContainsFunc(tasks[:i], func(t SyncTask) bool { return t.ID == task.ID }) {
+				return nil, SyncRefusal("two tasks carry the same id")
 			}
 		}
 
@@ -275,7 +297,9 @@ func SaveSyncTasks(wanted []SyncTask) ([]SyncTask, error) {
 		}
 	}
 	for _, dir := range restart {
-		_ = os.RemoveAll(dir)
+		if dir != "" {
+			_ = os.RemoveAll(dir)
+		}
 	}
 
 	return tasks, nil
@@ -348,9 +372,14 @@ func checkSyncTask(task SyncTask, others []SyncTask) error {
 	if remote == "" && task.Direction != SyncDownload {
 		return SyncRefusal("an upload needs a folder in the destination: the root is not the place for it")
 	}
-	first, _, _ := strings.Cut(remote, "/")
-	if remote != "" && (first == restic.RepositoryFolder || first == SystemBackupName || slices.Contains(syncAppNames(), first)) {
-		return SyncRefusal(fmt.Sprintf("%q belongs to the backups: pick another folder", first))
+	if remote != "" {
+		// the folder, and the archive that sits beside it
+		for _, folder := range []string{remote, remote + "-archive"} {
+			first, _, _ := strings.Cut(folder, "/")
+			if first == restic.RepositoryFolder || first == SystemBackupName || slices.Contains(syncAppNames(), first) {
+				return SyncRefusal(fmt.Sprintf("%q belongs to the backups: pick another folder", first))
+			}
+		}
 	}
 
 	local, err := checkSyncLocal(task.LocalPath)
@@ -363,6 +392,9 @@ func checkSyncTask(task SyncTask, others []SyncTask) error {
 			otherRemote, _ := cleanRemotePath(other.RemotePath)
 			if within(remote, otherRemote) || within(otherRemote, remote) {
 				return SyncRefusal(fmt.Sprintf("the folder in the destination overlaps the one of %q", other.Name))
+			}
+			if (otherRemote != "" && within(remote, otherRemote+"-archive")) || (remote != "" && within(otherRemote, remote+"-archive")) {
+				return SyncRefusal(fmt.Sprintf("the folder in the destination is where the archive of %q is kept", other.Name))
 			}
 		}
 		if otherLocal, err := resolveSyncPath(other.LocalPath); err == nil && (within(local, otherLocal) || within(otherLocal, local)) {

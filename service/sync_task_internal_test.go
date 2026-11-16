@@ -1,6 +1,7 @@
 package service
 
 import (
+	stdjson "encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -104,6 +105,15 @@ func TestTwoTasksNeverShareAFolder(t *testing.T) {
 	archive.LocalPath = filepath.Join(data, "Gallery", ".Photos-archive")
 	refused(t, checkSyncTask(archive, []SyncTask{other}), "another's archive")
 
+	remoteArchive := goodTask(data)
+	remoteArchive.Name = "remote archive"
+	remoteArchive.LocalPath = filepath.Join(data, "Gallery", "Videos")
+	remoteArchive.RemotePath = "Photos-archive"
+	refused(t, checkSyncTask(remoteArchive, []SyncTask{other}), "remote is another's archive")
+	remoteArchive.RemotePath = "Photos-archive/2026"
+	refused(t, checkSyncTask(remoteArchive, []SyncTask{other}), "remote inside another's archive")
+	refused(t, checkSyncTask(other, []SyncTask{remoteArchive}), "archive over another's remote")
+
 	same := goodTask(data)
 	same.Name = "other"
 	same.LocalPath = filepath.Join(data, "Gallery", "Videos")
@@ -117,6 +127,15 @@ func TestTheRemoteFolderIsCleanedAndKeptAwayFromBackups(t *testing.T) {
 	saved, err := SaveSyncTasks([]SyncTask{func() SyncTask { x := goodTask(data); x.RemotePath = "/Photos/"; return x }()})
 	if err != nil || saved[0].RemotePath != "Photos" {
 		t.Fatalf("remote path: %q, %v", saved[0].RemotePath, err)
+	}
+
+	syncAppNames = func() []string { return []string{"immich", "x-archive"} }
+	archived := goodTask(data)
+	archived.RemotePath = "x" // its archive "x-archive" is an app's backups
+	refused(t, checkSyncTask(archived, nil), "archive in an app's backups")
+	archived.RemotePath = "casaos-restic-archive"
+	if err := checkSyncTask(archived, nil); err != nil {
+		t.Fatalf("a name that only starts like the repository: %v", err)
 	}
 
 	for _, remote := range []string{"..", "a/../../b", "", "casaos-restic/x", "casaos-system", "immich/x", "immich"} {
@@ -306,4 +325,57 @@ func TestArchivesSitBesideTheFolderNeverInside(t *testing.T) {
 	if got := (SyncTask{LocalPath: "/DATA/x"}).remoteArchive(stamp); got != "" {
 		t.Fatalf("no remote folder, no remote archive: %q", got)
 	}
+}
+
+func TestAnIdTheBoxDidNotIssueNeverNamesAFolder(t *testing.T) {
+	data := syncBox(t)
+
+	if err := os.MkdirAll(BisyncStateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(filepath.Dir(BisyncStateDir), "x")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stored := []SyncTask{goodTask(data), goodTask(data)}
+	stored[0].ID, stored[1].ID, stored[1].Name = "", "../x", "two"
+	stored[1].LocalPath = filepath.Join(data, "Other")
+	stored[1].RemotePath = "Other"
+	encoded, _ := stdjson.Marshal(stored)
+	if err := os.WriteFile(SyncTasksPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if stored[0].workdir() != "" || stored[1].workdir() != "" {
+		t.Fatal("an id of another shape has no work folder")
+	}
+	if _, err := SaveSyncTasks(nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{BisyncStateDir, outside} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("%s must survive: %v", dir, err)
+		}
+	}
+
+	// an id of another shape in a PUT is replaced
+	odd := goodTask(data)
+	odd.ID = "../x"
+	saved, err := SaveSyncTasks([]SyncTask{odd})
+	if err != nil || !validSyncID(saved[0].ID) {
+		t.Fatalf("id: %+v, %v", saved, err)
+	}
+}
+
+func TestTwoTasksOfOnePutNeverShareAnId(t *testing.T) {
+	data := syncBox(t)
+
+	saved, err := SaveSyncTasks([]SyncTask{goodTask(data)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	twin := saved[0]
+	twin.Name, twin.RemotePath, twin.LocalPath = "twin", "Twin", filepath.Join(data, "Twin")
+	_, err = SaveSyncTasks([]SyncTask{saved[0], twin})
+	refused(t, err, "same id twice")
 }
