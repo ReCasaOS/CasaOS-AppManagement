@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -21,10 +22,13 @@ func syncBox(t *testing.T) (data string) {
 	}
 
 	oldPath, oldState, oldRoots, oldApp := SyncTasksPath, BisyncStateDir, syncLocalRoots, syncAppData
-	oldKind, oldDests, oldNames, oldMount := syncDestinationKind, syncDestinations, syncAppNames, isMountRoot
+	oldKind, oldDests, oldNames, oldMount, oldStamps := syncDestinationKind, syncDestinations, syncAppNames, isMountRoot, syncStampFolders
 	t.Cleanup(func() {
 		SyncTasksPath, BisyncStateDir, syncLocalRoots, syncAppData = oldPath, oldState, oldRoots, oldApp
-		syncDestinationKind, syncDestinations, syncAppNames, isMountRoot = oldKind, oldDests, oldNames, oldMount
+		syncDestinationKind, syncDestinations, syncAppNames, isMountRoot, syncStampFolders = oldKind, oldDests, oldNames, oldMount, oldStamps
+		syncUnrecorded.Lock()
+		clear(syncUnrecorded.ids)
+		syncUnrecorded.Unlock()
 	})
 
 	SyncTasksPath = filepath.Join(root, "state", "sync.json")
@@ -35,6 +39,7 @@ func syncBox(t *testing.T) (data string) {
 	syncDestinationKind = func(name string) (string, bool, error) { return "drive", name == "vault", nil }
 	syncAppNames = func() []string { return []string{"immich"} }
 	isMountRoot = func(string) bool { return false }
+	syncStampFolders = func(string, string) ([]string, error) { return nil, errors.New("directory not found") }
 
 	return data
 }
@@ -401,5 +406,162 @@ func TestAMissedSlotIsCaughtUpOnce(t *testing.T) {
 	task.LastRun = now
 	if due, _ := syncDue(task, now); due {
 		t.Error("a slot already run is not due again")
+	}
+}
+
+// A task moved to other folders, to another destination or turned around is another task: what
+// it waited for was about the old ones. Confirming deletes on folders that never tripped the cap
+// would run them uncapped.
+func TestEditingAParkedTaskClearsItsFlags(t *testing.T) {
+	data := syncBox(t)
+
+	for what, edit := range map[string]func(*SyncTask){
+		"remote path": func(task *SyncTask) { task.RemotePath = "Pictures" },
+		"local path":  func(task *SyncTask) { task.LocalPath = filepath.Join(data, "Gallery", "Pictures") },
+		"destination": func(task *SyncTask) { task.Destination = "vault" },
+		"direction":   func(task *SyncTask) { task.Direction = SyncDownload },
+	} {
+		saved, err := SaveSyncTasks([]SyncTask{func() SyncTask { x := goodTask(data); x.Mirror = true; return x }()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := updateSyncTask(saved[0].ID, func(task *SyncTask) { task.NeedsDeleteConfirm, task.NeedsFirstPass = true, true }); err != nil {
+			t.Fatal(err)
+		}
+
+		edited := saved[0]
+		edit(&edited)
+		saved, err = SaveSyncTasks([]SyncTask{edited})
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if saved[0].NeedsDeleteConfirm || saved[0].NeedsFirstPass {
+			t.Fatalf("%s: the flags of the old folders were kept: %+v", what, saved[0])
+		}
+	}
+
+	// a two-way task turned one-way and back starts over, its bisync state gone
+	both := goodTask(data)
+	both.Direction = SyncBoth
+	saved, err := SaveSyncTasks([]SyncTask{both})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := updateSyncTask(saved[0].ID, func(task *SyncTask) { task.FirstPassDone, task.NeedsFirstPass = true, true }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(saved[0].workdir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	upload := saved[0]
+	upload.Direction = SyncUpload
+	if saved, err = SaveSyncTasks([]SyncTask{upload}); err != nil {
+		t.Fatal(err)
+	}
+	if saved[0].FirstPassDone || saved[0].NeedsFirstPass {
+		t.Fatalf("turned one-way: %+v", saved[0])
+	}
+	if _, err := os.Stat(saved[0].workdir()); !os.IsNotExist(err) {
+		t.Fatalf("the bisync state must be gone: %v", err)
+	}
+
+	// a name changed is the same task
+	if err := updateSyncTask(saved[0].ID, func(task *SyncTask) { task.NeedsDeleteConfirm = true }); err != nil {
+		t.Fatal(err)
+	}
+	renamed := saved[0]
+	renamed.Name = "renamed"
+	if saved, err = SaveSyncTasks([]SyncTask{renamed}); err != nil || !saved[0].NeedsDeleteConfirm {
+		t.Fatalf("a rename keeps the banner: %+v, %v", saved, err)
+	}
+}
+
+// The dialog sends the whole list on any edit: a download whose disk is unplugged must not have
+// its folder made again on the system disk, where the next pass would copy the whole cloud.
+func TestSavingDoesNotRecreateAnUnchangedDownloadFolder(t *testing.T) {
+	data := syncBox(t)
+
+	task := goodTask(data)
+	task.Direction = SyncDownload
+	saved, err := SaveSyncTasks([]SyncTask{task})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(task.LocalPath); err != nil {
+		t.Fatalf("a new download's folder is made: %v", err)
+	}
+
+	if err := os.RemoveAll(task.LocalPath); err != nil { // the disk is unplugged
+		t.Fatal(err)
+	}
+	toggled := saved[0]
+	toggled.Enabled = false
+	if saved, err = SaveSyncTasks([]SyncTask{toggled}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(task.LocalPath); !os.IsNotExist(err) {
+		t.Fatalf("an unchanged download's folder was made again: %v", err)
+	}
+
+	moved := saved[0]
+	moved.LocalPath = filepath.Join(data, "Gallery", "Elsewhere")
+	if _, err := SaveSyncTasks([]SyncTask{moved}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(moved.LocalPath); err != nil {
+		t.Fatalf("a download moved to another folder has it made: %v", err)
+	}
+}
+
+// Dropbox and OneDrive do not tell "Immich" from "immich": a typed case is no way around the
+// backups.
+func TestBackupFoldersAreRefusedWhateverTheirCase(t *testing.T) {
+	data := syncBox(t)
+
+	for _, remote := range []string{"Immich", "IMMICH/x", "CasaOS-System", "CASAOS-RESTIC/x", "Casaos-Restic"} {
+		task := goodTask(data)
+		task.RemotePath = remote
+		refused(t, checkSyncTask(task, nil), remote)
+	}
+}
+
+// Backups this box does not know of -- an uninstalled app's, another box's on the same
+// destination -- are found by their runs' folders, named by their stamp.
+func TestAFolderHoldingStampsIsABackupFolder(t *testing.T) {
+	data := syncBox(t)
+	var asked []string
+	syncStampFolders = func(destination, folder string) ([]string, error) {
+		asked = append(asked, destination+":"+folder)
+		switch folder {
+		case "nextcloud":
+			return []string{"2026-01-01T03-00-00Z", "2026-01-02T03-00-00Z"}, nil
+		case "Photos-archive":
+			return []string{"2026-01-01T03-00-00Z"}, nil
+		case "Holidays":
+			return []string{"2024", "Summer"}, nil
+		case "offline":
+			return nil, errors.New("rclone: couldn't connect")
+		}
+
+		return nil, errors.New("error in ListJSON: directory not found")
+	}
+
+	for _, remote := range []string{"nextcloud", "nextcloud/photos", "offline"} {
+		task := goodTask(data)
+		task.RemotePath = remote
+		refused(t, checkSyncTask(task, nil), remote)
+	}
+
+	asked = nil
+	for _, remote := range []string{"Holidays/2024", "Photos", "New"} {
+		task := goodTask(data)
+		task.RemotePath = remote
+		if err := checkSyncTask(task, nil); err != nil {
+			t.Fatalf("%s: %v", remote, err)
+		}
+	}
+	// the remote's own first folder only: its archive holds stamps by design
+	if want := []string{"drive:Holidays", "drive:Photos", "drive:New"}; !slices.Equal(asked, want) {
+		t.Fatalf("asked %v, want %v", asked, want)
 	}
 }

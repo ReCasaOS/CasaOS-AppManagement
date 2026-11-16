@@ -291,3 +291,42 @@ func TestRunNowRefusesWhatItShould(t *testing.T) {
 		}
 	})
 }
+
+// A run now or a tick that read the task just before a capped pass parked it must not run on
+// the copy it read: the task is read again under the claim.
+func TestARunNowReadsTheTaskUnderItsClaim(t *testing.T) {
+	park := func(t *testing.T, flag *upgradeFlag) {
+		flag.onAsk = func() {
+			if err := updateSyncTask("s1", func(task *SyncTask) { task.NeedsDeleteConfirm = true }); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+
+	t.Run("run now", func(t *testing.T) {
+		passes, flag := syncTickIn(t, false, dueTask("s1", "photos"))
+		park(t, flag)
+
+		if err := StartSync("s1", syncNormal, nil); !errors.Is(err, ErrSyncWrongState) {
+			t.Fatalf("got %v", err)
+		}
+		syncPasses.Wait()
+		if len(passes.names()) != 0 || len(RunningOperations()) != 0 {
+			t.Fatalf("nothing ran, nothing is left listed: %v %v", passes.names(), RunningOperations())
+		}
+	})
+
+	t.Run("tick", func(t *testing.T) {
+		passes, flag := syncTickIn(t, false, dueTask("s1", "photos"), dueTask("s2", "videos"))
+		park(t, flag)
+
+		RunDueSyncs(context.Background(), at(10, 7, 0), nil)
+
+		if ran := passes.names(); !slices.Equal(ran, []string{"videos"}) {
+			t.Fatalf("the parked task ran, or the next did not: %v", ran)
+		}
+		if len(RunningOperations()) != 0 {
+			t.Fatalf("nothing is left listed: %v", RunningOperations())
+		}
+	})
+}

@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/rclone"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/restic"
 )
 
 // One pass of a sync task: everything that stops it before a file moves, the pass itself, what
@@ -56,13 +58,17 @@ func runSync(ctx context.Context, task SyncTask, mode syncMode, engine syncEngin
 	stamp := now.UTC().Format(syncStampLayout)
 
 	task, err := syncGuards(task, mode, engine)
+	if errors.Is(err, ErrSyncWrongState) {
+		// parked since it was read: the banner's result and error stay as they are
+		logger.Info("sync pass skipped: the task waits for its owner's answer", zap.String("task", task.Name))
+		return
+	}
 	if err != nil {
 		writeSyncResult(task, now, err, false, 0, 0)
 		return
 	}
 
-	running, endLive := beginLive(ctx, task.Name, task.Destination, stamp)
-	liveKind(running, "sync")
+	running, endLive := beginLiveKind(ctx, "sync", task.Name, task.Destination, stamp)
 
 	firstPassDone := false
 	if task.Direction == SyncBoth {
@@ -96,7 +102,16 @@ func syncGuards(task SyncTask, mode syncMode, engine syncEngine) (SyncTask, erro
 	if err != nil {
 		return task, err
 	}
-	others := slices.DeleteFunc(tasks, func(other SyncTask) bool { return other.ID == task.ID })
+	// the task as it is stored now: a pass before this one may have parked it since it was read
+	i := slices.IndexFunc(tasks, func(stored SyncTask) bool { return stored.ID == task.ID })
+	if i < 0 {
+		return task, errors.New("this sync task is gone")
+	}
+	task = tasks[i]
+	if (task.NeedsDeleteConfirm && mode != syncConfirmDeletes) || (task.NeedsFirstPass && mode != syncFirstPass) {
+		return task, ErrSyncWrongState
+	}
+	others := slices.Delete(tasks, i, i+1)
 	if err := checkSyncTask(task, others); err != nil {
 		return task, err
 	}
@@ -105,6 +120,10 @@ func syncGuards(task SyncTask, mode syncMode, engine syncEngine) (SyncTask, erro
 		return task, err
 	}
 	task.LocalPath = real
+	// as checkSyncTask saw it: a hand-edited "/Photos/" would put the archive inside the folder
+	if task.RemotePath, err = cleanRemotePath(task.RemotePath); err != nil {
+		return task, err
+	}
 
 	if info, err := os.Stat(task.LocalPath); err != nil || !info.IsDir() {
 		return task, errors.New("the folder on this box is missing")
@@ -114,7 +133,32 @@ func syncGuards(task SyncTask, mode syncMode, engine syncEngine) (SyncTask, erro
 		return task, errors.New("this task's id was not issued by the box, so it has nowhere to keep its state: save it again")
 	}
 
+	if task.Direction != SyncDownload {
+		if err := checkNoBoxBackups(task, engine); err != nil {
+			return task, err
+		}
+	}
+
 	return task, checkSyncSides(task, mode, engine)
+}
+
+// checkNoBoxBackups refuses to write into a cloud folder that holds this box's backups: a
+// second destination without a root on the same account reaches where the first keeps them.
+func checkNoBoxBackups(task SyncTask, engine syncEngine) error {
+	names, err := engine.Folders(rclone.Destination(task.Destination, ""), task.RemotePath)
+	if isNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("the destination %q cannot be read: %w", task.Destination, err)
+	}
+	if slices.ContainsFunc(names, func(name string) bool {
+		return strings.EqualFold(name, SystemBackupName) || strings.EqualFold(name, restic.RepositoryFolder)
+	}) {
+		return errors.New("this cloud folder holds this box's backups")
+	}
+
+	return nil
 }
 
 // checkSyncSides refuses a pass that would carry an empty side over a full one.
@@ -256,6 +300,7 @@ func twoWayPass(ctx context.Context, task SyncTask, mode syncMode, stamp string,
 	if err := engine.BisyncDirectory(ctx, task.LocalPath, path2, resync); err != nil {
 		return false, err
 	}
+	liveNextJob(ctx) // the pass's figures are both jobs'
 	if err := engine.BisyncDirectory(ctx, task.LocalPath, path2, o); err != nil {
 		return false, err
 	}
@@ -296,9 +341,35 @@ func writeSyncResult(task SyncTask, now time.Time, err error, firstPassDone bool
 			}
 		}
 	})
+	syncUnrecorded.Lock()
+	defer syncUnrecorded.Unlock()
 	if updateErr != nil {
-		logger.Error("the result of a sync pass could not be written", zap.Error(updateErr), zap.String("task", task.Name))
+		logger.Error("the result of a sync pass could not be written, so the task is held until the service restarts", zap.Error(updateErr), zap.String("task", task.Name))
+		syncUnrecorded.ids[task.ID] = struct{}{}
+	} else {
+		delete(syncUnrecorded.ids, task.ID)
 	}
+}
+
+// syncUnrecorded is the tasks whose last result could not be written. Without its LastRun and
+// its NeedsDeleteConfirm such a task would be due again the next minute, and a capped mirror
+// would delete another half of what is left at each pass, so it is held as parked; only a
+// later result written for it lets it go, which in practice means a restart of the service.
+// shortcut: in memory only, so a restart lets the task run once more on what the file says (a
+// result lost again parks it again); upgrade to a marker beside sync.json if a disk that stays
+// full across restarts is ever seen.
+var syncUnrecorded = struct {
+	sync.Mutex
+	ids map[string]struct{}
+}{ids: map[string]struct{}{}}
+
+// syncResultUnrecorded says whether a task is held because its last result was not written.
+func syncResultUnrecorded(id string) bool {
+	syncUnrecorded.Lock()
+	defer syncUnrecorded.Unlock()
+	_, held := syncUnrecorded.ids[id]
+
+	return held
 }
 
 // syncStateLost says bisync has no listing left to start from. A .lst-old without its .lst is a

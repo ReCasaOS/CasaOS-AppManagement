@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/backupprogress"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/rclone"
 )
 
@@ -26,17 +27,19 @@ type bisyncCall struct {
 
 // fakeSyncEngine records what a pass asked of rclone and answers from its maps.
 type fakeSyncEngine struct {
-	calls     []string
-	syncs     []syncCall
-	bisyncs   []bisyncCall
-	empty     map[string]bool  // fs -> empty; absent means not empty
-	emptyErr  map[string]error // fs -> error of IsEmpty
-	counts    map[string]int64 // fs -> files
-	folders   map[string][]string
-	purged    []string
-	syncErr   error
-	bisyncErr []error // by call; past the end, nil
-	during    func()  // runs inside a sync or bisync call
+	calls      []string
+	syncs      []syncCall
+	bisyncs    []bisyncCall
+	empty      map[string]bool  // fs -> empty; absent means not empty
+	emptyErr   map[string]error // fs -> error of IsEmpty
+	counts     map[string]int64 // fs -> files
+	folders    map[string][]string
+	foldersErr error
+	purged     []string
+	syncErr    error
+	bisyncErr  []error                // by call; past the end, nil
+	reports    []backupprogress.Stats // by bisync call, what the job says it moved; past the end, nothing
+	during     func()                 // runs inside a sync or bisync call
 }
 
 func (f *fakeSyncEngine) SyncDirectory(ctx context.Context, srcFs, dstFs string, o rclone.SyncOptions) error {
@@ -57,6 +60,9 @@ func (f *fakeSyncEngine) BisyncDirectory(ctx context.Context, path1, path2 strin
 	f.bisyncs = append(f.bisyncs, bisyncCall{path1, path2, o})
 	if f.during != nil {
 		f.during()
+	}
+	if i := len(f.bisyncs) - 1; i < len(f.reports) {
+		backupprogress.Report(ctx, f.reports[i])
 	}
 	if i := len(f.bisyncs) - 1; i < len(f.bisyncErr) && f.bisyncErr[i] != nil {
 		return f.bisyncErr[i]
@@ -81,6 +87,9 @@ func (f *fakeSyncEngine) IsEmpty(fs string) (bool, error) {
 
 func (f *fakeSyncEngine) Folders(fs, remote string) ([]string, error) {
 	f.calls = append(f.calls, "folders "+fs+" "+remote)
+	if f.foldersErr != nil {
+		return nil, f.foldersErr
+	}
 	names, ok := f.folders[fs+remote]
 	if !ok {
 		return nil, errors.New("error in ListJSON: directory not found")
@@ -664,5 +673,177 @@ func TestEachSidePurgesOnlyTheArchivesItWrote(t *testing.T) {
 				t.Fatalf("upload: box %v, cloud %v", statErr, engine.purged)
 			}
 		}
+	}
+}
+
+// A result that cannot be written leaves no LastRun and no NeedsDeleteConfirm: without being
+// held, a capped mirror would be due the next minute and delete another half.
+func TestAResultThatCannotBeWrittenParksTheTask(t *testing.T) {
+	task, engine := syncRunBox(t, SyncUpload)
+	task.Mirror = true
+	storeSyncTask(t, task)
+	upgradeFlagIn(t)
+	engine.syncErr = fmt.Errorf("%w: rclone: failed to delete 12 files", rclone.ErrTooManyDeletes)
+	// the file can be read, not replaced: what a full disk does
+	if err := os.MkdirAll(SyncTasksPath+".tmp", 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	runSync(context.Background(), task, syncNormal, engine)
+
+	if stored := storedSyncTask(t, task.ID); stored.NeedsDeleteConfirm || !stored.LastRun.IsZero() {
+		t.Fatalf("the write was meant to fail: %+v", stored)
+	}
+	if syncTaskDue(task, syncRunNow.Add(time.Hour)) {
+		t.Fatal("a task whose result was lost is never due")
+	}
+	for _, mode := range []syncMode{syncNormal, syncConfirmDeletes} {
+		if err := StartSync(task.ID, mode, engine); !errors.Is(err, ErrSyncWrongState) {
+			t.Fatalf("mode %d: run now must be refused, got %v", mode, err)
+		}
+	}
+
+	// a result written later lets it go
+	if err := os.Remove(SyncTasksPath + ".tmp"); err != nil {
+		t.Fatal(err)
+	}
+	writeSyncResult(task, syncRunNow, nil, false, 0, 0)
+	if !syncModeFits(storedSyncTask(t, task.ID), syncNormal) {
+		t.Fatal("a result written clears the hold")
+	}
+}
+
+// The pass reads its task again: one parked by the pass before it is refused whatever copy the
+// caller held, and what the banner says is left as it was.
+func TestAPassRefusesAFlagItsModeDoesNotAnswer(t *testing.T) {
+	for _, c := range []struct {
+		flag string
+		mode syncMode
+	}{{"delete", syncNormal}, {"delete", syncFirstPass}, {"first", syncNormal}, {"first", syncConfirmDeletes}} {
+		task, engine := syncRunBox(t, SyncUpload)
+		task.Mirror = true
+		stale := task
+		task.LastResult, task.LastError = "failed", "too many files would be deleted"
+		if c.flag == "delete" {
+			task.NeedsDeleteConfirm = true
+		} else {
+			task.NeedsFirstPass = true
+		}
+		storeSyncTask(t, task)
+
+		runSync(context.Background(), stale, c.mode, engine)
+
+		if len(engine.calls) != 0 {
+			t.Fatalf("%s in mode %d: rclone was asked %v", c.flag, c.mode, engine.calls)
+		}
+		if stored := storedSyncTask(t, task.ID); stored.LastError != task.LastError || !stored.LastRun.IsZero() {
+			t.Fatalf("%s in mode %d: the banner's result was overwritten: %+v", c.flag, c.mode, stored)
+		}
+	}
+
+	// the flag the mode answers still runs
+	task, engine := syncRunBox(t, SyncUpload)
+	task.Mirror, task.NeedsDeleteConfirm = true, true
+	storeSyncTask(t, task)
+	runSync(context.Background(), task, syncConfirmDeletes, engine)
+	if len(engine.syncs) != 1 || engine.syncs[0].o.MaxDelete != -1 {
+		t.Fatalf("a confirmed pass runs uncapped: %+v", engine.syncs)
+	}
+}
+
+// A destination without a root on the account where another keeps its backups reaches them:
+// a pass that would write into a folder holding them is refused before anything moves.
+func TestACloudFolderHoldingTheBoxBackupsIsRefused(t *testing.T) {
+	for _, direction := range []SyncDirection{SyncUpload, SyncBoth} {
+		for _, backups := range []string{"CasaOS-System", "casaos-restic"} {
+			task, engine := syncRunBox(t, direction)
+			engine.folders = map[string][]string{rclone.Destination(task.Destination, "") + task.RemotePath: {"Holidays", backups}}
+
+			runSync(context.Background(), task, syncNormal, engine)
+
+			if engine.touchedRclone() {
+				t.Fatalf("%s, %s: %v", direction, backups, engine.calls)
+			}
+			wantFailed(t, storedSyncTask(t, task.ID), "this cloud folder holds this box's backups")
+		}
+	}
+
+	// a folder that cannot be listed is no folder to write into
+	task, engine := syncRunBox(t, SyncUpload)
+	engine.foldersErr = errors.New("rclone: 403 forbidden")
+	runSync(context.Background(), task, syncNormal, engine)
+	if engine.touchedRclone() {
+		t.Fatalf("an unreadable folder: %v", engine.calls)
+	}
+	wantFailed(t, storedSyncTask(t, task.ID), "403 forbidden")
+
+	// a download writes on the box only
+	task, engine = syncRunBox(t, SyncDownload)
+	engine.folders = map[string][]string{rclone.Destination(task.Destination, "") + task.RemotePath: {"casaos-system"}}
+	runSync(context.Background(), task, syncNormal, engine)
+	if len(engine.syncs) != 1 {
+		t.Fatalf("a download is not refused for it: %v", engine.calls)
+	}
+}
+
+// A hand-edited "/Photos/" is synced as "Photos": its archive "/Photos/-archive" would be inside.
+func TestAHandEditedRemotePathIsCleanedForThePass(t *testing.T) {
+	task, engine := syncRunBox(t, SyncUpload)
+	task.Archive = true
+	clean := task
+	task.RemotePath = "/Photos/"
+	storeSyncTask(t, task)
+
+	runSync(context.Background(), task, syncNormal, engine)
+
+	if len(engine.syncs) != 1 {
+		t.Fatalf("%v", engine.calls)
+	}
+	if call := engine.syncs[0]; call.dst != cloudOf(clean) || call.o.BackupDir != rclone.Destination(clean.Destination, clean.remoteArchive(syncRunStamp)) {
+		t.Fatalf("got %+v", call)
+	}
+}
+
+// A first two-way pass is two jobs: what it says it moved is both jobs' figures, and a job that
+// says nothing is not the one before counted twice.
+func TestAFirstTwoWayPassCountsBothJobs(t *testing.T) {
+	for _, c := range []struct {
+		reports      []backupprogress.Stats
+		files, bytes int64
+	}{
+		{[]backupprogress.Stats{{Files: 3, Bytes: 30}, {Files: 1, Bytes: 10}}, 4, 40},
+		{[]backupprogress.Stats{{Files: 3, Bytes: 30}}, 3, 30},
+	} {
+		task, engine := syncRunBox(t, SyncBoth)
+		task.FirstPassDone = false
+		storeSyncTask(t, task)
+		engine.reports = c.reports
+
+		runSync(context.Background(), task, syncNormal, engine)
+
+		if stored := storedSyncTask(t, task.ID); stored.LastFiles != c.files || stored.LastBytes != c.bytes {
+			t.Fatalf("%+v: got %d files, %d bytes", c.reports, stored.LastFiles, stored.LastBytes)
+		}
+	}
+}
+
+// Listed with its kind from the first instant: a non-owner's list of the running backups never
+// shows a sync's name, not even between two lines.
+func TestASyncIsListedAsSyncFromTheStart(t *testing.T) {
+	kinds := func() map[string]string {
+		out := map[string]string{}
+		for _, running := range LiveBackups() {
+			out[running.App] = running.Kind
+		}
+
+		return out
+	}
+	_, endSync := beginLiveKind(context.Background(), "sync", "my photos", "drive", syncRunStamp)
+	defer endSync()
+	_, endBackup := beginLive(context.Background(), "immich", "drive", syncRunStamp)
+	defer endBackup()
+
+	if got := kinds(); got["my photos"] != "sync" || got["immich"] != "" {
+		t.Fatalf("got %v", got)
 	}
 }

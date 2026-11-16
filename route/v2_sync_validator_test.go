@@ -65,4 +65,6 @@ func TestTheDialogsBodyPassesTheRequestValidator(t *testing.T) {
 func TestAnUnknownRouteAnswer(t *testing.T) {
 	recorder := serve(internalRouter(t), http.MethodGet, "/v2/app_management/does-not-exist", "")
 	t.Logf("GET /v2/app_management/does-not-exist: %d %s", recorder.Code, recorder.Body.String())
+	assert.Equal(t, recorder.Code, http.StatusBadRequest)
+	assert.Assert(t, strings.Contains(recorder.Body.String(), "no matching operation was found"), recorder.Body.String())
 }

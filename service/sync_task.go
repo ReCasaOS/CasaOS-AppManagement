@@ -96,6 +96,10 @@ var (
 
 		return names
 	}
+	// the folders directly under one folder of a destination
+	syncStampFolders = func(destination, folder string) ([]string, error) {
+		return rclone.NewClient().Runs(destination, folder)
+	}
 	// a mount point lives on another device than its parent
 	isMountRoot = func(folder string) bool {
 		if filepath.Dir(folder) == folder {
@@ -107,6 +111,13 @@ var (
 		return ok && okParent && own != parent
 	}
 )
+
+// isStamp says whether a folder is named like a backup's run or a pass's archive.
+func isStamp(name string) bool {
+	_, err := time.Parse(syncStampLayout, name)
+
+	return err == nil
+}
 
 // validSyncID is the shape of the ids the box issues; anything else could name a folder it should not.
 func validSyncID(id string) bool {
@@ -232,6 +243,7 @@ func SaveSyncTasks(wanted []SyncTask) ([]SyncTask, error) {
 
 	tasks := make([]SyncTask, len(wanted))
 	var restart []string // work folders to clear once the file is written
+	var create []string  // download folders new in this save
 	for i, task := range wanted {
 		before, known := SyncTask{}, false
 		for _, s := range stored {
@@ -273,10 +285,16 @@ func SaveSyncTasks(wanted []SyncTask) ([]SyncTask, error) {
 			}
 		}
 
-		if known && task.Direction == SyncBoth &&
-			(task.Destination != before.Destination || task.RemotePath != before.RemotePath || task.LocalPath != before.LocalPath) {
+		// a task moved to other folders or turned around is another task: what it waited for
+		// was about the old ones
+		if known && (task.Destination != before.Destination || task.RemotePath != before.RemotePath ||
+			task.LocalPath != before.LocalPath || task.Direction != before.Direction) {
 			task.FirstPassDone, task.NeedsFirstPass, task.NeedsDeleteConfirm = false, false, false
 			restart = append(restart, task.workdir())
+		}
+		// only a folder asked for now: an unplugged disk's folder is not made again on the system disk
+		if task.Direction == SyncDownload && (!known || task.LocalPath != before.LocalPath || task.Direction != before.Direction) {
+			create = append(create, task.LocalPath)
 		}
 
 		tasks[i] = task
@@ -288,11 +306,9 @@ func SaveSyncTasks(wanted []SyncTask) ([]SyncTask, error) {
 		}
 	}
 
-	for _, task := range tasks {
-		if task.Direction == SyncDownload {
-			if err := os.MkdirAll(task.LocalPath, 0o755); err != nil {
-				return nil, err
-			}
+	for _, folder := range create {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			return nil, err
 		}
 	}
 
@@ -385,9 +401,20 @@ func checkSyncTask(task SyncTask, others []SyncTask) error {
 		// the folder, and the archive that sits beside it
 		for _, folder := range []string{remote, remote + "-archive"} {
 			first, _, _ := strings.Cut(folder, "/")
-			if first == restic.RepositoryFolder || first == SystemBackupName || slices.Contains(syncAppNames(), first) {
+			// Dropbox and OneDrive do not tell "Immich" from "immich"
+			if strings.EqualFold(first, restic.RepositoryFolder) || strings.EqualFold(first, SystemBackupName) ||
+				slices.ContainsFunc(syncAppNames(), func(app string) bool { return strings.EqualFold(app, first) }) {
 				return SyncRefusal(fmt.Sprintf("%q belongs to the backups: pick another folder", first))
 			}
+		}
+		// an app's backups this box does not know of: another box's, an uninstalled app's
+		first, _, _ := strings.Cut(remote, "/")
+		folders, err := syncStampFolders(task.Destination, first)
+		if err != nil && !isNotFound(err) {
+			return SyncRefusal(fmt.Sprintf("the destination %q cannot be read, so whether %q holds backups cannot be told: %v", task.Destination, first, err))
+		}
+		if slices.ContainsFunc(folders, isStamp) {
+			return SyncRefusal(fmt.Sprintf("%q holds backups: pick another folder", first))
 		}
 	}
 

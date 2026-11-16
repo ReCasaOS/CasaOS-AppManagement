@@ -210,6 +210,9 @@ func TestSyncEndToEndWithRealRclone(t *testing.T) {
 			t.Errorf("expected the archived a.txt to hold %q, found %q", "old a", got)
 		}
 		t.Logf("download: last_files=%d last_bytes=%d", task.LastFiles, task.LastBytes)
+		if task.LastFiles == 0 || task.LastBytes == 0 {
+			t.Errorf("expected the pass's figures, found last_files=%d last_bytes=%d", task.LastFiles, task.LastBytes)
+		}
 	})
 
 	t.Run("upload with mirror archives what it deletes in the cloud", func(t *testing.T) {
@@ -328,6 +331,9 @@ func TestSyncEndToEndWithRealRclone(t *testing.T) {
 		expectFiles(t, "the box folder", w.box, "x.txt", "y.txt")
 		expectFiles(t, "the cloud folder", w.cloud, "x.txt", "y.txt")
 		t.Logf("both, first pass: last_files=%d last_bytes=%d", task.LastFiles, task.LastBytes)
+		if task.LastFiles < 2 || task.LastBytes == 0 { // x one way, y the other: the resync's figures, added up
+			t.Errorf("expected the first pass's figures, found last_files=%d last_bytes=%d", task.LastFiles, task.LastBytes)
+		}
 
 		write(t, w.box, "new.txt", "added on the box")
 		write(t, w.box, "photo.jpg", "photo as it was")

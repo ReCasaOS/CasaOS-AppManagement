@@ -80,7 +80,7 @@ func syncTaskByID(id string) (SyncTask, bool, error) {
 
 // syncTaskDue is syncDue for the tick: a task that waits for its owner's answer is never due.
 func syncTaskDue(task SyncTask, now time.Time) bool {
-	if task.NeedsFirstPass || task.NeedsDeleteConfirm {
+	if task.NeedsFirstPass || task.NeedsDeleteConfirm || syncResultUnrecorded(task.ID) {
 		return false
 	}
 	due, err := syncDue(task, now)
@@ -118,16 +118,7 @@ func RunDueSyncs(ctx context.Context, now time.Time, engine syncEngine) {
 
 	ctx = WithBackupOrigin(ctx, OriginScheduled)
 	for done, listed := range tasks {
-		task, found, err := syncTaskByID(listed.ID)
-		if err != nil {
-			logger.Error("could not read the sync tasks, so the rest did not run", zap.Error(err))
-			return
-		}
-		if !found || !syncTaskDue(task, now) {
-			continue
-		}
-
-		release, ok := claimSync(task)
+		release, ok := claimSync(listed)
 		if !ok {
 			// somebody's run now has it; the slot stays unrun for the next tick
 			continue
@@ -144,6 +135,18 @@ func RunDueSyncs(ctx context.Context, now time.Time, engine syncEngine) {
 			return
 		}
 
+		// read under the claim: a pass that ended since the list was read may have parked it
+		task, found, err := syncTaskByID(listed.ID)
+		if err != nil {
+			release()
+			logger.Error("could not read the sync tasks, so the rest did not run", zap.Error(err))
+			return
+		}
+		if !found || !syncTaskDue(task, now) {
+			release()
+			continue
+		}
+
 		func() {
 			defer release()
 			runSyncPass(ctx, task, syncNormal, engine)
@@ -154,6 +157,9 @@ func RunDueSyncs(ctx context.Context, now time.Time, engine syncEngine) {
 // syncModeFits says whether the task waits for what is asked. A plain pass is refused while a
 // banner waits for the owner's answer; a task that is off can still be run now.
 func syncModeFits(task SyncTask, mode syncMode) bool {
+	if syncResultUnrecorded(task.ID) {
+		return false
+	}
 	switch mode {
 	case syncConfirmDeletes:
 		return task.NeedsDeleteConfirm
@@ -174,9 +180,6 @@ func StartSync(id string, mode syncMode, engine syncEngine) error {
 	if !found {
 		return ErrSyncNotFound
 	}
-	if !syncModeFits(task, mode) {
-		return ErrSyncWrongState
-	}
 
 	release, ok := claimSync(task)
 	if !ok {
@@ -186,6 +189,18 @@ func StartSync(id string, mode syncMode, engine syncEngine) error {
 	if open, _ := osUpgradeOpen(); open {
 		release()
 		return ErrSyncUpgrade
+	}
+	// read again under the claim: a pass that ended since may have parked the task
+	if task, found, err = syncTaskByID(id); err != nil || !found || !syncModeFits(task, mode) {
+		release()
+		switch {
+		case err != nil:
+			return err
+		case !found:
+			return ErrSyncNotFound
+		}
+
+		return ErrSyncWrongState
 	}
 
 	ctx := WithBackupOrigin(context.Background(), OriginOnDemand)
