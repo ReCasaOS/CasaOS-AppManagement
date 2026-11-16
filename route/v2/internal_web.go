@@ -3,6 +3,7 @@ package v2
 import (
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
@@ -52,6 +53,7 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 		}
 	}
 
+	dashboardHidden := service.DashboardHidden.List()
 	v2AppGridItems := lo.FilterMap(lo.Values(composeAppsWithStoreInfo), func(app codegen.ComposeAppWithStoreInfo, i int) (codegen.WebAppGridItem, bool) {
 		item, err := WebAppGridItemAdapterV2(&app)
 		if err != nil {
@@ -68,6 +70,10 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 			if port := inferWebUIPort(containersByApp[composeApp.Name], composeApp.MainServiceName()); port != "" {
 				item.Port = &port
 			}
+		}
+
+		if item.Name != nil && slices.Contains(dashboardHidden, *item.Name) {
+			item.HiddenOnDashboard = lo.ToPtr(true)
 		}
 
 		return *item, true

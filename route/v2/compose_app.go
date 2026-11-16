@@ -526,6 +526,11 @@ func (a *AppManagement) UninstallComposeApp(ctx echo.Context, id codegen.Compose
 		return conflictOrServerError(ctx, err)
 	}
 
+	// a later install of the same app must show its icon: an app that never appears is a trap
+	if err := service.DashboardHidden.Set(id, false); err != nil {
+		logger.Error("failed to show an uninstalled app on the dashboard again", zap.Error(err), zap.String("appID", id))
+	}
+
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppUninstallOK{
 		Message: utils.Ptr("compose app is being uninstalled asynchronously"),
 	})
