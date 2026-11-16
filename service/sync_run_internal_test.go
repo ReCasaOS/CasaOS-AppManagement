@@ -495,7 +495,7 @@ func TestLostStateAsksForAFirstPass(t *testing.T) {
 func TestAPassAfterAnInterruptionSaysRecovered(t *testing.T) {
 	for direction, want := range map[SyncDirection]string{SyncBoth: "recovered", SyncDownload: "ok"} {
 		task, engine := syncRunBox(t, direction)
-		task.LastResult, task.LastError, task.NeedsFirstPass = "stopped", "stopped from the interface", true
+		task.LastResult, task.LastError = "stopped", "stopped from the interface"
 		storeSyncTask(t, task)
 
 		runSync(context.Background(), task, syncNormal, engine)
