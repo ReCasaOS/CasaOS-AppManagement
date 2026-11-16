@@ -110,15 +110,22 @@ var (
 
 func (t SyncTask) workdir() string { return filepath.Join(BisyncStateDir, t.ID) }
 
-// localArchive is where a pass puts what it overwrites or deletes in the local folder.
+// localArchive is where a pass puts what it overwrites or deletes on the box: beside the synced
+// folder, never in it (rclone refuses a backup dir that overlaps the destination, and anything
+// inside would be synced).
 func (t SyncTask) localArchive(stamp string) string {
-	return filepath.Join(t.LocalPath, ".b-archive", stamp)
+	return filepath.Join(syncArchiveFolder(t.LocalPath), stamp)
 }
 
-// remoteArchive is the same in the destination, beside the synced folder rather than in it.
+func syncArchiveFolder(local string) string {
+	return filepath.Join(filepath.Dir(local), "."+filepath.Base(local)+"-archive")
+}
+
+// remoteArchive is the same in the destination, without the remote's name. A task with no
+// remote_path is a download, and archives on the box only.
 func (t SyncTask) remoteArchive(stamp string) string {
 	if t.RemotePath == "" {
-		return path.Join(".b-archive", stamp)
+		return ""
 	}
 
 	return path.Join(t.RemotePath+"-archive", stamp)
@@ -360,6 +367,8 @@ func checkSyncTask(task SyncTask, others []SyncTask) error {
 		}
 		if otherLocal, err := resolveSyncPath(other.LocalPath); err == nil && (within(local, otherLocal) || within(otherLocal, local)) {
 			return SyncRefusal(fmt.Sprintf("the local folder overlaps the one of %q", other.Name))
+		} else if err == nil && (within(local, syncArchiveFolder(otherLocal)) || within(otherLocal, syncArchiveFolder(local))) {
+			return SyncRefusal(fmt.Sprintf("the local folder is where the archive of %q is kept", other.Name))
 		}
 	}
 

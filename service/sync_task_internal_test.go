@@ -96,6 +96,14 @@ func TestTwoTasksNeverShareAFolder(t *testing.T) {
 		t.Fatalf("the same name on another destination is another folder: %v", err)
 	}
 
+	archive := goodTask(data)
+	archive.Name = "archive"
+	archive.RemotePath = "Other"
+	archive.LocalPath = filepath.Join(data, "Gallery", ".Photos-archive", "x")
+	refused(t, checkSyncTask(archive, []SyncTask{other}), "inside another's archive")
+	archive.LocalPath = filepath.Join(data, "Gallery", ".Photos-archive")
+	refused(t, checkSyncTask(archive, []SyncTask{other}), "another's archive")
+
 	same := goodTask(data)
 	same.Name = "other"
 	same.LocalPath = filepath.Join(data, "Gallery", "Videos")
@@ -279,5 +287,23 @@ func TestScheduleFieldsAreChecked(t *testing.T) {
 	saved, err := SaveSyncTasks([]SyncTask{task})
 	if err != nil || saved[0].At != "00:20" {
 		t.Fatalf("an hourly task keeps only its minute: %+v, %v", saved, err)
+	}
+}
+
+func TestArchivesSitBesideTheFolderNeverInside(t *testing.T) {
+	task := SyncTask{LocalPath: "/DATA/Gallery/Photos", RemotePath: "Photos"}
+	stamp := "2026-11-16T03-00-00Z"
+
+	if got := task.localArchive(stamp); got != "/DATA/Gallery/.Photos-archive/"+stamp {
+		t.Fatalf("local archive: %q", got)
+	}
+	if got := task.remoteArchive(stamp); got != "Photos-archive/"+stamp {
+		t.Fatalf("remote archive: %q", got)
+	}
+	if within(task.localArchive(stamp), task.LocalPath) {
+		t.Fatal("the local archive must not lie in the synced folder")
+	}
+	if got := (SyncTask{LocalPath: "/DATA/x"}).remoteArchive(stamp); got != "" {
+		t.Fatalf("no remote folder, no remote archive: %q", got)
 	}
 }
