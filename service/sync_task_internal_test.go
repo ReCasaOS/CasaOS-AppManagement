@@ -465,8 +465,10 @@ func TestEditingAParkedTaskClearsItsFlags(t *testing.T) {
 		t.Fatalf("the bisync state must be gone: %v", err)
 	}
 
-	// a name changed is the same task
-	if err := updateSyncTask(saved[0].ID, func(task *SyncTask) { task.NeedsDeleteConfirm = true }); err != nil {
+	// a name changed is the same task, and so is one whose stored paths were written by hand
+	if err := updateSyncTask(saved[0].ID, func(task *SyncTask) {
+		task.NeedsDeleteConfirm, task.RemotePath, task.LocalPath = true, "/"+task.RemotePath+"/", task.LocalPath+"/"
+	}); err != nil {
 		t.Fatal(err)
 	}
 	renamed := saved[0]
@@ -492,6 +494,10 @@ func TestSavingDoesNotRecreateAnUnchangedDownloadFolder(t *testing.T) {
 	}
 
 	if err := os.RemoveAll(task.LocalPath); err != nil { // the disk is unplugged
+		t.Fatal(err)
+	}
+	// and the stored path was written by hand, with a slash at its end
+	if err := updateSyncTask(saved[0].ID, func(stored *SyncTask) { stored.LocalPath += "/" }); err != nil {
 		t.Fatal(err)
 	}
 	toggled := saved[0]

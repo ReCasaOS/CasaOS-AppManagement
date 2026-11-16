@@ -258,6 +258,11 @@ func SaveSyncTasks(wanted []SyncTask) ([]SyncTask, error) {
 		}
 
 		if known {
+			// compared as they are saved below: a hand-edited "/Photos/" is no move
+			if remote, err := cleanRemotePath(before.RemotePath); err == nil {
+				before.RemotePath = remote
+			}
+			before.LocalPath = filepath.Clean(before.LocalPath)
 			task.LastRun, task.LastResult, task.LastError = before.LastRun, before.LastResult, before.LastError
 			task.LastFiles, task.LastBytes = before.LastFiles, before.LastBytes
 			task.FirstPassDone, task.NeedsFirstPass, task.NeedsDeleteConfirm = before.FirstPassDone, before.NeedsFirstPass, before.NeedsDeleteConfirm

@@ -741,6 +741,15 @@ func TestAPassRefusesAFlagItsModeDoesNotAnswer(t *testing.T) {
 		}
 	}
 
+	// a two-way task with both flags, a confirmed pass that lost its state: the first pass recovers it
+	both, bothEngine := syncRunBox(t, SyncBoth)
+	both.NeedsDeleteConfirm, both.NeedsFirstPass = true, true
+	storeSyncTask(t, both)
+	runSync(context.Background(), both, syncFirstPass, bothEngine)
+	if len(bothEngine.bisyncs) == 0 || !bothEngine.bisyncs[0].o.Resync {
+		t.Fatalf("both flags set: the first pass must still run, got %v", bothEngine.calls)
+	}
+
 	// the flag the mode answers still runs
 	task, engine := syncRunBox(t, SyncUpload)
 	task.Mirror, task.NeedsDeleteConfirm = true, true

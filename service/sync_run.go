@@ -108,7 +108,10 @@ func syncGuards(task SyncTask, mode syncMode, engine syncEngine) (SyncTask, erro
 		return task, errors.New("this sync task is gone")
 	}
 	task = tasks[i]
-	if (task.NeedsDeleteConfirm && mode != syncConfirmDeletes) || (task.NeedsFirstPass && mode != syncFirstPass) {
+	// a parked task runs only in a mode that answers one of its flags: both can be set at once
+	// (a confirmed pass that lost the bisync state), and the first pass must still recover it
+	answered := (task.NeedsDeleteConfirm && mode == syncConfirmDeletes) || (task.NeedsFirstPass && mode == syncFirstPass)
+	if (task.NeedsDeleteConfirm || task.NeedsFirstPass) && !answered {
 		return task, ErrSyncWrongState
 	}
 	others := slices.Delete(tasks, i, i+1)
