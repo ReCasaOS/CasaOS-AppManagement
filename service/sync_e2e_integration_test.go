@@ -427,4 +427,43 @@ func TestSyncEndToEndWithRealRclone(t *testing.T) {
 			t.Errorf("expected folders only, found %v", got)
 		}
 	})
+
+	t.Run("a folder holding another destination's root is refused, at any depth", func(t *testing.T) {
+		client := rclone.NewClient()
+		rooted := filepath.Join(cloudRoot, "backups", "box1")
+		if err := client.CreateDestination("e2e2", "local", rooted, map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.CreateDestination("e2etop", "local", "", map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = client.DeleteDestination("e2e2"); _ = client.DeleteDestination("e2etop") })
+		for _, name := range []string{"e2e", "e2e2", "e2etop"} {
+			backend, account, root, err := client.DestinationPlace(name)
+			t.Logf("DestinationPlace(%q) = backend %q, account %q, root %q, %v", name, backend, account, root, err)
+			if err != nil || backend != "local" || account != "" {
+				t.Fatalf("%s: a local destination is backend local, account unknown: %q %q %v", name, backend, account, err)
+			}
+		}
+
+		w := newWorld(t, "deep", SyncUpload, true)
+		for destination, remote := range map[string]string{
+			"e2e":    "backups",                                                    // e2e is rooted at the cloud folder
+			"e2etop": strings.TrimPrefix(filepath.Join(cloudRoot, "backups"), "/"), // the same folder, from the top
+		} {
+			task := w.task
+			task.Destination, task.RemotePath = destination, remote
+			_, err := SaveSyncTasks([]SyncTask{task})
+			// from the top, the folder also lies inside e2e's own root: either refusal is the right one
+			if err == nil || !strings.Contains(err.Error(), "the backups of the destination") {
+				t.Errorf("%s:%s: expected a refusal for another destination's backups, found %v", destination, remote, err)
+			}
+			t.Logf("%s:%s refused: %v", destination, remote, err)
+		}
+		task := w.task
+		task.RemotePath = "backup"
+		if _, err := SaveSyncTasks([]SyncTask{task}); err != nil {
+			t.Errorf("a folder beside the root is accepted: %v", err)
+		}
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/backupprogress"
@@ -186,5 +187,53 @@ func TestASyncJobReportsItsLastFigures(t *testing.T) {
 	}
 	if _, err := client.CountFiles(ctx, "/a"); err != nil || len(got) != 1 {
 		t.Fatalf("a count reported %+v, %v", got, err)
+	}
+}
+
+// configs answers config/get from a map of remotes, by their full name.
+func configs(remotes map[string]map[string]any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(remotes[r.PostForm.Get("name")])
+	}
+}
+
+// Where a destination really writes: the backend, the account when its options can tell (and
+// never a secret), and the folder of the account it is rooted at.
+func TestADestinationsPlaceIsItsBackendAccountAndRoot(t *testing.T) {
+	for what, c := range map[string]struct {
+		remotes                map[string]map[string]any
+		backend, account, root string
+	}{
+		"no root": {map[string]map[string]any{
+			"casaos-backup-d": {"type": "sftp", "host": "nas.lan", "user": "gary", "port": "2222", "pass": "secret"},
+		}, "sftp", "sftp|nas.lan|gary|2222", ""},
+		"alias with a root": {map[string]map[string]any{
+			"casaos-backup-d":     {"type": "alias", "remote": "casaos-backup-d-raw:/Backups/box1/"},
+			"casaos-backup-d-raw": {"type": "drive", "token": `{"access_token":"x"}`},
+		}, "drive", "", "Backups/box1"},
+		"crypt with a root": {map[string]map[string]any{
+			"casaos-backup-d":     {"type": "crypt", "remote": "casaos-backup-d-raw:vault", "password": "obscured"},
+			"casaos-backup-d-raw": {"type": "webdav", "url": "https://dav.example", "user": "u", "pass": "p"},
+		}, "webdav", "webdav|https://dav.example|u", "vault"},
+		"s3": {map[string]map[string]any{
+			"casaos-backup-d": {"type": "s3", "provider": "Other", "endpoint": "s3.example", "access_key_id": "AKIA1", "secret_access_key": "shh", "region": "eu"},
+		}, "s3", "s3|Other|s3.example|AKIA1", ""},
+		"s3 without a key": {map[string]map[string]any{
+			"casaos-backup-d": {"type": "s3", "provider": "AWS", "env_auth": "true"},
+		}, "s3", "", ""},
+		"token backend": {map[string]map[string]any{
+			"casaos-backup-d": {"type": "dropbox", "token": `{"access_token":"x"}`},
+		}, "dropbox", "", ""},
+	} {
+		client, _ := serverFor(t, configs(c.remotes))
+		backend, account, root, err := client.DestinationPlace("d")
+		if err != nil || backend != c.backend || account != c.account || root != c.root {
+			t.Fatalf("%s: got %q %q %q, %v", what, backend, account, root, err)
+		}
+		for _, secret := range []string{"secret", "shh", "obscured", "access_token", "\"p\""} {
+			if strings.Contains(account, secret) {
+				t.Fatalf("%s: a secret in the account: %q", what, account)
+			}
+		}
 	}
 }

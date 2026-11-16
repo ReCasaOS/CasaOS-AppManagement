@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,10 +23,10 @@ func syncBox(t *testing.T) (data string) {
 	}
 
 	oldPath, oldState, oldRoots, oldApp := SyncTasksPath, BisyncStateDir, syncLocalRoots, syncAppData
-	oldKind, oldDests, oldNames, oldMount, oldStamps := syncDestinationKind, syncDestinations, syncAppNames, isMountRoot, syncStampFolders
+	oldKind, oldDests, oldNames, oldMount, oldStamps, oldPlace := syncDestinationKind, syncDestinations, syncAppNames, isMountRoot, syncStampFolders, syncDestinationPlace
 	t.Cleanup(func() {
 		SyncTasksPath, BisyncStateDir, syncLocalRoots, syncAppData = oldPath, oldState, oldRoots, oldApp
-		syncDestinationKind, syncDestinations, syncAppNames, isMountRoot, syncStampFolders = oldKind, oldDests, oldNames, oldMount, oldStamps
+		syncDestinationKind, syncDestinations, syncAppNames, isMountRoot, syncStampFolders, syncDestinationPlace = oldKind, oldDests, oldNames, oldMount, oldStamps, oldPlace
 		syncUnrecorded.Lock()
 		clear(syncUnrecorded.ids)
 		syncUnrecorded.Unlock()
@@ -40,6 +41,7 @@ func syncBox(t *testing.T) (data string) {
 	syncAppNames = func() []string { return []string{"immich"} }
 	isMountRoot = func(string) bool { return false }
 	syncStampFolders = func(string, string) ([]string, error) { return nil, errors.New("directory not found") }
+	syncDestinationPlace = func(string) (string, string, string, error) { return "drive", "", "", nil }
 
 	return data
 }
@@ -622,4 +624,69 @@ func TestSavingAnUntouchedTaskDoesNotListItsDestination(t *testing.T) {
 
 	// and the pass lists it, whatever the save did
 	refused(t, checkSyncTask(saved[0], nil), "the pass lists")
+}
+
+// A destination rooted deep in an account keeps its backups there: a task on another
+// destination of the same account must not reach them, at any depth, whatever the case.
+func TestAFolderOfAnotherDestinationsBackupsIsRefused(t *testing.T) {
+	data := syncBox(t)
+	type place struct{ backend, account, root string }
+	places := map[string]place{
+		"drive":  {"drive", "", ""},             // the task's, without a root
+		"box1":   {"drive", "", "Backups/box1"}, // another's backups, deep
+		"vault":  {"drive", "", "Vault-archive"},
+		"s3a":    {"s3", "s3|AWS||KEY-A", ""},
+		"s3b":    {"s3", "s3|AWS||KEY-B", "Backups/box1"},
+		"s3a2":   {"s3", "s3|AWS||KEY-A", "Backups/box1"},
+		"sftp":   {"sftp", "sftp|nas||22", "Backups/box1"},
+		"broken": {},
+	}
+	names := []string{"drive", "box1", "vault"}
+	syncDestinations = func() ([]string, error) { return names, nil }
+	syncDestinationKind = func(name string) (string, bool, error) { return places[name].backend, false, nil }
+	syncDestinationPlace = func(name string) (string, string, string, error) {
+		if name == "broken" {
+			return "", "", "", errors.New("rclone: couldn't find section")
+		}
+		p := places[name]
+
+		return p.backend, p.account, p.root, nil
+	}
+	check := func(destination, remote string) error {
+		task := goodTask(data)
+		task.Destination, task.RemotePath = destination, remote
+		return checkSyncTask(task, nil)
+	}
+
+	for _, remote := range []string{"Backups", "Backups/box1", "Backups/box1/photos", "backups/BOX1", "Vault"} {
+		refused(t, check("drive", remote), remote)
+	}
+	if err := check("drive", "Backups"); err == nil || !strings.Contains(err.Error(), `holds the backups of the destination "box1"`) {
+		t.Fatalf("the refusal names the destination: %v", err)
+	}
+	if err := check("drive", "Backups/box1/photos"); err == nil || !strings.Contains(err.Error(), "lies inside") {
+		t.Fatalf("inside: %v", err)
+	}
+	for _, remote := range []string{"Backup", "Photos", "Backups/box", "Backups/box10"} {
+		if err := check("drive", remote); err != nil {
+			t.Fatalf("%s: %v", remote, err)
+		}
+	}
+
+	// accounts: told apart only when the config can tell
+	names = []string{"s3a", "s3b"}
+	if err := check("s3a", "Backups"); err != nil {
+		t.Fatalf("another s3 account: %v", err)
+	}
+	names = []string{"s3a", "s3a2"}
+	refused(t, check("s3a", "Backups"), "the same s3 account")
+	names = []string{"drive", "sftp"}
+	if err := check("drive", "Backups"); err != nil {
+		t.Fatalf("another backend: %v", err)
+	}
+
+	names = []string{"drive", "box1", "broken"}
+	refused(t, check("drive", "Photos"), "a place that cannot be read")
+	_, err := SaveSyncTasks([]SyncTask{func() SyncTask { x := goodTask(data); x.RemotePath = "Photos"; return x }()})
+	refused(t, err, "a save with a place that cannot be read")
 }

@@ -856,3 +856,25 @@ func TestASyncIsListedAsSyncFromTheStart(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// The place check runs again at each pass: a destination rooted inside the folder since the
+// task was saved stops it before rclone moves anything.
+func TestAPassIntoAnotherDestinationsBackupsFailsBeforeAnyTransfer(t *testing.T) {
+	task, engine := syncRunBox(t, SyncUpload)
+	task.Mirror = true
+	storeSyncTask(t, task)
+	syncDestinationPlace = func(name string) (string, string, string, error) {
+		if name == "vault" {
+			return "s3", "", task.RemotePath + "/box1", nil
+		}
+
+		return "s3", "", "", nil
+	}
+
+	runSync(context.Background(), task, syncNormal, engine)
+
+	if len(engine.calls) != 0 {
+		t.Fatalf("rclone was asked %v", engine.calls)
+	}
+	wantFailed(t, storedSyncTask(t, task.ID), `holds the backups of the destination "vault"`)
+}

@@ -96,6 +96,10 @@ var (
 
 		return names
 	}
+	// where a destination writes: backend, account ("" when it cannot be told), root in it
+	syncDestinationPlace = func(name string) (backend, account, root string, err error) {
+		return rclone.NewClient().DestinationPlace(name)
+	}
 	// the folders directly under one folder of a destination
 	syncStampFolders = func(destination, folder string) ([]string, error) {
 		return rclone.NewClient().Runs(destination, folder)
@@ -434,6 +438,10 @@ func checkSyncTaskListing(task SyncTask, others []SyncTask, list bool) error {
 		}
 	}
 
+	if err := checkOtherDestinationsBackups(task.Destination, remote, names); err != nil {
+		return err
+	}
+
 	local, err := checkSyncLocal(task.LocalPath)
 	if err != nil {
 		return err
@@ -453,6 +461,52 @@ func checkSyncTaskListing(task SyncTask, others []SyncTask, list bool) error {
 			return SyncRefusal(fmt.Sprintf("the local folder overlaps the one of %q", other.Name))
 		} else if err == nil && (within(local, syncArchiveFolder(otherLocal)) || within(otherLocal, syncArchiveFolder(local))) {
 			return SyncRefusal(fmt.Sprintf("the local folder is where the archive of %q is kept", other.Name))
+		}
+	}
+
+	return nil
+}
+
+// checkOtherDestinationsBackups refuses a folder that holds, is, or lies inside the root of
+// another destination of this box on the same account: that root holds its backups, at any
+// depth. Places are read from the local rclone config only. A destination without a root keeps
+// its backups at the top of its account, where the first-folder checks above cover them.
+func checkOtherDestinationsBackups(destination, remote string, names []string) error {
+	place := func(name string) (backend, account, root string, err error) {
+		backend, account, root, err = syncDestinationPlace(name)
+		if err != nil {
+			err = SyncRefusal(fmt.Sprintf("where the destination %q writes cannot be read: %v", name, err))
+		}
+
+		return backend, account, strings.ToLower(root), err
+	}
+	backend, account, root, err := place(destination)
+	if err != nil {
+		return err
+	}
+	written := []string{path.Join(root, strings.ToLower(remote))}
+	if remote != "" {
+		written = append(written, written[0]+"-archive")
+	}
+
+	for _, name := range names {
+		if name == destination {
+			continue // its own backups: the first-folder checks above
+		}
+		otherBackend, otherAccount, otherRoot, err := place(name)
+		if err != nil {
+			return err
+		}
+		if otherRoot == "" || otherBackend != backend || (account != "" && otherAccount != "" && account != otherAccount) {
+			continue
+		}
+		for _, folder := range written {
+			if within(otherRoot, folder) {
+				return SyncRefusal(fmt.Sprintf("this folder holds the backups of the destination %q", name))
+			}
+			if within(folder, otherRoot) {
+				return SyncRefusal(fmt.Sprintf("this folder lies inside the backups of the destination %q", name))
+			}
 		}
 	}
 

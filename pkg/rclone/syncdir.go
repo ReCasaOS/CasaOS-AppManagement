@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -181,6 +182,58 @@ func (c *Client) Folders(fs, remote string) ([]string, error) {
 	slices.Sort(names)
 
 	return names, nil
+}
+
+// DestinationPlace says where a destination really writes, to tell two destinations that reach
+// the same folder: the backend underneath, the account on it when its options can tell (""
+// when they cannot, as with a sign-in token; never a secret), and the folder of that account
+// the destination is rooted at ("" for its top).
+func (c *Client) DestinationPlace(name string) (backend, account, root string, err error) {
+	options, err := c.remoteOptions(DestinationPrefix + name)
+	if err != nil {
+		return "", "", "", err
+	}
+	if options["type"] == "alias" || options["type"] == "crypt" {
+		_, root, _ = strings.Cut(options["remote"], ":")
+		if options, err = c.remoteOptions(DestinationPrefix + name + RawSuffix); err != nil {
+			return "", "", "", err
+		}
+	}
+	backend = options["type"]
+
+	// the options that name an account (rclone's own names, as the destination forms send them),
+	// and the one without which nothing tells it
+	identity := map[string][]string{
+		"s3":     {"provider", "endpoint", "access_key_id"},
+		"sftp":   {"host", "user", "port"},
+		"ftp":    {"host", "user", "port"},
+		"webdav": {"url", "user"},
+	}[backend]
+	required := map[string]string{"s3": "access_key_id", "sftp": "host", "ftp": "host", "webdav": "url"}[backend]
+	if required != "" && options[required] != "" {
+		parts := []string{backend}
+		for _, key := range identity {
+			parts = append(parts, options[key])
+		}
+		account = strings.Join(parts, "|")
+	}
+
+	return backend, account, strings.Trim(path.Clean("/"+root), "/"), nil
+}
+
+func (c *Client) remoteOptions(remote string) (map[string]string, error) {
+	var options map[string]any
+	if err := c.call("/config/get", map[string]string{"name": remote}, &options); err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for key, value := range options {
+		if value != nil {
+			out[key] = fmt.Sprint(value)
+		}
+	}
+
+	return out, nil
 }
 
 // DestinationKind says which backend a destination is made of and whether it is encrypted.

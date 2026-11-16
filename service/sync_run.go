@@ -145,8 +145,10 @@ func syncGuards(task SyncTask, mode syncMode, engine syncEngine) (SyncTask, erro
 	return task, checkSyncSides(task, mode, engine)
 }
 
-// checkNoBoxBackups refuses to write into a cloud folder that holds this box's backups: a
-// second destination without a root on the same account reaches where the first keeps them.
+// checkNoBoxBackups refuses to write into a cloud folder that holds this box's backups at its
+// top: where a destination without a root keeps them, reached through another destination on
+// the same account. Roots of this box's destinations are compared at any depth by
+// checkSyncTask; this listing also sees a folder the config cannot place.
 func checkNoBoxBackups(task SyncTask, engine syncEngine) error {
 	names, err := engine.Folders(rclone.Destination(task.Destination, ""), task.RemotePath)
 	if isNotFound(err) {
