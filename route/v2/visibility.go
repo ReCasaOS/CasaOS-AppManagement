@@ -55,7 +55,7 @@ func visibleFilter(ctx echo.Context) func(app string) bool {
 	}
 	snapshot := service.AppVisibility.Snapshot()
 
-	return func(app string) bool { return !service.HiddenIn(snapshot, app, id) }
+	return func(app string) bool { return app != otherLogs && !service.HiddenIn(snapshot, app, id) }
 }
 
 // visibleApps is the caller's share of the installed apps.
@@ -81,6 +81,7 @@ func hiddenApps(ctx echo.Context) (apps []string, ok bool) {
 	if !known {
 		return nil, false
 	}
+	apps = []string{otherLogs}
 	for app, accounts := range service.AppVisibility.Snapshot() {
 		if slices.Contains(accounts, id) {
 			apps = append(apps, app)
@@ -90,12 +91,24 @@ func hiddenApps(ctx echo.Context) (apps []string, ok bool) {
 	return apps, true
 }
 
+// otherLogs is the app the logs keep the lines of the containers no app owns under: the owner's alone.
+const otherLogs = "_other"
+
 // ContainerHidden is true when the container belongs to a compose project hidden from the
-// caller: its id must not read what the project's own routes would not.
+// caller: its id must not read what the project's own routes would not. A container no app
+// owns is the owner's alone.
 func ContainerHidden(ctx echo.Context, inspected *types.ContainerJSON) bool {
 	project := composeProjectOf(inspected)
+	if project == "" {
+		return !isOwner(ctx) && !isV1App(inspected)
+	}
 
-	return project != "" && !visibleTo(ctx, project)
+	return !visibleTo(ctx, project)
+}
+
+// isV1App is true for an app installed before the compose apps: one container, no project.
+func isV1App(inspected *types.ContainerJSON) bool {
+	return inspected != nil && inspected.Config != nil && inspected.Config.Labels["casaos"] == "casaos"
 }
 
 // VisibleFilter is visibleFilter for the v1 routes.

@@ -80,10 +80,12 @@ func TestVisibleAppsKeepsWhatTheCallerMaySee(t *testing.T) {
 func TestHiddenAppsListsWhatIsHiddenFromTheCaller(t *testing.T) {
 	apps, ok := hiddenApps(visibilityCaller(t, "2"))
 	assert.Assert(t, ok)
-	assert.DeepEqual(t, apps, []string{"immich"})
+	// with what no app owns, the owner's alone
+	assert.DeepEqual(t, apps, []string{"_other", "immich"})
 
 	apps, ok = hiddenApps(visibilityCaller(t, "3"))
-	assert.Assert(t, ok && len(apps) == 0)
+	assert.Assert(t, ok)
+	assert.DeepEqual(t, apps, []string{"_other"})
 
 	_, ok = hiddenApps(visibilityCaller(t, "nobody"))
 	assert.Assert(t, !ok, "nothing can be left out for a caller nobody can tell")

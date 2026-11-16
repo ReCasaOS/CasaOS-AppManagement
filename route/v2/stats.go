@@ -46,8 +46,7 @@ func statsFailure(ctx echo.Context, err error) error {
 	return statsCode(ctx, http.StatusServiceUnavailable, "stats_unavailable")
 }
 
-// appOfStatsID is the app of an id `app:<app>:<service>:<n>`. The host, a virtual machine and a
-// container no app owns are not an app's, so they stay visible to everyone.
+// appOfStatsID is the app of an id `app:<app>:<service>:<n>`. A container no app owns is not an app's.
 func appOfStatsID(id string) (app string, ok bool) {
 	parts := strings.SplitN(id, ":", 3)
 	if len(parts) < 2 || parts[0] != "app" || parts[1] == "" {
@@ -61,31 +60,21 @@ func appOfStatsID(id string) (app string, ok bool) {
 // it, whatever the parameters, as it answers an id it does not know.
 const probeStatsID = "app:" + probeApp + ":probe:1"
 
-// statsHidden is true for an id of an app the caller may not see; such an id is answered as
-// the sampler answers one it does not know.
+// statsHidden is true for an id the caller may not see; such an id is answered as the sampler
+// answers one it does not know.
 //
 // app is the item's own app when the sampler knows it (a one-off container of an app keeps
-// its id `container:<name>`). One known only from disk has lost its labels: compose names a
-// one-off `<project>-<service>-run-<id>`, and that name is read instead.
-func statsHidden(visible func(app string) bool, id, app string) bool {
+// its id `container:<name>`). What no app owns, a one-off known only from disk included (it
+// has lost its labels), is the owner's alone.
+func statsHidden(owner bool, visible func(app string) bool, id, app string) bool {
 	if fromID, ok := appOfStatsID(id); ok {
 		return !visible(fromID)
 	}
 	if app != "" {
 		return !visible(app)
 	}
-	name, other := strings.CutPrefix(id, "container:")
-	head, _, oneOff := strings.Cut(name, "-run-")
-	if !other || !oneOff {
-		return false
-	}
-	for i := range len(head) {
-		if head[i] == '-' && !visible(head[:i]) {
-			return true
-		}
-	}
 
-	return false
+	return !owner
 }
 
 // statsAppOf is the app the sampler knows an item by, "" when none.
@@ -110,10 +99,10 @@ func (a *AppManagement) StatsList(ctx echo.Context) error {
 	if err != nil {
 		return statsFailure(ctx, err)
 	}
-	visible := visibleFilter(ctx)
+	owner, visible := isOwner(ctx), visibleFilter(ctx)
 	out := make([]codegen.StatsItem, 0, len(items))
 	for _, it := range items {
-		if statsHidden(visible, it.ID, it.App) {
+		if statsHidden(owner, visible, it.ID, it.App) {
 			continue
 		}
 		item := codegen.StatsItem{
@@ -163,7 +152,7 @@ func (a *AppManagement) StatsSeries(ctx echo.Context, id codegen.StatsItemID, _ 
 	if s == nil {
 		return statsCode(ctx, http.StatusServiceUnavailable, "stats_unavailable")
 	}
-	if statsHidden(visibleFilter(ctx), id, statsAppOf(s, id)) {
+	if statsHidden(isOwner(ctx), visibleFilter(ctx), id, statsAppOf(s, id)) {
 		id = probeStatsID
 	}
 	r := stats.RangeLive
@@ -210,7 +199,7 @@ func (a *AppManagement) StatsAlerts(ctx echo.Context, id codegen.StatsItemID) er
 	if s == nil {
 		return statsCode(ctx, http.StatusServiceUnavailable, "stats_unavailable")
 	}
-	if statsHidden(visibleFilter(ctx), id, statsAppOf(s, id)) {
+	if statsHidden(isOwner(ctx), visibleFilter(ctx), id, statsAppOf(s, id)) {
 		id = probeStatsID
 	}
 	return statsAlertsOf(ctx, s, id)

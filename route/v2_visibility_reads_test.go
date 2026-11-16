@@ -274,7 +274,8 @@ func TestAppGridOmitsHiddenApps(t *testing.T) {
 		assert.Equal(t, strings.Contains(bodyOf(got), hiddenApp), want, "%s: %s", who, bodyOf(got))
 		// a container of the hidden project the compose list did not claim is hidden with it
 		assert.Equal(t, strings.Contains(bodyOf(got), "c-broken"), want, "%s: %s", who, bodyOf(got))
-		assert.Assert(t, strings.Contains(bodyOf(got), "c-loose"), "a container of no app stays: %s", bodyOf(got))
+		// a container no app owns is the owner's alone
+		assert.Equal(t, strings.Contains(bodyOf(got), "c-loose"), who == "admin" || who == "internal", "%s: %s", who, bodyOf(got))
 	}
 }
 
@@ -321,15 +322,23 @@ func TestContainerDetailOfAHiddenAppIs404(t *testing.T) {
 	assert.Equal(t, strings.ReplaceAll(bodyOf(got), "c-hidden", "c-nothing"), bodyOf(unknown))
 	assert.Assert(t, !strings.Contains(bodyOf(got), hiddenApp), "the project is not named: %s", bodyOf(got))
 
-	for _, id := range []string{"c-shown", "c-loose"} {
-		assert.Equal(t, r.as("user", "/container/"+id+"/detail").Code, http.StatusOK, id)
-	}
+	assert.Equal(t, r.as("user", "/container/c-shown/detail").Code, http.StatusOK)
 	for _, who := range []string{"admin", "internal", "other"} {
 		assert.Equal(t, r.as(who, "/container/c-hidden/detail").Code, http.StatusOK, who)
 	}
+
+	// a container no app owns is the owner's alone: any other account is answered as for one that does not exist
+	for _, who := range []string{"user", "other"} {
+		loose := r.as(who, "/container/c-loose/detail")
+		assert.Equal(t, loose.Code, http.StatusNotFound, who)
+		assert.Equal(t, strings.ReplaceAll(bodyOf(loose), "c-loose", "c-nothing"), bodyOf(unknown), who)
+	}
+	for _, who := range []string{"admin", "internal"} {
+		assert.Equal(t, r.as(who, "/container/c-loose/detail").Code, http.StatusOK, who)
+	}
 }
 
-func TestStatsOmitsAndRefusesHiddenAppsButKeepsHostAndVMs(t *testing.T) {
+func TestStatsOmitsAndRefusesHiddenAppsAndWhatNoAppOwns(t *testing.T) {
 	r := newReadsRig(t)
 	const hiddenID, shownID, plainID, oneOffID = "app:" + hiddenApp + ":db:1", "app:" + shownApp + ":web:1", "container:my.db_1", "container:immich-web-run-ab12"
 
@@ -345,7 +354,8 @@ func TestStatsOmitsAndRefusesHiddenAppsButKeepsHostAndVMs(t *testing.T) {
 		slices.Sort(keys)
 		return keys
 	}
-	assert.DeepEqual(t, ids("user"), []string{shownID, plainID})
+	assert.DeepEqual(t, ids("user"), []string{shownID})
+	assert.DeepEqual(t, ids("other"), []string{hiddenID, shownID, oneOffID})
 	assert.DeepEqual(t, ids("admin"), []string{hiddenID, shownID, oneOffID, plainID})
 	assert.DeepEqual(t, ids("internal"), []string{hiddenID, shownID, oneOffID, plainID})
 
@@ -354,13 +364,18 @@ func TestStatsOmitsAndRefusesHiddenAppsButKeepsHostAndVMs(t *testing.T) {
 		unknown := r.as("user", "/stats/app:nothing:db:1"+tail)
 		assert.Equal(t, got.Code, http.StatusNotFound, "%s: %s", tail, bodyOf(got))
 		assert.Equal(t, bodyOf(got), bodyOf(unknown), tail)
+		// a container no app owns: the owner's alone
+		for _, id := range []string{plainID, oneOffID} {
+			loose := r.as("user", "/stats/"+id+tail)
+			assert.Equal(t, loose.Code, http.StatusNotFound, id+tail)
+			assert.Equal(t, bodyOf(loose), bodyOf(unknown), id+tail)
+			assert.Equal(t, r.as("admin", "/stats/"+id+tail).Code, http.StatusOK, id+tail)
+		}
 		// an encoded colon is the same id
 		assert.Equal(t, r.as("user", "/stats/"+strings.ReplaceAll(hiddenID, ":", "%3A")+tail).Code, http.StatusNotFound, tail)
 
 		assert.Equal(t, r.as("admin", "/stats/"+hiddenID+tail).Code, http.StatusOK, tail)
-		for _, id := range []string{shownID, plainID} {
-			assert.Equal(t, r.as("user", "/stats/"+id+tail).Code, http.StatusOK, id+tail)
-		}
+		assert.Equal(t, r.as("user", "/stats/"+shownID+tail).Code, http.StatusOK, tail)
 	}
 }
 
@@ -380,18 +395,21 @@ func TestLogsAppsLogsStreamEventsExportOmitHiddenApps(t *testing.T) {
 		slices.Sort(apps)
 		return apps
 	}
-	assert.DeepEqual(t, appsOf("user"), []string{"_other", shownApp})
-	assert.DeepEqual(t, appsOf("other"), []string{"_other", hiddenApp, shownApp})
+	// what no app owns is the owner's alone
+	assert.DeepEqual(t, appsOf("user"), []string{shownApp})
+	assert.DeepEqual(t, appsOf("other"), []string{hiddenApp, shownApp})
 	assert.DeepEqual(t, appsOf("admin"), []string{"_other", hiddenApp, shownApp})
 
 	// history, also when the hidden app is asked for by name, and the events of its window
-	for _, query := range []string{"/logs", "/logs?app=" + hiddenApp, "/logs?app=" + hiddenApp + "&app=" + shownApp} {
+	for _, query := range []string{"/logs", "/logs?app=" + hiddenApp, "/logs?app=" + hiddenApp + "&app=" + shownApp, "/logs?app=_other"} {
 		got := r.as("user", query)
 		assert.Equal(t, got.Code, http.StatusOK, bodyOf(got))
 		assert.Assert(t, !strings.Contains(bodyOf(got), "from immich") && !strings.Contains(bodyOf(got), `"`+hiddenApp+`"`), "%s: %s", query, bodyOf(got))
+		assert.Assert(t, !strings.Contains(bodyOf(got), "from other"), "%s: %s", query, bodyOf(got))
 	}
 	got := r.as("user", "/logs")
-	assert.Assert(t, strings.Contains(bodyOf(got), "from jarvis") && strings.Contains(bodyOf(got), "from other"), bodyOf(got))
+	assert.Assert(t, strings.Contains(bodyOf(got), "from jarvis"), bodyOf(got))
+	assert.Assert(t, strings.Contains(bodyOf(r.as("admin", "/logs")), "from other"))
 	assert.Assert(t, strings.Contains(bodyOf(r.as("admin", "/logs")), "from immich"))
 	assert.Assert(t, strings.Contains(bodyOf(r.as("other", "/logs")), "from immich"))
 
@@ -404,7 +422,7 @@ func TestLogsAppsLogsStreamEventsExportOmitHiddenApps(t *testing.T) {
 
 	got = r.as("user", "/logs/export")
 	assert.Equal(t, got.Code, http.StatusOK, bodyOf(got))
-	assert.Assert(t, !strings.Contains(bodyOf(got), "from immich") && strings.Contains(bodyOf(got), "from jarvis"), bodyOf(got))
+	assert.Assert(t, !strings.Contains(bodyOf(got), "from immich") && !strings.Contains(bodyOf(got), "from other") && strings.Contains(bodyOf(got), "from jarvis"), bodyOf(got))
 	got = r.as("user", "/logs/export?app="+hiddenApp)
 	assert.Assert(t, !strings.Contains(bodyOf(got), "from immich"), bodyOf(got))
 	assert.Assert(t, strings.Contains(bodyOf(r.as("admin", "/logs/export")), "from immich"))
@@ -439,7 +457,7 @@ func TestTheLogStreamOmitsHiddenApps(t *testing.T) {
 		slices.Sort(got)
 		return got
 	}
-	assert.DeepEqual(t, read(user, 2), []string{"second jarvis", "second other"})
+	assert.DeepEqual(t, read(user, 1), []string{"second jarvis"})
 	assert.DeepEqual(t, read(admin, 3), []string{"second immich", "second jarvis", "second other"})
 }
 
@@ -558,9 +576,13 @@ func TestContainerUsageOmitsContainersOfHiddenApps(t *testing.T) {
 	}
 
 	user := get(r.user)
-	assert.Assert(t, strings.Contains(user, "jarvis-web-1") && strings.Contains(user, "plain") && !strings.Contains(user, "immich"), user)
+	// a container no app owns is the owner's alone
+	assert.Assert(t, strings.Contains(user, "jarvis-web-1") && !strings.Contains(user, "plain") && !strings.Contains(user, "immich"), user)
 	for _, token := range []string{r.admin, "internal", r.token(otherUser)} {
 		assert.Assert(t, strings.Contains(get(token), "immich-db-1"), "%.8s", token)
+	}
+	for _, token := range []string{r.admin, "internal"} {
+		assert.Assert(t, strings.Contains(get(token), "plain"), "%.8s", token)
 	}
 }
 

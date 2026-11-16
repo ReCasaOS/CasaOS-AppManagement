@@ -18,7 +18,7 @@ import (
 )
 
 func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
-	visible := visibleFilter(ctx)
+	owner, visible := isOwner(ctx), visibleFilter(ctx)
 
 	// v2 Apps
 	composeAppsWithStoreInfo, err := composeAppsWithStoreInfo(ctx.Request().Context(), composeAppsWithStoreInfoOpts{
@@ -93,8 +93,9 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 
 	composeLoadErrors := composeLoadErrorCache{}
 	containerAppGridItems := lo.FilterMap(*containers, func(app model.MyAppList, i int) (codegen.WebAppGridItem, bool) {
-		// a container of a project hidden from the caller, one the compose list did not claim included
-		if app.ComposeProject != "" && !visible(app.ComposeProject) {
+		// a container of a project hidden from the caller, one the compose list did not claim included;
+		// a container no app owns is the owner's alone
+		if app.ComposeProject == "" && !owner || app.ComposeProject != "" && !visible(app.ComposeProject) {
 			return codegen.WebAppGridItem{}, false
 		}
 

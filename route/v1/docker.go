@@ -304,9 +304,14 @@ func ArchiveContainer(ctx echo.Context) error {
 // @Success 200 {string} string "ok"
 // @Router /app/usage [get]
 func AppUsageList(ctx echo.Context) error {
-	visible := v2.VisibleFilter(ctx)
+	owner, visible := v2.IsOwner(ctx), v2.VisibleFilter(ctx)
+	// a container no app owns is the owner's alone
 	list := lo.Filter(service.MyService.Docker().GetContainerStats(), func(stats model.DockerStatsModel, _ int) bool {
-		return stats.ComposeProject == "" || visible(stats.ComposeProject)
+		if stats.ComposeProject == "" {
+			return owner
+		}
+
+		return visible(stats.ComposeProject)
 	})
 	return ctx.JSON(common_err.SUCCESS, &modelCommon.Result{Success: common_err.SUCCESS, Message: common_err.GetMsg(common_err.SUCCESS), Data: list})
 	// return ctx.JSON(common_err.SUCCESS, &modelCommon.Result{Success: common_err.SUCCESS, Message: common_err.GetMsg(common_err.SUCCESS), Data: nil})
