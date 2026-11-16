@@ -63,6 +63,7 @@ type LiveBackup struct {
 	Source      string
 	Stats       *backupprogress.Stats
 	StatsAt     time.Time
+	Kind        string // "" for a backup, "sync" for a pass of a sync task
 }
 
 type liveEntry struct {
@@ -127,12 +128,41 @@ func liveOperation(ctx context.Context, operation, operations int, source string
 	entry.Stats, entry.StatsAt = nil, time.Time{}
 }
 
+// liveKind says what runs, for the list.
+func liveKind(ctx context.Context, kind string) {
+	entry, ok := ctx.Value(liveKey{}).(*liveEntry)
+	if !ok {
+		return
+	}
+
+	live.Lock()
+	defer live.Unlock()
+	entry.Kind = kind
+}
+
+// liveFigures is what the engine last said it had moved: files and bytes.
+func liveFigures(ctx context.Context) (files, bytes int64) {
+	entry, ok := ctx.Value(liveKey{}).(*liveEntry)
+	if !ok {
+		return 0, 0
+	}
+
+	live.Lock()
+	defer live.Unlock()
+	if entry.Stats == nil {
+		return 0, 0
+	}
+
+	return entry.Stats.Files, entry.Stats.Bytes
+}
+
 func liveStats(ctx context.Context, entry *liveEntry, stats backupprogress.Stats) {
 	now := backupClock()
 
 	live.Lock()
 	entry.Stats, entry.StatsAt = &stats, now
-	due := entry.publishedAt.IsZero() || now.Sub(entry.publishedAt) >= progressEvery
+	// a sync has no operations to share its progress out, nor a backup's events to say it on
+	due := entry.Kind == "" && (entry.publishedAt.IsZero() || now.Sub(entry.publishedAt) >= progressEvery)
 	var fraction float64
 	if due {
 		entry.publishedAt = now
