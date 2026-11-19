@@ -931,6 +931,9 @@ func composeAppsWithStoreInfo(ctx context.Context, opts composeAppsWithStoreInfo
 		// dashboard drew a green dot -- the one thing that view exists to tell you,
 		// wrong. Every container of every service counts now.
 		composeAppWithStoreInfo.Status = lo.ToPtr(composeAppStatus(containerLists))
+		if health := composeAppHealth(containerLists); health != "" {
+			composeAppWithStoreInfo.Health = &health
+		}
 
 		return composeAppWithStoreInfo
 	}), nil

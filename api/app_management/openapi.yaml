@@ -1643,6 +1643,30 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /compose/{id}/containers/{containerId}/health:
+    get:
+      summary: The health check of one container of a compose app, and its last runs
+      description: |
+        What the Health chip of a container stands for: the command Docker runs, how
+        often, and what its last runs answered. Docker keeps the last five.
+
+        The container must belong to the app named in the path. The command and what it
+        printed are emptied for an account that is not the owner: compose fills a
+        command from `.env`, and a command prints what it likes.
+      operationId: composeAppContainerHealth
+      tags:
+        - Compose methods
+      parameters:
+        - $ref: "#/components/parameters/ComposeAppID"
+        - $ref: "#/components/parameters/ComposeContainerID"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerHealthOK"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /compose/{id}/logs:
     get:
       summary: Get the logs of a compose app
@@ -3476,6 +3500,17 @@ components:
                   data:
                     $ref: "#/components/schemas/ContainerDetail"
 
+    ContainerHealthOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ContainerHealth"
+
     ContainerRemovedOK:
       description: OK
       content:
@@ -4361,6 +4396,13 @@ components:
           type: string
           readOnly: true
           example: running
+        health:
+          type: string
+          readOnly: true
+          description: |-
+            The worst health check among the running containers: unhealthy, starting or
+            healthy. Absent when none of them has a check.
+          example: healthy
         update_available:
           readOnly: true
           type: boolean
@@ -4480,6 +4522,51 @@ components:
             $ref: "#/components/schemas/DeviceStoreInfo"
           x-oapi-codegen-extra-tags:
             yaml: ",omitempty"
+
+    ContainerHealth:
+      description: The health check of one container and its last runs.
+      properties:
+        status:
+          type: string
+          description: healthy, unhealthy or starting. Empty when the container has no check.
+          example: unhealthy
+        failing_streak:
+          type: integer
+          description: How many runs in a row failed.
+        command:
+          type: string
+          description: The command Docker runs. Empty for an account that is not the owner.
+          example: pg_isready -U postgres
+        interval:
+          type: integer
+          description: Seconds between two runs.
+        timeout:
+          type: integer
+          description: Seconds after which a run counts as failed.
+        retries:
+          type: integer
+          description: Failed runs in a row before the container is unhealthy.
+        start_period:
+          type: integer
+          description: Seconds after the start during which a failed run does not count.
+        checks:
+          type: array
+          description: The last runs, newest first.
+          items:
+            $ref: "#/components/schemas/ContainerHealthRun"
+
+    ContainerHealthRun:
+      description: One run of a container's health check.
+      properties:
+        started_at:
+          type: string
+          format: date-time
+        exit_code:
+          type: integer
+          description: 0 passed, anything else failed.
+        output:
+          type: string
+          description: What the command printed. Empty for an account that is not the owner.
 
     ContainerDetail:
       description: What one container is, for somebody who did not create it.
@@ -5892,6 +5979,12 @@ components:
         status:
           type: string
           example: running
+        health:
+          type: string
+          description: |-
+            The worst health check among the running containers: unhealthy, starting or
+            healthy. Absent when none of them has a check.
+          example: healthy
         name:
           type: string
         title:
