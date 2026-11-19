@@ -13,12 +13,14 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/distribution/reference"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"go.uber.org/zap"
 )
 
 // What apps left behind on the disk, and nothing an installed app could still want.
@@ -31,9 +33,16 @@ import (
 // daemon could not give, a compose file that does not load, an operation that runs.
 
 // ErrCleanupHeld is why images and volumes are not offered, or not deleted, right now.
-type ErrCleanupHeld struct{ Reason string }
+// Detail names what could not be read, for the owner who has to mend it.
+type ErrCleanupHeld struct{ Reason, Detail string }
 
-func (e ErrCleanupHeld) Error() string { return e.Reason }
+func (e ErrCleanupHeld) Error() string {
+	if e.Detail == "" {
+		return e.Reason
+	}
+
+	return e.Reason + ": " + e.Detail
+}
 
 // The two reasons the report carries in `held`.
 const (
@@ -108,8 +117,9 @@ func (p *cleanupProtection) protect(project *types.Project) error {
 }
 
 // appsProtection reads what every installed app claims: the stacks Docker Compose knows,
-// and the app folders on the disk, which is where an app without a container still is.
-// Any file that does not load is an error: what it claims is unknown, so nothing is offered.
+// the app folders on the disk, which is where an app without a container still is, and
+// the apps built from a repository, whose files are in their clone. Any file that does
+// not load is an error: what it claims is unknown, so nothing is offered.
 var appsProtection = func(ctx context.Context) (cleanupProtection, error) {
 	protection := cleanupProtection{
 		Projects: map[string]struct{}{}, Images: map[string]struct{}{},
@@ -126,8 +136,10 @@ var appsProtection = func(ctx context.Context) (cleanupProtection, error) {
 		files[stack.ID] = stack.ConfigFiles
 	}
 
+	// A missing folder is an error too: with no app at all on the disk, every image
+	// would belong to nobody.
 	folders, err := os.ReadDir(config.AppInfo.AppsPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err != nil {
 		return protection, err
 	}
 	for _, folder := range folders {
@@ -144,6 +156,26 @@ var appsProtection = func(ctx context.Context) (cleanupProtection, error) {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return protection, err
 		}
+	}
+
+	gitApps, err := GitAppNames()
+	if err != nil {
+		return protection, err
+	}
+	for _, name := range gitApps {
+		protection.Projects[name] = struct{}{}
+		if _, known := files[name]; known {
+			continue
+		}
+		st, err := loadGitApp(name)
+		if err != nil {
+			return protection, fmt.Errorf("repository app `%s`: %w", name, err)
+		}
+		composeFiles, err := gitComposeFiles(st.Dir, filepath.Join(st.Dir, ".env"))
+		if err != nil {
+			return protection, fmt.Errorf("repository app `%s`: %w", name, err)
+		}
+		files[name] = strings.Join(composeFiles, ",")
 	}
 
 	for name, file := range files {
@@ -262,6 +294,7 @@ func buildCacheSize(records []*build.CacheRecord) int64 {
 // back what was removed: the list of candidates is worth nothing if only it is tested.
 type cleanupDaemon interface {
 	DiskUsage(ctx context.Context, options dockertypes.DiskUsageOptions) (dockertypes.DiskUsage, error)
+	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
 	ImageRemove(ctx context.Context, imageID string, options image.RemoveOptions) ([]image.DeleteResponse, error)
 	VolumeRemove(ctx context.Context, volumeID string, force bool) error
 	BuildCachePrune(ctx context.Context, opts build.CachePruneOptions) (*build.CachePruneReport, error)
@@ -271,28 +304,35 @@ func newCleanupDaemon() (*client.Client, error) {
 	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 }
 
-// leftovers reads the daemon and the apps once. held is why images and volumes are not
-// listed, when they are not; the build cache is nobody's data and is always measured.
-func leftovers(ctx context.Context, cli cleanupDaemon) (usage dockertypes.DiskUsage, images []codegen.CleanupImage, volumes []codegen.CleanupVolume, held string, err error) {
-	usage, err = cli.DiskUsage(ctx, dockertypes.DiskUsageOptions{
-		Types: []dockertypes.DiskUsageObject{dockertypes.ImageObject, dockertypes.VolumeObject, dockertypes.BuildCacheObject},
-	})
+// leftovers reads the daemon and the apps once, for the kinds of thing asked: measuring
+// every volume walks its files, and a deletion of images has no use for it. held is why
+// images and volumes are not listed, when they are not; the build cache holds no data of
+// any app and is always measured.
+//
+// holding is true for a caller that took beginCleanup: nothing else can run then, and
+// the hold it sees is its own.
+func leftovers(ctx context.Context, cli cleanupDaemon, holding bool, kinds ...dockertypes.DiskUsageObject) (usage dockertypes.DiskUsage, images []codegen.CleanupImage, volumes []codegen.CleanupVolume, held ErrCleanupHeld, err error) {
+	usage, err = cli.DiskUsage(ctx, dockertypes.DiskUsageOptions{Types: kinds})
 	if err != nil {
-		return usage, nil, nil, "", err
+		return usage, nil, nil, held, err
 	}
 	images, volumes = []codegen.CleanupImage{}, []codegen.CleanupVolume{}
 
 	// an install, an update, a restore or a build has images and volumes no container
 	// holds yet
-	if len(RunningOperations()) > 0 {
-		return usage, images, volumes, CleanupHeldBusy, nil
+	if reason := cleanupHeld(); reason != "" && !holding {
+		return usage, images, volumes, ErrCleanupHeld{Reason: reason}, nil
 	}
 	protection, err := appsProtection(ctx)
 	if err != nil {
-		return usage, images, volumes, CleanupHeldUnreadable, nil //nolint:nilerr // told as held, the report still stands
+		// said in the log and in the report: one file that does not load holds
+		// everything, and its name is the only way to mend it
+		logger.Error("cleanup: what an app claims cannot be read, nothing is offered", zap.Error(err))
+
+		return usage, images, volumes, ErrCleanupHeld{Reason: CleanupHeldUnreadable, Detail: err.Error()}, nil
 	}
 
-	return usage, leftoverImages(usage.Images, protection), leftoverVolumes(usage, protection), "", nil
+	return usage, leftoverImages(usage.Images, protection), leftoverVolumes(usage, protection), held, nil
 }
 
 // DockerCleanup reports what a cleanup could free, and frees nothing.
@@ -307,17 +347,22 @@ func DockerCleanup(ctx context.Context) (*codegen.DockerCleanup, error) {
 }
 
 func dockerCleanup(ctx context.Context, cli cleanupDaemon) (*codegen.DockerCleanup, error) {
-	usage, images, volumes, held, err := leftovers(ctx, cli)
+	usage, images, volumes, held, err := leftovers(ctx, cli, false, dockertypes.ImageObject, dockertypes.VolumeObject, dockertypes.BuildCacheObject)
 	if err != nil {
 		return nil, err
 	}
 
-	return &codegen.DockerCleanup{
+	report := &codegen.DockerCleanup{
 		BuildCache: buildCacheSize(usage.BuildCache),
 		Images:     images,
 		Volumes:    volumes,
-		Held:       held,
-	}, nil
+		Held:       held.Reason,
+	}
+	if held.Detail != "" {
+		report.Detail = &held.Detail
+	}
+
+	return report, nil
 }
 
 // PruneBuildCache deletes the build cache no build uses and reports what the daemon freed.
@@ -331,7 +376,14 @@ func PruneBuildCache(ctx context.Context) (int64, error) {
 	return pruneBuildCache(ctx, cli)
 }
 
+// Held like the rest: a build that runs is about to use what this would delete.
 func pruneBuildCache(ctx context.Context, cli cleanupDaemon) (int64, error) {
+	end, err := beginCleanup()
+	if err != nil {
+		return 0, err
+	}
+	defer end()
+
 	report, err := cli.BuildCachePrune(ctx, build.CachePruneOptions{All: true})
 	if err != nil || report == nil {
 		return 0, err
@@ -354,12 +406,18 @@ func RemoveLeftoverImages(ctx context.Context, ids []string) (*codegen.CleanupRe
 // The list is decided again here, against what the daemon and the apps say now: what the
 // screen was drawn from may be minutes old, and an app may have been installed since.
 func removeLeftoverImages(ctx context.Context, cli cleanupDaemon, ids []string) (*codegen.CleanupResult, error) {
-	_, images, _, held, err := leftovers(ctx, cli)
+	end, err := beginCleanup()
 	if err != nil {
 		return nil, err
 	}
-	if held != "" {
-		return nil, ErrCleanupHeld{Reason: held}
+	defer end()
+
+	_, images, _, held, err := leftovers(ctx, cli, true, dockertypes.ImageObject)
+	if err != nil {
+		return nil, err
+	}
+	if held.Reason != "" {
+		return nil, held
 	}
 	offered := map[string]codegen.CleanupImage{}
 	for _, img := range images {
@@ -374,20 +432,33 @@ func removeLeftoverImages(ctx context.Context, cli cleanupDaemon, ids []string) 
 			continue
 		}
 		// By each of its names, never by id: an image with two names is refused by id
-		// unless forced, and nothing here forces. The last name takes the image with it.
+		// unless forced, and nothing here forces. The last name takes the image with it,
+		// which the daemon says with a Deleted line; without one the image is still
+		// there, under a name this did not know.
+		deleted, untagged := false, 0
 		var failed error
 		for _, tag := range img.Tags {
-			if _, err := cli.ImageRemove(ctx, tag, image.RemoveOptions{}); err != nil {
+			answers, err := cli.ImageRemove(ctx, tag, image.RemoveOptions{})
+			if err != nil {
 				failed = err
 				break
 			}
+			untagged++
+			for _, answer := range answers {
+				deleted = deleted || answer.Deleted != ""
+			}
 		}
-		if failed != nil {
+		switch {
+		case failed != nil && untagged > 0:
+			result.Refused[id] = fmt.Sprintf("%s (%d of its names were removed)", failed, untagged)
+		case failed != nil:
 			result.Refused[id] = failed.Error()
-			continue
+		case !deleted:
+			result.Refused[id] = "its names were removed, the image is still referenced"
+		default:
+			result.Removed = append(result.Removed, id)
+			result.Size += img.Size
 		}
-		result.Removed = append(result.Removed, id)
-		result.Size += img.Size
 	}
 
 	return result, nil
@@ -405,12 +476,18 @@ func RemoveLeftoverVolumes(ctx context.Context, names []string) (*codegen.Cleanu
 }
 
 func removeLeftoverVolumes(ctx context.Context, cli cleanupDaemon, names []string) (*codegen.CleanupResult, error) {
-	_, _, volumes, held, err := leftovers(ctx, cli)
+	end, err := beginCleanup()
 	if err != nil {
 		return nil, err
 	}
-	if held != "" {
-		return nil, ErrCleanupHeld{Reason: held}
+	defer end()
+
+	_, _, volumes, held, err := leftovers(ctx, cli, true, dockertypes.VolumeObject)
+	if err != nil {
+		return nil, err
+	}
+	if held.Reason != "" {
+		return nil, held
 	}
 	offered := map[string]codegen.CleanupVolume{}
 	for _, volume := range volumes {

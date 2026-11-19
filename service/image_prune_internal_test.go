@@ -2,10 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"gotest.tools/v3/assert"
 )
 
 // The figure the dashboard shows before asking "reclaim 4.2 GB?". A dangling image is
@@ -30,48 +31,89 @@ func TestReclaimableSizeCountsOnlyUniqueBytes(t *testing.T) {
 	}
 }
 
-// fakeImageDaemon records the filter it was handed, which is the only thing standing
-// between a prune and the image of every stopped app on the host.
-type fakeImageDaemon struct {
-	listed filters.Args
-	pruned filters.Args
+// aBoxWithOldVersions is aBox whose daemon lists two dangling images: what an update of
+// Jellyfin left, and the image Jellyfin pins by its digest, which has no tag either.
+func aBoxWithOldVersions(t *testing.T) *fakeCleanupDaemon {
+	t.Helper()
+	daemon := aBox(t)
+	daemon.dangling = []image.Summary{
+		{ID: "left", RepoDigests: []string{"linuxserver/jellyfin@sha256:" + otherSha}, Size: 300},
+		{ID: "pinned", RepoDigests: []string{"postgres@sha256:" + sha}, Size: 200},
+	}
+
+	return daemon
 }
 
-func (d *fakeImageDaemon) ImageList(_ context.Context, options image.ListOptions) ([]image.Summary, error) {
-	d.listed = options.Filters
-
-	return nil, nil
-}
-
-func (d *fakeImageDaemon) ImagesPrune(_ context.Context, pruneFilter filters.Args) (image.PruneReport, error) {
-	d.pruned = pruneFilter
-
-	return image.PruneReport{}, nil
-}
+const otherSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 // Deleting the image of every stopped app is the one thing these two must never do, and
-// "prune everything unused" is spelled dangling=false -- or an empty filter, which is
-// the same thing with nothing to notice. What reaches the daemon is what matters, so
-// this reads the filter back off the call rather than off the helper that builds it.
-func TestPruneFilterIsDanglingTrue(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		call func(*fakeImageDaemon) filters.Args
-	}{
-		{"estimating", func(d *fakeImageDaemon) filters.Args {
-			_, _ = danglingImages(context.Background(), d)
+// "prune everything unused" is spelled dangling=false, or an empty filter, which is the
+// same thing with nothing to notice. What reaches the daemon is what matters, so this
+// reads the filter back off the call.
+func TestOldVersionsAreAskedOfTheDaemonAsDanglingOnly(t *testing.T) {
+	daemon := aBoxWithOldVersions(t)
 
-			return d.listed
-		}},
-		{"pruning", func(d *fakeImageDaemon) filters.Args {
-			_, _ = pruneDanglingImages(context.Background(), d)
+	_, err := danglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, daemon.listed.Get("dangling"), []string{"true"})
 
-			return d.pruned
-		}},
-	} {
-		got := c.call(&fakeImageDaemon{}).Get("dangling")
-		if len(got) != 1 || got[0] != "true" {
-			t.Errorf("%s: filter given to the daemon is %v, want [true]", c.name, got)
-		}
+	daemon.listed = danglingOnly()
+	_, err = pruneDanglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.DeepEqual(t, daemon.listed.Get("dangling"), []string{"true"})
+}
+
+// An image an app pins by digest has no tag on a daemon that keeps images the classic
+// way: Docker calls it dangling, and it is the app's.
+func TestAnImageAnAppPinsByDigestIsNotAnOldVersion(t *testing.T) {
+	daemon := aBoxWithOldVersions(t)
+
+	report, err := danglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.Equal(t, report.Count, 1)
+	assert.Equal(t, report.Size, int64(300))
+
+	freed, err := pruneDanglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.Equal(t, freed.Count, 1)
+	// by id, the pinned one never asked for, nothing forced
+	assert.DeepEqual(t, daemon.images, []string{"left"})
+	assert.Assert(t, !daemon.forced)
+}
+
+func TestAnOldVersionTheDaemonRefusesIsNotCountedAsFreed(t *testing.T) {
+	daemon := aBoxWithOldVersions(t)
+	daemon.refuse = map[string]error{"left": errors.New("conflict: image is being used")}
+
+	freed, err := pruneDanglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.Equal(t, freed.Count, 0)
+	assert.Equal(t, freed.Size, int64(0))
+}
+
+// While an operation runs, or when an app cannot be read, the old versions say nothing
+// to free and free nothing.
+func TestOldVersionsAreHeldLikeTheRest(t *testing.T) {
+	daemon := aBoxWithOldVersions(t)
+	end, err := Begin("jellyfin", "update")
+	assert.NilError(t, err)
+
+	report, err := danglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.Equal(t, report.Count, 0)
+	_, err = pruneDanglingImages(context.Background(), daemon)
+	assert.ErrorIs(t, err, ErrCleanupHeld{Reason: CleanupHeldBusy})
+	end()
+
+	appsProtection = func(context.Context) (cleanupProtection, error) {
+		return cleanupProtection{}, errors.New("compose file of `odd`: yaml")
 	}
+	report, err = danglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.Equal(t, report.Count, 0)
+	_, err = pruneDanglingImages(context.Background(), daemon)
+	var held ErrCleanupHeld
+	assert.Assert(t, errors.As(err, &held))
+	assert.Equal(t, held.Reason, CleanupHeldUnreadable)
+	assert.Equal(t, len(daemon.images), 0)
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
@@ -13,6 +15,7 @@ import (
 	"github.com/docker/compose/v5/pkg/api"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/build"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/volume"
 	"gotest.tools/v3/assert"
@@ -156,7 +159,14 @@ func TestBuildCacheSizeCountsWhatNoBuildUses(t *testing.T) {
 // fakeCleanupDaemon answers a disk usage and records what it was asked to delete: what
 // reaches the daemon is the proof, not the list the screen showed.
 type fakeCleanupDaemon struct {
-	usage   dockertypes.DiskUsage
+	usage dockertypes.DiskUsage
+	// what DiskUsage was asked to measure
+	kinds []dockertypes.DiskUsageObject
+	// the dangling images, and the filter ImageList was handed
+	dangling []image.Summary
+	listed   filters.Args
+	// names that are removed without the image going: another name still points at it
+	lingers map[string]bool
 	images  []string
 	forced  bool
 	volumes []string
@@ -164,8 +174,16 @@ type fakeCleanupDaemon struct {
 	refuse  map[string]error
 }
 
-func (d *fakeCleanupDaemon) DiskUsage(context.Context, dockertypes.DiskUsageOptions) (dockertypes.DiskUsage, error) {
+func (d *fakeCleanupDaemon) DiskUsage(_ context.Context, options dockertypes.DiskUsageOptions) (dockertypes.DiskUsage, error) {
+	d.kinds = options.Types
+
 	return d.usage, nil
+}
+
+func (d *fakeCleanupDaemon) ImageList(_ context.Context, options image.ListOptions) ([]image.Summary, error) {
+	d.listed = options.Filters
+
+	return d.dangling, nil
 }
 
 func (d *fakeCleanupDaemon) ImageRemove(_ context.Context, ref string, options image.RemoveOptions) ([]image.DeleteResponse, error) {
@@ -174,8 +192,11 @@ func (d *fakeCleanupDaemon) ImageRemove(_ context.Context, ref string, options i
 		return nil, err
 	}
 	d.images = append(d.images, ref)
+	if d.lingers[ref] {
+		return []image.DeleteResponse{{Untagged: ref}}, nil
+	}
 
-	return nil, nil
+	return []image.DeleteResponse{{Untagged: ref}, {Deleted: "sha256:gone"}}, nil
 }
 
 func (d *fakeCleanupDaemon) VolumeRemove(_ context.Context, name string, force bool) error {
@@ -290,9 +311,92 @@ func TestNothingIsOfferedOrDeletedWhenAnAppCannotBeRead(t *testing.T) {
 	assert.Equal(t, report.Held, CleanupHeldUnreadable)
 	assert.Equal(t, len(report.Images)+len(report.Volumes), 0)
 
+	// the report names what could not be read: it is the only way to mend it
+	assert.Assert(t, report.Detail != nil && strings.Contains(*report.Detail, "odd"), "%v", report.Detail)
+
 	_, err = removeLeftoverVolumes(context.Background(), daemon, []string{"scratch"})
-	assert.ErrorIs(t, err, ErrCleanupHeld{Reason: CleanupHeldUnreadable})
+	var held ErrCleanupHeld
+	assert.Assert(t, errors.As(err, &held))
+	assert.Equal(t, held.Reason, CleanupHeldUnreadable)
 	assert.Equal(t, len(daemon.volumes), 0)
+}
+
+// Between the moment a cleanup reads what the apps claim and the moment it deletes, an
+// install of an app would take a volume back: until the cleanup ends, no operation starts.
+func TestNoOperationStartsWhileACleanupRuns(t *testing.T) {
+	end, err := beginCleanup()
+	assert.NilError(t, err)
+
+	_, err = Begin("immich", "install")
+	var busy ErrAppBusy
+	assert.Assert(t, errors.As(err, &busy))
+	assert.Equal(t, busy.Running, "cleanup")
+	// and a second cleanup waits for the first
+	_, err = beginCleanup()
+	assert.ErrorIs(t, err, ErrCleanupHeld{Reason: CleanupHeldBusy})
+
+	end()
+	done, err := Begin("immich", "install")
+	assert.NilError(t, err)
+	done()
+}
+
+// The move of the data of Docker counts the images before and after, with Docker stopped
+// in between.
+func TestNothingIsDeletedWhileTheDataOfDockerIsMoved(t *testing.T) {
+	daemon := aBox(t)
+	was := DockerMoveBusy
+	DockerMoveBusy = func() bool { return true }
+	t.Cleanup(func() { DockerMoveBusy = was })
+
+	report, err := dockerCleanup(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.Equal(t, report.Held, CleanupHeldBusy)
+
+	_, err = removeLeftoverImages(context.Background(), daemon, []string{"old"})
+	assert.ErrorIs(t, err, ErrCleanupHeld{Reason: CleanupHeldBusy})
+	_, err = pruneBuildCache(context.Background(), daemon)
+	assert.ErrorIs(t, err, ErrCleanupHeld{Reason: CleanupHeldBusy})
+	assert.Equal(t, len(daemon.images), 0)
+	assert.Assert(t, daemon.pruned == nil)
+}
+
+// A build that runs is about to use the cache.
+func TestTheBuildCacheIsKeptWhileAnOperationRuns(t *testing.T) {
+	daemon := &fakeCleanupDaemon{}
+	end, err := Begin("myapp", "deploy")
+	assert.NilError(t, err)
+	defer end()
+
+	_, err = pruneBuildCache(context.Background(), daemon)
+	assert.ErrorIs(t, err, ErrCleanupHeld{Reason: CleanupHeldBusy})
+	assert.Assert(t, daemon.pruned == nil)
+}
+
+// An image another repository still names by digest loses its names and stays: it was
+// not freed, and saying so beats a figure that is wrong.
+func TestAnImageThatLingersIsNotCountedAsFreed(t *testing.T) {
+	daemon := aBox(t)
+	daemon.lingers = map[string]bool{"jf:old": true, "linuxserver/jellyfin:10.8": true}
+
+	images, err := removeLeftoverImages(context.Background(), daemon, []string{"old"})
+	assert.NilError(t, err)
+	assert.Equal(t, len(images.Removed), 0)
+	assert.Equal(t, images.Size, int64(0))
+	assert.Assert(t, strings.Contains(images.Refused["old"], "still referenced"), images.Refused["old"])
+}
+
+// Measuring every volume walks its files: a deletion of images does not ask for it.
+func TestADeletionMeasuresOnlyWhatItDeletes(t *testing.T) {
+	daemon := aBox(t)
+
+	_, err := removeLeftoverImages(context.Background(), daemon, []string{"old"})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, daemon.kinds, []dockertypes.DiskUsageObject{dockertypes.ImageObject})
+
+	_, err = removeLeftoverVolumes(context.Background(), daemon, []string{"scratch"})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, daemon.kinds, []dockertypes.DiskUsageObject{dockertypes.VolumeObject})
 }
 
 func TestTheBuildCachePruneTakesAllOfItAndSaysWhatWasFreed(t *testing.T) {
@@ -309,10 +413,11 @@ func TestTheBuildCachePruneTakesAllOfItAndSaysWhatWasFreed(t *testing.T) {
 func appFolders(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	wasPath, wasStacks := config.AppInfo.AppsPath, ListComposeStacks
+	wasPath, wasStacks, wasGit := config.AppInfo.AppsPath, ListComposeStacks, gitAppsDir
 	config.AppInfo.AppsPath = root
+	gitAppsDir = filepath.Join(t.TempDir(), "git_apps")
 	ListComposeStacks = func(context.Context) ([]api.Stack, error) { return nil, nil }
-	t.Cleanup(func() { config.AppInfo.AppsPath, ListComposeStacks = wasPath, wasStacks })
+	t.Cleanup(func() { config.AppInfo.AppsPath, ListComposeStacks, gitAppsDir = wasPath, wasStacks, wasGit })
 
 	return root
 }
@@ -358,4 +463,38 @@ func TestAComposeFileThatDoesNotLoadIsAnError(t *testing.T) {
 
 	_, err := appsProtection(context.Background())
 	assert.ErrorContains(t, err, "odd")
+}
+
+// With no folder of apps at all, every image would belong to nobody.
+func TestAMissingAppsFolderIsAnError(t *testing.T) {
+	root := appFolders(t)
+	config.AppInfo.AppsPath = filepath.Join(root, "gone")
+
+	_, err := appsProtection(context.Background())
+	assert.Assert(t, err != nil)
+}
+
+// An app built from a repository keeps its compose file in its clone, not among the apps.
+func TestAnAppBuiltFromARepositoryClaimsWhatItsCloneDeclares(t *testing.T) {
+	appFolders(t)
+	clone := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(clone, "docker-compose.yml"), []byte(`name: myapp
+services:
+  web:
+    build: .
+    volumes:
+      - data:/data
+volumes:
+  data:
+`), 0o600))
+	assert.NilError(t, os.MkdirAll(gitAppsDir, 0o755))
+	assert.NilError(t, os.WriteFile(filepath.Join(gitAppsDir, "myapp.json"), []byte(`{"name":"myapp","dir":`+strconv.Quote(clone)+`}`), 0o600))
+
+	protection, err := appsProtection(context.Background())
+	assert.NilError(t, err)
+
+	_, owned := protection.Projects["myapp"]
+	assert.Assert(t, owned)
+	_, declared := protection.Volumes["myapp_data"]
+	assert.Assert(t, declared, "%v", protection.Volumes)
 }

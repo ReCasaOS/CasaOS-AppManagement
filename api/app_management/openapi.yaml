@@ -1868,12 +1868,18 @@ paths:
         garbage, and a wider prune would delete its image and leave it unable to start
         again without a re-pull; the restriction is in the path so no parameter can
         widen it.
+
+        An image an installed app names by its digest is left alone, tag or no tag.
+        Refused with 409 while an operation runs on an app, or while what an app claims
+        cannot be read.
       operationId: pruneDanglingImages
       tags:
         - Image methods
       responses:
         "200":
           $ref: "#/components/responses/DanglingImagesOK"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -1917,6 +1923,8 @@ paths:
           $ref: "#/components/responses/CleanupResultOK"
         "403":
           $ref: "#/components/responses/ResponseForbidden"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -5449,6 +5457,9 @@ components:
           description: |-
             Why no image and no volume is listed: `busy` while an operation runs on an
             app, `unreadable` when what an app claims cannot be read. Empty otherwise.
+          type: string
+        detail:
+          description: With `unreadable`, what could not be read, naming the app.
           type: string
 
     CleanupImage:

@@ -35,6 +35,8 @@ var appOperations = struct {
 	running map[string]string
 	// marked is what runs on an app without holding it: see markInProgress
 	marked map[string][]string
+	// cleaning is set while a cleanup decides what is nobody's and deletes it: see beginCleanup
+	cleaning bool
 }{running: map[string]string{}, marked: map[string][]string{}}
 
 // Begin claims app for an operation of the given kind, or refuses with ErrAppBusy. end
@@ -45,6 +47,9 @@ func Begin(app, kind string) (end func(), err error) {
 
 	if running, ok := appOperations.running[app]; ok {
 		return nil, ErrAppBusy{App: app, Running: running}
+	}
+	if appOperations.cleaning {
+		return nil, ErrAppBusy{App: app, Running: "cleanup"}
 	}
 	appOperations.running[app] = kind
 
@@ -91,6 +96,56 @@ func markInProgress(app, kind string) (done func()) {
 		})
 	}
 }
+
+// beginCleanup claims the whole box for a cleanup, or refuses while anything runs on an
+// app. Until end, Begin refuses every app: an install that started between the moment a
+// cleanup read what the apps claim and the moment it deletes would lose the volume it was
+// about to take back. end releases; calling it more than once is harmless.
+func beginCleanup() (end func(), err error) {
+	if DockerMoveBusy() {
+		return nil, ErrCleanupHeld{Reason: CleanupHeldBusy}
+	}
+
+	appOperations.Lock()
+	defer appOperations.Unlock()
+
+	if appOperations.cleaning || len(appOperations.running)+len(appOperations.marked) > 0 {
+		return nil, ErrCleanupHeld{Reason: CleanupHeldBusy}
+	}
+	appOperations.cleaning = true
+
+	var once sync.Once
+
+	return func() {
+		once.Do(func() {
+			appOperations.Lock()
+			defer appOperations.Unlock()
+			appOperations.cleaning = false
+		})
+	}, nil
+}
+
+// cleanupHeld is CleanupHeldBusy while something runs that a cleanup must not cross, and
+// empty otherwise. It claims nothing: a report reads it, a deletion calls beginCleanup.
+func cleanupHeld() string {
+	if DockerMoveBusy() {
+		return CleanupHeldBusy
+	}
+
+	appOperations.Lock()
+	defer appOperations.Unlock()
+
+	if appOperations.cleaning || len(appOperations.running)+len(appOperations.marked) > 0 {
+		return CleanupHeldBusy
+	}
+
+	return ""
+}
+
+// DockerMoveBusy says whether Docker's data is being moved to another place. The move
+// counts the images before and after, and stops Docker in between: nothing is deleted
+// while it runs. The route that owns the mover sets it.
+var DockerMoveBusy = func() bool { return false }
 
 // AppOperation is one app something runs on, and the kind of operation it is.
 type AppOperation struct {

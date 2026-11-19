@@ -34,6 +34,9 @@ func (a *AppManagement) PruneBuildCache(ctx echo.Context) error {
 		return forbidden(ctx)
 	}
 	freed, err := service.PruneBuildCache(ctx.Request().Context())
+	if held, refused := cleanupRefused(ctx, err); refused {
+		return held
+	}
 	if err != nil {
 		message := err.Error()
 		logger.Error("failed to prune the build cache", zap.Error(err))
@@ -67,10 +70,8 @@ func removeLeftovers(ctx echo.Context, what string, remove func(context.Context,
 	}
 
 	result, err := remove(ctx.Request().Context(), selection.Names)
-	var held service.ErrCleanupHeld
-	if errors.As(err, &held) {
-		message := held.Reason
-		return ctx.JSON(http.StatusConflict, codegen.ResponseConflict{Message: &message})
+	if held, refused := cleanupRefused(ctx, err); refused {
+		return held
 	}
 	if err != nil {
 		message := err.Error()
@@ -80,4 +81,16 @@ func removeLeftovers(ctx echo.Context, what string, remove func(context.Context,
 	logger.Info("deleted leftovers", zap.String("what", what), zap.Strings("removed", result.Removed), zap.Int64("bytes", result.Size))
 
 	return ctx.JSON(http.StatusOK, codegen.CleanupResultOK{Data: result})
+}
+
+// cleanupRefused answers 409 for a cleanup that is held, with why; refused is false for
+// any other error, and for none.
+func cleanupRefused(ctx echo.Context, err error) (answer error, refused bool) {
+	var held service.ErrCleanupHeld
+	if !errors.As(err, &held) {
+		return nil, false
+	}
+	message := held.Error()
+
+	return ctx.JSON(http.StatusConflict, codegen.ResponseConflict{Message: &message}), true
 }
