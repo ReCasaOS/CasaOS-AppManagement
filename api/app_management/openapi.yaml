@@ -32,6 +32,10 @@ tags:
     description: |-
       methods for managing container app images
 
+  - name: Cleanup methods
+    description: |-
+      methods for freeing the disk of what apps left behind
+
   - name: Git methods
     description: |-
       methods for apps deployed from their git repository
@@ -1864,12 +1868,112 @@ paths:
         garbage, and a wider prune would delete its image and leave it unable to start
         again without a re-pull; the restriction is in the path so no parameter can
         widen it.
+
+        An image an installed app names by its digest is left alone, tag or no tag.
+        Refused with 409 while an operation runs on an app, or while what an app claims
+        cannot be read.
       operationId: pruneDanglingImages
       tags:
         - Image methods
       responses:
         "200":
           $ref: "#/components/responses/DanglingImagesOK"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup:
+    get:
+      summary: Report what apps left behind on the disk
+      description: |
+        The build cache, and the images and volumes that no container holds and no
+        installed app claims. Read-only. Dangling images are reported by
+        `/images/dangling`.
+
+        An installed app is one Docker Compose knows or one with a folder among the
+        apps, whether or not a container of it exists: a stopped app, or one between
+        the two halves of an update, keeps its images and its data. When this cannot be
+        told (an operation runs on an app, or a compose file does not load), `held`
+        says why and no image or volume is listed.
+
+        The owner's only.
+      operationId: dockerCleanup
+      tags:
+        - Cleanup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/DockerCleanupOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup/build-cache:
+    delete:
+      summary: Delete the build cache
+      description: |
+        Deletes what builds left to go faster next time. No app's data is in it; the
+        next build of an app from a repository is slower. The owner's only.
+      operationId: pruneBuildCache
+      tags:
+        - Cleanup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupResultOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup/images:
+    post:
+      summary: Delete leftover images
+      description: |
+        Deletes the images listed that are still leftovers when the request runs: the
+        list is decided again, and an image that is in use or claimed by then is
+        refused, with the reason. The body can only narrow what `get /cleanup` lists.
+        Nothing is forced. The owner's only.
+      operationId: removeLeftoverImages
+      tags:
+        - Cleanup methods
+      requestBody:
+        $ref: "#/components/requestBodies/CleanupSelection"
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupResultOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup/volumes:
+    post:
+      summary: Delete leftover volumes
+      description: |
+        Deletes the volumes listed that are still leftovers when the request runs,
+        decided again like the images. A volume holds data and this cannot be undone.
+        Nothing is forced. The owner's only.
+      operationId: removeLeftoverVolumes
+      tags:
+        - Cleanup methods
+      requestBody:
+        $ref: "#/components/requestBodies/CleanupSelection"
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupResultOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -2929,6 +3033,20 @@ components:
         format: date-time
 
   requestBodies:
+    CleanupSelection:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [names]
+            properties:
+              names:
+                description: Image ids or volume names, as `get /cleanup` lists them.
+                type: array
+                items:
+                  type: string
+
     RequestGitAppCreate:
       required: true
       content:
@@ -3791,6 +3909,28 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/BaseResponse"
+
+    DockerCleanupOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/DockerCleanup"
+
+    CleanupResultOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/CleanupResult"
 
     DanglingImagesOK:
       description: OK
@@ -5296,6 +5436,86 @@ components:
         - AuthorTypeByCasaOS
         - AuthorTypeCommunity
         - AuthorTypeUnknown
+
+    DockerCleanup:
+      description: What a cleanup could free.
+      required: [build_cache, images, volumes, held]
+      properties:
+        build_cache:
+          description: Bytes of build cache no build uses.
+          type: integer
+          format: int64
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupImage"
+        volumes:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupVolume"
+        held:
+          description: |-
+            Why no image and no volume is listed: `busy` while an operation runs on an
+            app, `unreadable` when what an app claims cannot be read. Empty otherwise.
+          type: string
+        detail:
+          description: With `unreadable`, what could not be read, naming the app.
+          type: string
+
+    CleanupImage:
+      description: An image no container holds and no installed app names.
+      required: [id, tags, size, created]
+      properties:
+        id:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["nginx:1.26"]
+        size:
+          description: Bytes it does not share with another image.
+          type: integer
+          format: int64
+        created:
+          description: When the image was built, in seconds since 1970.
+          type: integer
+          format: int64
+
+    CleanupVolume:
+      description: A volume no container holds and no installed app owns.
+      required: [name, size]
+      properties:
+        name:
+          type: string
+        size:
+          description: Bytes, or -1 when its driver cannot measure it.
+          type: integer
+          format: int64
+        app:
+          description: The compose project that made it, when Docker kept its name.
+          type: string
+        created:
+          type: string
+          format: date-time
+
+    CleanupResult:
+      description: What a cleanup did.
+      required: [removed, refused, size]
+      properties:
+        removed:
+          type: array
+          items:
+            type: string
+        refused:
+          description: What was asked for and kept, with the reason.
+          type: object
+          additionalProperties:
+            type: string
+        size:
+          description: Bytes freed.
+          type: integer
+          format: int64
 
     DanglingImages:
       description: |

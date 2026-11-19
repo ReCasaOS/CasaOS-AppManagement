@@ -260,6 +260,9 @@ func (m *Mover) State() State {
 	return s
 }
 
+// Busy reports whether a move is under way, for what must not run across one.
+func (s State) Busy() bool { return s.busy() }
+
 // busy reports whether a move is under way.
 func (s State) busy() bool {
 	return s.Phase != PhaseIdle && s.Phase != PhaseDone && s.Phase != PhaseFailed && s.Phase != ""
