@@ -4401,7 +4401,7 @@ components:
           readOnly: true
           description: |-
             The worst health check among the running containers: unhealthy, starting or
-            healthy. Absent when none of them has a check.
+            healthy. Absent when none of them has a check. Filled in the lists of apps only.
           example: healthy
         update_available:
           readOnly: true
@@ -5983,7 +5983,7 @@ components:
           type: string
           description: |-
             The worst health check among the running containers: unhealthy, starting or
-            healthy. Absent when none of them has a check.
+            healthy. Absent when none of them has a check. Filled in the lists of apps only.
           example: healthy
         name:
           type: string

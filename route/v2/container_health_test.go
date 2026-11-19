@@ -91,6 +91,20 @@ func TestDescribeHealthJoinsAnExecCommand(t *testing.T) {
 	inspected.Config.Healthcheck.Test = []string{"CMD", "curl", "-f", "http://localhost/"}
 
 	assert.Equal(t, *describeHealth(true, inspected).Command, "curl -f http://localhost/")
+
+	// an argument that holds a space keeps its quotes, or this would read as two commands
+	inspected.Config.Healthcheck.Test = []string{"CMD", "sh", "-c", "curl -f x || exit 1"}
+	assert.Equal(t, *describeHealth(true, inspected).Command, `sh -c "curl -f x || exit 1"`)
+}
+
+func TestDescribeHealthRoundsAShortIntervalUp(t *testing.T) {
+	inspected := inspectedWithCheck()
+	inspected.Config.Healthcheck.Interval = 500 * time.Millisecond
+	inspected.Config.Healthcheck.Timeout = 1500 * time.Millisecond
+
+	health := describeHealth(true, inspected)
+	assert.Equal(t, *health.Interval, 1)
+	assert.Equal(t, *health.Timeout, 2)
 }
 
 // compose fills a check's command from .env, and its output is whatever the command
@@ -109,6 +123,7 @@ func TestDescribeHealthKeepsTheCommandAndItsOutputFromOtherAccounts(t *testing.T
 func TestDescribeHealthOfAContainerWithNoCheck(t *testing.T) {
 	for name, inspected := range map[string]*types.ContainerJSON{
 		"nothing known": nil,
+		"an answer with no state": {Config: &dockercontainer.Config{Healthcheck: &dockercontainer.HealthConfig{Test: []string{"NONE"}}}},
 		"no check declared": {
 			ContainerJSONBase: &types.ContainerJSONBase{State: &dockercontainer.State{Status: "running"}},
 			Config:            &dockercontainer.Config{},

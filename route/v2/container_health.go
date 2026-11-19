@@ -3,6 +3,7 @@ package v2
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,13 +53,34 @@ const (
 	defaultHealthRetries  = 3
 )
 
+// commandLine is a check's command as one line. The first word of Test says its form:
+// CMD-SHELL carries one string, read as it is; CMD carries the arguments one by one, and
+// one that holds a space is quoted, or `sh -c "a || b"` would read as two commands.
+func commandLine(test []string) string {
+	if len(test) < 2 {
+		return ""
+	}
+	if test[0] != "CMD" {
+		return strings.Join(test[1:], " ")
+	}
+	words := make([]string, 0, len(test)-1)
+	for _, word := range test[1:] {
+		if word == "" || strings.ContainsAny(word, " 	\"") {
+			word = strconv.Quote(word)
+		}
+		words = append(words, word)
+	}
+
+	return strings.Join(words, " ")
+}
+
 // describeHealth is the container's check and its last runs, newest first. The command
 // and what it printed are emptied unless owner: compose fills a command from .env, and a
 // command prints what it likes.
 func describeHealth(owner bool, inspected *types.ContainerJSON) codegen.ContainerHealth {
 	status, command, runs := "", "", []codegen.ContainerHealthRun{}
 	health := codegen.ContainerHealth{Status: &status, Command: &command, Checks: &runs}
-	if inspected == nil || inspected.Config == nil {
+	if inspected == nil || inspected.ContainerJSONBase == nil || inspected.Config == nil {
 		return health
 	}
 
@@ -67,7 +89,7 @@ func describeHealth(owner bool, inspected *types.ContainerJSON) codegen.Containe
 		return health
 	}
 	if owner {
-		command = strings.Join(check.Test[1:], " ") // the first word is CMD or CMD-SHELL
+		command = commandLine(check.Test)
 	}
 
 	seconds := func(d, unset time.Duration) *int {
@@ -75,7 +97,8 @@ func describeHealth(owner bool, inspected *types.ContainerJSON) codegen.Containe
 			d = unset
 		}
 
-		return utils.Ptr(int(d / time.Second))
+		// rounded up: a check every 500 ms is not a check every 0 s
+		return utils.Ptr(int((d + time.Second - 1) / time.Second))
 	}
 	health.Interval = seconds(check.Interval, defaultHealthInterval)
 	health.Timeout = seconds(check.Timeout, defaultHealthTimeout)
