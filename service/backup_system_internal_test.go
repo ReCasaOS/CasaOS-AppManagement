@@ -104,6 +104,7 @@ func TestAServiceThatWillNotStopMeansNoCopyAndTheOthersComeBack(t *testing.T) {
 // services for it, and restarts rclone last when its configuration came back.
 func TestABoxRestoreUsesThisBoxesPathsAndRestartsRcloneLast(t *testing.T) {
 	logInTempDir(t)
+	atTheDefaultDataRoot(t)
 
 	// a manifest as another box wrote it, with its own idea of where things were
 	manifest := PlanBackup(SystemBackupName, systemLegacyEntries(func(string) bool { return true }), nil)
@@ -159,6 +160,7 @@ func TestABackupOfAnAppIsNotPouredIntoTheBox(t *testing.T) {
 // to its own path, whatever number the copy landed under.
 func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *testing.T) {
 	logInTempDir(t)
+	atTheDefaultDataRoot(t)
 
 	// taken on a box with no Samba config: seven parts, numbered 1..7
 	present := func(p string) bool { return p != "/etc/samba/smb.casa.conf" }
@@ -189,5 +191,107 @@ func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *test
 		if strings.HasSuffix(call.host, "rclone.conf") && call.kind != "file" {
 			t.Fatalf("a file comes back as a file: %+v", call)
 		}
+	}
+}
+
+// atTheDefaultDataRoot puts the data folder where the manifests under test say it is:
+// a restore only writes inside the box, so where the box is matters.
+func atTheDefaultDataRoot(t *testing.T) {
+	t.Helper()
+
+	was := systemDataRoot
+	systemDataRoot = "/var/lib/casaos"
+	t.Cleanup(func() { systemDataRoot = was })
+}
+
+func TestARestoreRefusesWhatIsNotTheBox(t *testing.T) {
+	atTheDefaultDataRoot(t)
+
+	for target, want := range map[string]bool{
+		"/etc/casaos": true, "/var/lib/casaos/db": true, "/var/lib/casaos/fleet": true, "/var/lib/casaos/tls": true,
+		"/var/lib/casaos/backups/schedules.json": true, "/var/lib/casaos/backups/sync.json": true,
+		"/var/lib/casaos/gateway/routes.json": true, "/root/.config/rclone/rclone.conf": true,
+		"/etc/samba/smb.casa.conf": true,
+		"/var/lib/casaos":          false, "/var/lib/casaos/backups": false, "/var/lib/casaos/gateway": false,
+		"/var/lib/casaos/gateway/guard-state.json": false, "/var/lib/casaos/apps": false, "/var/lib/casaos/apps/x": false,
+		"/var/lib/casaos/backups/restic": false, "/var/lib/casaos/backups/restic/password": false,
+		"/var/lib/casaos/../../etc/passwd": false, "/var/lib/casaos/db/": false, "var/lib/casaos/db": false,
+		"/etc/passwd": false, "/etc/casaos/../passwd": false, "/var/lib/casaosx/db": false, "": false,
+	} {
+		if got := systemRestorable(target); got != want {
+			t.Errorf("%q: got %v, want %v", target, got, want)
+		}
+	}
+}
+
+func manifestOf(targets ...string) []byte {
+	manifest := BackupManifest{FormatVersion: BackupFormatVersion, App: SystemBackupName}
+	for i, target := range targets {
+		manifest.Operations = append(manifest.Operations, BackupOperation{
+			Kind: BackupKindBind, Source: "/elsewhere" + target, Target: target,
+			Destination: "binds/" + string(rune('1'+i)), Directory: true,
+		})
+	}
+	raw, _ := stdjson.Marshal(manifest)
+
+	return raw
+}
+
+// The manifest comes from a destination, so from outside: it says what to put
+// back, this box says where it may go.
+func TestABoxRestoreFollowsTheManifestAndReportsWhatItRefused(t *testing.T) {
+	logInTempDir(t)
+	atTheDefaultDataRoot(t)
+
+	raw := manifestOf("/var/lib/casaos/fleet", "/var/lib/casaos/never-heard-of.json", "/etc/passwd", "/var/lib/casaos/backups/restic")
+	restorer := &fakeRestorer{files: map[string][]byte{path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw}}
+
+	report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Restored) != 2 || report.Restored[0].Source != "/var/lib/casaos/fleet" || report.Restored[1].Source != "/var/lib/casaos/never-heard-of.json" {
+		t.Fatalf("the two that belong to the box, at their targets, in manifest order: %+v", report.Restored)
+	}
+	if len(report.Missing) != 2 || report.Missing[0].Target != "/etc/passwd" || report.Missing[1].Target != "/var/lib/casaos/backups/restic" {
+		t.Fatalf("the others are refused and said so: %+v", report.Missing)
+	}
+	if len(restorer.restored) != 2 {
+		t.Fatalf("nothing is written for a refused target: %+v", restorer.restored)
+	}
+	for _, call := range restorer.restored {
+		if call.host == "/etc/passwd" || strings.HasPrefix(call.host, "/var/lib/casaos/backups") || strings.HasPrefix(call.host, "/elsewhere") {
+			t.Fatalf("written where it must not be: %+v", call)
+		}
+	}
+}
+
+func TestTheGatewayIsRestartedLastWhenItsFilesCameBack(t *testing.T) {
+	atTheDefaultDataRoot(t)
+
+	for _, tc := range []struct {
+		name    string
+		targets []string
+		want    string
+	}{
+		{"its folder's file", []string{"/root/.config/rclone/rclone.conf", "/var/lib/casaos/gateway/routes.json"}, "rclone,casaos-gateway"},
+		{"the certificates", []string{"/var/lib/casaos/tls"}, "casaos-gateway"},
+		{"neither", []string{"/var/lib/casaos/fleet", "/var/lib/casaos/gateway/guard-state.json"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logInTempDir(t)
+			atTheDefaultDataRoot(t)
+			restorer := &fakeRestorer{files: map[string][]byte{path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): manifestOf(tc.targets...)}}
+			units := &fakeUnits{}
+
+			if _, err := RestoreSystemBackup(context.Background(), restorer, units, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp}); err != nil {
+				t.Fatal(err)
+			}
+
+			if got := strings.Join(units.restarted, ","); got != tc.want {
+				t.Fatalf("restarted %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

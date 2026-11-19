@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
@@ -44,6 +45,21 @@ var systemUnits = []string{"casaos", "casaos-user-service", "casaos-local-storag
 
 // rcloneUnit holds the one file a restore changes under the daemon's feet.
 const rcloneUnit = "rclone"
+
+// gatewayUnit serves the certificates and routes a restore may have replaced.
+const gatewayUnit = "casaos-gateway"
+
+// servedByGateway is whether a restored target is the gateway's, so that it must
+// be restarted.
+func servedByGateway(target string) bool {
+	for _, folder := range []string{"tls", "gateway"} {
+		if dir := path.Join(systemDataRoot, folder); target == dir || strings.HasPrefix(target, dir+"/") {
+			return true
+		}
+	}
+
+	return false
+}
 
 // unitControl starts and stops services; a seam so a test does not touch systemd.
 type unitControl interface {
@@ -189,10 +205,14 @@ type SystemRestoreOptions struct {
 
 // RestoreSystemBackup puts the box's own state back the way the backup had it.
 //
-// Where things go is this box's list, never the manifest's paths, as with an
-// app. The services holding the files are stopped for the copy and started
-// again whatever happens; rclone is restarted last, after everything has been
-// copied through it, if its configuration was among what came back.
+// The manifest says what to put back and this box says where it may go: each
+// operation is restored to its target, in the manifest's order, provided the
+// target is part of the box (systemRestorable); one that is not, whatever the
+// manifest claims, is written nowhere and reported as missing. The services
+// holding the files are stopped for the copy and started again whatever happens;
+// rclone is restarted last, after everything has been copied through it, if its
+// configuration came back, and then the gateway, if its certificates or its own
+// files did.
 func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units unitControl, opts SystemRestoreOptions) (RestoreReport, error) {
 	report := RestoreReport{Restored: []BackupOperation{}, Missing: []BackupOperation{}, Skipped: []BackupEntry{}}
 	if opts.Destination == "" {
@@ -217,24 +237,7 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 	ctx = backupEventContext(ctx, &ComposeApp{Name: SystemBackupName}, opts.Destination, opts.Stamp, "restore")
 	publishBackupBegin(ctx)
 
-	// Matched by the path each part belongs to, never by its number in the
-	// backup. The numbers are given out in order over the parts that were
-	// PRESENT when the backup was taken; a box without a Samba config had its
-	// database folder as binds/2, and a restore that paired binds/2 with this
-	// box's second path put that database folder where the Samba config goes
-	// and the next folder's contents over the database. The path is the
-	// identity; the number is where the copy happened to land.
-	byTarget := map[string]BackupOperation{}
-	for _, operation := range manifest.Operations {
-		byTarget[operation.Target] = operation
-	}
-
-	// Only the fixed list is put back for now: what a backup holds beyond it is
-	// not matched here. The plan is built from the paths, not from what exists: a folder this box
-	// does not have yet is exactly what a restore to a fresh box puts there.
-	local := PlanBackup(SystemBackupName, systemLegacyEntries(func(string) bool { return true }), nil)
-
-	rcloneTouched := false
+	rcloneTouched, gatewayTouched := false, false
 	err = func() error {
 		release, err := holdUnits(units, systemUnits)
 		defer release()
@@ -242,18 +245,17 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 			return err
 		}
 
-		for i, operation := range local.Operations {
-			held, ok := byTarget[operation.Target]
-			if !ok {
+		for i, operation := range manifest.Operations {
+			if !systemRestorable(operation.Target) {
+				report.Missing = append(report.Missing, operation)
+
 				continue
 			}
-			delete(byTarget, operation.Target)
-			publishBackupProgress(ctx, i, len(local.Operations), held.Destination)
+			publishBackupProgress(ctx, i, len(manifest.Operations), operation.Destination)
 
-			// where the copy landed, and what it was: the backup's knowledge, since
-			// the path may not exist here yet
-			remote := path.Join(root, held.Destination)
-			operation.Directory = held.Directory
+			// this box's path, not the one the manifest's Source names
+			operation.Source = operation.Target
+			remote := path.Join(root, operation.Destination)
 			if operation.Directory {
 				err = restorer.RestoreDirectory(ctx, opts.Destination, remote, operation.Source)
 			} else {
@@ -262,8 +264,11 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 			if err != nil {
 				return fmt.Errorf("restoring %s: %w", operation.Source, err)
 			}
-			if operation.Source == "/root/.config/rclone/rclone.conf" {
+			switch {
+			case operation.Source == "/root/.config/rclone/rclone.conf":
 				rcloneTouched = true
+			case servedByGateway(operation.Source):
+				gatewayTouched = true
 			}
 
 			report.Restored = append(report.Restored, operation)
@@ -276,12 +281,6 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 		return report, err
 	}
 
-	for _, operation := range manifest.Operations {
-		if _, left := byTarget[operation.Target]; left {
-			report.Missing = append(report.Missing, operation)
-		}
-	}
-
 	// Last, once nothing more goes through the daemon: it reads its configuration
 	// at start, and the file under it has just been replaced.
 	if rcloneTouched {
@@ -291,6 +290,14 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 	}
 
 	publishBackupEnd(ctx)
+
+	// After everything else: it reads its certificates and routes at start, and
+	// writes back from memory only guard-state.json, which a backup leaves out.
+	if gatewayTouched {
+		if err := units.Restart(gatewayUnit); err != nil {
+			logger.Error("the gateway did not restart after its files were put back", zap.Error(err))
+		}
+	}
 
 	return report, nil
 }

@@ -214,3 +214,31 @@ func SystemBackupInventory(fs systemFS) ([]BackupEntry, error) {
 
 	return entries, nil
 }
+
+// systemRestorable is whether a restore may write target. The manifest comes from
+// a destination, so from outside and possibly edited: only what is part of the
+// box is written. That is the config folder, the two files outside the data
+// folder, and what is strictly under the data folder unless it, or a parent of
+// it, is excluded. Not the data folder itself, nor a split folder whole: putting
+// back backups/ would overwrite backups/restic, the repository keys.
+func systemRestorable(target string) bool {
+	if !path.IsAbs(target) || path.Clean(target) != target {
+		return false
+	}
+	switch target {
+	case "/etc/casaos", "/etc/samba/smb.casa.conf", "/root/.config/rclone/rclone.conf":
+		return true
+	}
+
+	rel, under := strings.CutPrefix(target, path.Clean(systemDataRoot)+"/")
+	if !under || slices.Contains(systemSplit, rel) {
+		return false
+	}
+	for p := rel; p != "."; p = path.Dir(p) {
+		if systemExcludedReason(p) != "" {
+			return false
+		}
+	}
+
+	return true
+}
