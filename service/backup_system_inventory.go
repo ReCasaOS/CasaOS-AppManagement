@@ -1,7 +1,9 @@
 package service
 
 import (
+	"errors"
 	"fmt"
+	iofs "io/fs"
 	"os"
 	"path"
 	"slices"
@@ -132,6 +134,9 @@ func walkSize(p string, total *int64) {
 	}
 	items, _ := os.ReadDir(p)
 	for _, item := range items {
+		if *total > systemEntryCap { // over the cap is all the cap needs to know
+			return
+		}
 		walkSize(p+"/"+item.Name(), total)
 	}
 }
@@ -179,10 +184,15 @@ func SystemBackupInventory(fs systemFS) ([]BackupEntry, error) {
 			continue
 		}
 		// a split folder absent from this box is just absent
-		if grand, err := fs.List(path.Join(systemDataRoot, c.Name)); err == nil {
-			for _, g := range grand {
-				found = append(found, candidate{c.Name + "/" + g.Name, g.Link})
-			}
+		grand, err := fs.List(path.Join(systemDataRoot, c.Name))
+		if errors.Is(err, iofs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s could not be listed: %w", path.Join(systemDataRoot, c.Name), err)
+		}
+		for _, g := range grand {
+			found = append(found, candidate{c.Name + "/" + g.Name, g.Link})
 		}
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].rel < found[j].rel })

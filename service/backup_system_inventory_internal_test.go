@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -83,12 +84,36 @@ func TestAnUnknownFileOfTheBoxIsBackedUpAndAnExcludedOneSaysWhy(t *testing.T) {
 }
 
 func TestASplitFolderThatIsNotThereIsAbsentNotAnError(t *testing.T) {
-	fs := boxFS(map[string][]systemChild{"/var/lib/casaos": {{Name: "fleet"}}}, nil)
+	fs := boxFS(map[string][]systemChild{"/var/lib/casaos": {{Name: "fleet"}, {Name: "backups"}, {Name: "gateway"}}}, nil)
+	fs.List = func(dir string) ([]systemChild, error) {
+		if dir == "/var/lib/casaos" {
+			return []systemChild{{Name: "fleet"}, {Name: "backups"}, {Name: "gateway"}}, nil
+		}
+
+		return nil, os.ErrNotExist
+	}
 
 	entries, err := SystemBackupInventory(fs)
 	assert.NilError(t, err)
 	_, ok := entryFor(entries, "/var/lib/casaos/fleet")
 	assert.Assert(t, ok)
+	for _, e := range entries {
+		assert.Assert(t, !strings.Contains(e.Path, "/gateway/") && e.Path != "/var/lib/casaos/backups" && e.Path != "/var/lib/casaos/gateway", e.Path)
+	}
+}
+
+func TestASplitFolderThatCannotBeListedIsAnErrorNotAPartialBackup(t *testing.T) {
+	fs := boxFS(nil, nil)
+	fs.List = func(dir string) ([]systemChild, error) {
+		if dir == "/var/lib/casaos" {
+			return []systemChild{{Name: "fleet"}, {Name: "backups"}}, nil
+		}
+
+		return nil, os.ErrPermission
+	}
+
+	_, err := SystemBackupInventory(fs)
+	assert.Assert(t, errors.Is(err, os.ErrPermission), "%v", err)
 }
 
 func TestTheClassIsDecidedOnTheTopLevelNameUnderTheDataFolder(t *testing.T) {
