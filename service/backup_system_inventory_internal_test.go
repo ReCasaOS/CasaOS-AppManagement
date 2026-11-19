@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,7 +85,7 @@ func TestAnUnknownFileOfTheBoxIsBackedUpAndAnExcludedOneSaysWhy(t *testing.T) {
 }
 
 func TestASplitFolderThatIsNotThereIsAbsentNotAnError(t *testing.T) {
-	fs := boxFS(map[string][]systemChild{"/var/lib/casaos": {{Name: "fleet"}, {Name: "backups"}, {Name: "gateway"}}}, nil)
+	fs := boxFS(nil, nil)
 	fs.List = func(dir string) ([]systemChild, error) {
 		if dir == "/var/lib/casaos" {
 			return []systemChild{{Name: "fleet"}, {Name: "backups"}, {Name: "gateway"}}, nil
@@ -97,8 +98,11 @@ func TestASplitFolderThatIsNotThereIsAbsentNotAnError(t *testing.T) {
 	assert.NilError(t, err)
 	_, ok := entryFor(entries, "/var/lib/casaos/fleet")
 	assert.Assert(t, ok)
+	// nothing of the absent folders but what the fixed list names itself
 	for _, e := range entries {
-		assert.Assert(t, !strings.Contains(e.Path, "/gateway/") && e.Path != "/var/lib/casaos/backups" && e.Path != "/var/lib/casaos/gateway", e.Path)
+		inSplit := strings.Contains(e.Path, "/backups/") || strings.Contains(e.Path, "/gateway/") ||
+			e.Path == "/var/lib/casaos/backups" || e.Path == "/var/lib/casaos/gateway"
+		assert.Assert(t, !inSplit || slices.Contains(systemBackupPaths(), e.Path), e.Path)
 	}
 }
 
