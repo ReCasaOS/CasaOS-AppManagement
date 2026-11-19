@@ -4,7 +4,10 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"errors"
+	"os"
 	"path"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -104,7 +107,6 @@ func TestAServiceThatWillNotStopMeansNoCopyAndTheOthersComeBack(t *testing.T) {
 // services for it, and restarts rclone last when its configuration came back.
 func TestABoxRestoreUsesThisBoxesPathsAndRestartsRcloneLast(t *testing.T) {
 	logInTempDir(t)
-	atTheDefaultDataRoot(t)
 
 	// a manifest as another box wrote it, with its own idea of where things were
 	manifest := PlanBackup(SystemBackupName, systemLegacyEntries(func(string) bool { return true }), nil)
@@ -160,7 +162,6 @@ func TestABackupOfAnAppIsNotPouredIntoTheBox(t *testing.T) {
 // to its own path, whatever number the copy landed under.
 func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *testing.T) {
 	logInTempDir(t)
-	atTheDefaultDataRoot(t)
 
 	// taken on a box with no Samba config: seven parts, numbered 1..7
 	present := func(p string) bool { return p != "/etc/samba/smb.casa.conf" }
@@ -211,9 +212,13 @@ func TestARestoreRefusesWhatIsNotTheBox(t *testing.T) {
 		"/etc/casaos": true, "/var/lib/casaos/db": true, "/var/lib/casaos/fleet": true, "/var/lib/casaos/tls": true,
 		"/var/lib/casaos/backups/schedules.json": true, "/var/lib/casaos/backups/sync.json": true,
 		"/var/lib/casaos/gateway/routes.json": true, "/root/.config/rclone/rclone.conf": true,
+		"/var/lib/casaos/git_apps/app.key": true,
 		"/etc/samba/smb.casa.conf": true,
 		"/var/lib/casaos":          false, "/var/lib/casaos/backups": false, "/var/lib/casaos/gateway": false,
 		"/var/lib/casaos/gateway/guard-state.json": false, "/var/lib/casaos/apps": false, "/var/lib/casaos/apps/x": false,
+		"/var/lib/casaos/files": false, "/var/lib/casaos/files/x": false,
+		"/var/lib/casaos/git_apps": false, "/var/lib/casaos/git_apps/work": false, "/var/lib/casaos/git_apps/work/x": false,
+		"/var/lib/casaos/fleet/a/b": false, "/var/lib/casaos/x/y": false,
 		"/var/lib/casaos/backups/restic": false, "/var/lib/casaos/backups/restic/password": false,
 		"/var/lib/casaos/../../etc/passwd": false, "/var/lib/casaos/db/": false, "var/lib/casaos/db": false,
 		"/etc/passwd": false, "/etc/casaos/../passwd": false, "/var/lib/casaosx/db": false, "": false,
@@ -293,5 +298,115 @@ func TestTheGatewayIsRestartedLastWhenItsFilesCameBack(t *testing.T) {
 				t.Fatalf("restarted %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// The fixed list is restorable wherever the data folder is: its paths do not
+// follow it, so the data folder's rules cannot be what lets them through.
+func TestTheFixedListIsRestorableWhateverTheDataFolderIs(t *testing.T) {
+	logInTempDir(t)
+	was := systemDataRoot
+	systemDataRoot = "/srv/casa"
+	t.Cleanup(func() { systemDataRoot = was })
+
+	manifest := PlanBackup(SystemBackupName, systemLegacyEntries(func(string) bool { return true }), nil)
+	for i := range manifest.Operations {
+		manifest.Operations[i].Directory = !strings.HasSuffix(manifest.Operations[i].Source, ".conf")
+	}
+	raw, _ := stdjson.Marshal(manifest)
+	restorer := &fakeRestorer{files: map[string][]byte{path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw}}
+
+	report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Missing) != 0 || len(report.Restored) != len(systemBackupPaths()) {
+		t.Fatalf("every part of the fixed list back: %+v", report)
+	}
+}
+
+// A link under the data folder leads the copy out of the box: the target that is
+// one, or has one for a parent, is refused and nothing is written.
+func TestARestoreRefusesATargetThatIsOrLiesUnderALink(t *testing.T) {
+	logInTempDir(t)
+	atTheDefaultDataRoot(t)
+	was := isSymlink
+	isSymlink = func(p string) bool { return p == "/var/lib/casaos/fleet" || p == "/var/lib/casaos/backups" }
+	t.Cleanup(func() { isSymlink = was })
+
+	raw := manifestOf("/var/lib/casaos/fleet", "/var/lib/casaos/backups/schedules.json", "/var/lib/casaos/tls")
+	restorer := &fakeRestorer{files: map[string][]byte{path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw}}
+
+	report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(report.Missing) != 2 || len(report.Restored) != 1 || report.Restored[0].Source != "/var/lib/casaos/tls" {
+		t.Fatalf("the link and what lies under one are refused: %+v", report)
+	}
+	if len(restorer.restored) != 1 || restorer.restored[0].host != "/var/lib/casaos/tls" {
+		t.Fatalf("nothing is written through a link: %+v", restorer.restored)
+	}
+}
+
+// What came back may carry the default modes: the data folder's targets and the
+// rclone configuration are tightened, /etc/casaos is not.
+func TestARestoreTightensTheModesOfWhatCameBackExceptTheConfigFolder(t *testing.T) {
+	logInTempDir(t)
+	atTheDefaultDataRoot(t)
+	var tightened []string
+	was := tightenRestored
+	tightenRestored = func(p string) error { tightened = append(tightened, p); return nil }
+	t.Cleanup(func() { tightenRestored = was })
+
+	raw := manifestOf("/var/lib/casaos/tls", "/root/.config/rclone/rclone.conf", "/etc/casaos", "/etc/samba/smb.casa.conf")
+	restorer := &fakeRestorer{files: map[string][]byte{path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw}}
+
+	if _, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp}); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Join(tightened, ",") != "/var/lib/casaos/tls,/root/.config/rclone/rclone.conf" {
+		t.Fatalf("tightened %v", tightened)
+	}
+}
+
+func TestTightenRestoredTakesGroupAndOtherOffFilesAndFoldersAndLeavesLinksAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("modes do not apply")
+	}
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "outside")
+	tree := filepath.Join(dir, "tls")
+	for _, d := range []string{outside, filepath.Join(tree, "sub")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := filepath.Join(tree, "sub", "gateway.key")
+	if err := os.WriteFile(key, []byte("k"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "f"), []byte("f"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(tree, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tightenRestored(tree); err != nil {
+		t.Fatal(err)
+	}
+
+	for p, want := range map[string]os.FileMode{tree: 0o700, filepath.Join(tree, "sub"): 0o700, key: 0o600, outside: 0o755, filepath.Join(outside, "f"): 0o644} {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Errorf("%s: %v, want %v", p, info.Mode().Perm(), want)
+		}
 	}
 }

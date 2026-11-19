@@ -27,12 +27,13 @@ const systemEntryCap int64 = 50 << 20
 
 // systemSplit are the data folders whose children are listed one by one,
 // because they hold both state and what must stay out.
-var systemSplit = []string{"backups", "gateway"}
+var systemSplit = []string{"backups", "gateway", "git_apps"}
 
 // systemExclusions are left out of the box backup, relative to the data folder
 // (path.Match), each with the reason.
 var systemExclusions = []struct{ pattern, reason string }{
 	{"apps", "the apps are backed up on their own"},
+	{"files", "the storage merged into /DATA: apps' and people's data, not the box's"},
 	{"appstore", "downloaded again from the store"},
 	{"www", "the web files are put back by the installer"},
 	{"modules", "the modules are installed again by the installer"},
@@ -51,6 +52,7 @@ var systemExclusions = []struct{ pattern, reason string }{
 	{"backups/restic-checks.json", "the log of repository checks, which describes this machine's past"},
 	{"backups/holding.json", "what is being held right now"},
 	{"backups/bisync", "the state of a sync, rebuilt by the next one"},
+	{"git_apps/work", "build worktrees, made again at the next deployment"},
 	{"gateway/guard-state.json", "bans in progress, rewritten by the gateway from memory"},
 }
 
@@ -87,6 +89,8 @@ func systemClass(p string) string {
 type systemChild struct {
 	Name string
 	Link bool
+	// Special is a socket, a pipe or a device: copying one fails the whole backup
+	Special bool
 }
 
 // systemFS is what the inventory reads of the box, a seam for tests.
@@ -105,7 +109,12 @@ func realSystemFS() systemFS {
 			}
 			children := make([]systemChild, 0, len(items))
 			for _, item := range items {
-				children = append(children, systemChild{Name: item.Name(), Link: item.Type()&os.ModeSymlink != 0})
+				kind := item.Type()
+				children = append(children, systemChild{
+					Name:    item.Name(),
+					Link:    kind&os.ModeSymlink != 0,
+					Special: !kind.IsRegular() && !kind.IsDir() && kind&os.ModeSymlink == 0,
+				})
 			}
 
 			return children, nil
@@ -173,13 +182,14 @@ func SystemBackupInventory(fs systemFS) ([]BackupEntry, error) {
 	}
 
 	type candidate struct {
-		rel  string
-		link bool
+		rel     string
+		link    bool
+		special bool
 	}
 	var found []candidate
 	for _, c := range children {
 		if !slices.Contains(systemSplit, c.Name) {
-			found = append(found, candidate{c.Name, c.Link})
+			found = append(found, candidate{c.Name, c.Link, c.Special})
 
 			continue
 		}
@@ -192,7 +202,7 @@ func SystemBackupInventory(fs systemFS) ([]BackupEntry, error) {
 			return nil, fmt.Errorf("%s could not be listed: %w", path.Join(systemDataRoot, c.Name), err)
 		}
 		for _, g := range grand {
-			found = append(found, candidate{c.Name + "/" + g.Name, g.Link})
+			found = append(found, candidate{c.Name + "/" + g.Name, g.Link, g.Special})
 		}
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].rel < found[j].rel })
@@ -206,6 +216,8 @@ func SystemBackupInventory(fs systemFS) ([]BackupEntry, error) {
 		switch {
 		case c.link:
 			entry.Skip = "a symbolic link is not followed"
+		case c.special:
+			entry.Skip = "not a file or a folder"
 		case fs.Size(p) > systemEntryCap:
 			entry.Skip = fmt.Sprintf("left out because of its size: over %d MB, and not part of the box's fixed list", systemEntryCap>>20)
 		}
@@ -217,21 +229,25 @@ func SystemBackupInventory(fs systemFS) ([]BackupEntry, error) {
 
 // systemRestorable is whether a restore may write target. The manifest comes from
 // a destination, so from outside and possibly edited: only what is part of the
-// box is written. That is the config folder, the two files outside the data
-// folder, and what is strictly under the data folder unless it, or a parent of
-// it, is excluded. Not the data folder itself, nor a split folder whole: putting
-// back backups/ would overwrite backups/restic, the repository keys.
+// box is written. That is the fixed list, wherever the data folder is, and what
+// is strictly under the data folder in a shape the inventory makes (a child, or a
+// child of a split folder) unless it, or a parent of it, is excluded. Not the
+// data folder itself, nor a split folder whole: putting back backups/ would
+// overwrite backups/restic, the repository keys.
 func systemRestorable(target string) bool {
 	if !path.IsAbs(target) || path.Clean(target) != target {
 		return false
 	}
-	switch target {
-	case "/etc/casaos", "/etc/samba/smb.casa.conf", "/root/.config/rclone/rclone.conf":
+	if slices.Contains(systemBackupPaths(), target) {
 		return true
 	}
 
 	rel, under := strings.CutPrefix(target, path.Clean(systemDataRoot)+"/")
-	if !under || slices.Contains(systemSplit, rel) {
+	if !under {
+		return false
+	}
+	parts := strings.Split(rel, "/")
+	if len(parts) > 2 || (len(parts) == 2 && !slices.Contains(systemSplit, parts[0])) || slices.Contains(systemSplit, rel) {
 		return false
 	}
 	for p := rel; p != "."; p = path.Dir(p) {

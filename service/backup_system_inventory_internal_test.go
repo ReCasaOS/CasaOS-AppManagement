@@ -37,7 +37,8 @@ func entryFor(entries []BackupEntry, p string) (BackupEntry, bool) {
 
 func TestAnUnknownFileOfTheBoxIsBackedUpAndAnExcludedOneSaysWhy(t *testing.T) {
 	fs := boxFS(map[string][]systemChild{
-		"/var/lib/casaos":         {{Name: "db"}, {Name: "conf"}, {Name: "apps"}, {Name: "fleet"}, {Name: "never-heard-of.json"}, {Name: "backups"}, {Name: "gateway"}},
+		"/var/lib/casaos":         {{Name: "db"}, {Name: "conf"}, {Name: "apps"}, {Name: "fleet"}, {Name: "never-heard-of.json"}, {Name: "backups"}, {Name: "gateway"}, {Name: "files"}, {Name: "git_apps"}},
+		"/var/lib/casaos/git_apps": {{Name: "app.key"}, {Name: "work"}},
 		"/var/lib/casaos/backups": {{Name: "schedules.json"}, {Name: "restic"}, {Name: "sync.json"}},
 		"/var/lib/casaos/gateway": {{Name: "guard-state.json"}, {Name: "routes.json"}},
 	}, nil)
@@ -49,6 +50,7 @@ func TestAnUnknownFileOfTheBoxIsBackedUpAndAnExcludedOneSaysWhy(t *testing.T) {
 		"/etc/casaos", "/etc/samba/smb.casa.conf", "/root/.config/rclone/rclone.conf",
 		"/var/lib/casaos/db", "/var/lib/casaos/conf", "/var/lib/casaos/fleet", "/var/lib/casaos/never-heard-of.json",
 		"/var/lib/casaos/backups/schedules.json", "/var/lib/casaos/backups/sync.json", "/var/lib/casaos/gateway/routes.json",
+		"/var/lib/casaos/git_apps/app.key",
 	} {
 		e, ok := entryFor(entries, p)
 		assert.Assert(t, ok, "%s is in the backup", p)
@@ -56,7 +58,7 @@ func TestAnUnknownFileOfTheBoxIsBackedUpAndAnExcludedOneSaysWhy(t *testing.T) {
 	}
 	for _, p := range []string{
 		"/var/lib/casaos/apps", "/var/lib/casaos/backups/restic", "/var/lib/casaos/backups", "/var/lib/casaos/gateway",
-		"/var/lib/casaos/gateway/guard-state.json",
+		"/var/lib/casaos/gateway/guard-state.json", "/var/lib/casaos/files", "/var/lib/casaos/git_apps", "/var/lib/casaos/git_apps/work",
 	} {
 		_, ok := entryFor(entries, p)
 		assert.Assert(t, !ok, "%s has no entry at all", p)
@@ -135,11 +137,11 @@ func TestTheClassIsDecidedOnTheTopLevelNameUnderTheDataFolder(t *testing.T) {
 }
 
 func TestALinkIsNeverFollowed(t *testing.T) {
-	fs := boxFS(map[string][]systemChild{"/var/lib/casaos": {{Name: "files", Link: true}}}, nil)
+	fs := boxFS(map[string][]systemChild{"/var/lib/casaos": {{Name: "linked", Link: true}}}, nil)
 
 	entries, err := SystemBackupInventory(fs)
 	assert.NilError(t, err)
-	e, ok := entryFor(entries, "/var/lib/casaos/files")
+	e, ok := entryFor(entries, "/var/lib/casaos/linked")
 	assert.Assert(t, ok)
 	assert.Assert(t, strings.Contains(e.Skip, "link"), e.Skip)
 }
@@ -179,4 +181,14 @@ func TestThePlanCarriesTheClass(t *testing.T) {
 		}
 	}
 	t.Fatal("fleet is planned")
+}
+
+func TestASocketOrAPipeIsSkippedNotCopied(t *testing.T) {
+	fs := boxFS(map[string][]systemChild{"/var/lib/casaos": {{Name: "x.sock", Special: true}, {Name: "db"}}}, nil)
+
+	entries, err := SystemBackupInventory(fs)
+	assert.NilError(t, err)
+	e, ok := entryFor(entries, "/var/lib/casaos/x.sock")
+	assert.Assert(t, ok)
+	assert.Assert(t, strings.Contains(e.Skip, "not a file or a folder"), e.Skip)
 }
