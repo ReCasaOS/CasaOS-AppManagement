@@ -180,6 +180,8 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 		// The caller has already worked the status out from every container of every
 		// service; it only has to survive the trip.
 		Status: composeAppWithStoreInfo.Status,
+		// the worst health check among its running containers, absent when none has one
+		Health: composeAppWithStoreInfo.Health,
 
 		// Read from the cache a check pass filled, so this stays a map lookup. Nil
 		// until something has checked, which the dashboard renders as no badge
