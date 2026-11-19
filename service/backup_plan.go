@@ -32,6 +32,8 @@ type BackupOperation struct {
 	// Service that mounted it, and where
 	Service string `json:"service,omitempty"`
 	Target  string `json:"target,omitempty"`
+	// Class, for the box's own entries, as on BackupEntry
+	Class string `json:"class,omitempty"`
 }
 
 // BackupManifest is written at the root of every backup, and is the only thing a
@@ -137,7 +139,7 @@ func PlanBackup(app string, inventory []BackupEntry, volumeMountpoints map[strin
 			manifest.Operations = append(manifest.Operations, BackupOperation{
 				Kind: entry.Kind, Source: entry.Path, Directory: true,
 				Destination: fmt.Sprintf("binds/%d", bind),
-				Service:     entry.Service, Target: entry.Target,
+				Service:     entry.Service, Target: entry.Target, Class: entry.Class,
 			})
 		}
 	}

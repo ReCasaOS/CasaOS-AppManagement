@@ -14,6 +14,11 @@ func logInTempDir(t *testing.T) {
 	was := BackupLogPath
 	BackupLogPath = filepath.Join(t.TempDir(), "runs.json")
 	t.Cleanup(func() { BackupLogPath = was })
+
+	// the box backup walks the data folder: an empty one of its own, not the host's
+	wasRoot := systemDataRoot
+	systemDataRoot = t.TempDir()
+	t.Cleanup(func() { systemDataRoot = wasRoot })
 }
 
 func run(app string, when time.Time, failure string) BackupRunRecord {

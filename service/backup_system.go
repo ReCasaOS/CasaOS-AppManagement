@@ -70,21 +70,6 @@ func systemBackupPaths() []string {
 	return append(slices.Clone(systemPaths), BackupSchedulePath, BackupExclusionsPath, VerificationSchedulePath)
 }
 
-// SystemBackupInventory lists what the box is, as backup entries.
-func SystemBackupInventory(exists func(string) bool) []BackupEntry {
-	paths := systemBackupPaths()
-	entries := make([]BackupEntry, 0, len(paths))
-	for _, p := range paths {
-		entry := BackupEntry{Kind: BackupKindBind, Path: p, Target: p}
-		if !exists(p) {
-			entry.Skip = "not present on this box"
-		}
-		entries = append(entries, entry)
-	}
-
-	return entries
-}
-
 func pathExists(p string) bool {
 	_, err := os.Stat(p)
 
@@ -92,15 +77,19 @@ func pathExists(p string) bool {
 }
 
 // PlanSystemBackup is the plan for the box, worked out from what is here now.
-func PlanSystemBackup(exists func(string) bool) BackupManifest {
-	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(exists), nil)
+func PlanSystemBackup(fs systemFS) (BackupManifest, error) {
+	entries, err := SystemBackupInventory(fs)
+	if err != nil {
+		return BackupManifest{}, err
+	}
+	manifest := PlanBackup(SystemBackupName, entries, nil)
 	manifest.MarkBindFiles(func(p string) bool {
 		info, err := os.Stat(p)
 
 		return err == nil && info.Mode().IsRegular()
 	})
 
-	return manifest
+	return manifest, nil
 }
 
 // SystemBackupOptions is one backup of the box.
@@ -120,6 +109,12 @@ func RunSystemBackup(ctx context.Context, copier BackupCopier, units unitControl
 		return BackupManifest{}, errors.New("a backup needs a name to file it under")
 	}
 
+	// before anything is stopped: a box that cannot be read is no backup
+	manifest, err := PlanSystemBackup(realSystemFS())
+	if err != nil {
+		return BackupManifest{}, err
+	}
+
 	// it holds services, never an app, so Begin does not see it: see markInProgress
 	defer markInProgress(SystemBackupName, "backup")()
 
@@ -128,10 +123,9 @@ func RunSystemBackup(ctx context.Context, copier BackupCopier, units unitControl
 	defer endLive()
 	publishBackupBegin(ctx)
 
-	manifest := PlanSystemBackup(pathExists)
 	manifest.ContainersStopped = opts.HoldStill
 
-	err := func() error {
+	err = func() error {
 		if opts.HoldStill {
 			release, err := holdUnits(units, systemUnits)
 			defer release()
@@ -235,9 +229,10 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 		byTarget[operation.Target] = operation
 	}
 
-	// The plan is built from the paths, not from what exists: a folder this box
+	// Only the fixed list is put back for now: what a backup holds beyond it is
+	// not matched here. The plan is built from the paths, not from what exists: a folder this box
 	// does not have yet is exactly what a restore to a fresh box puts there.
-	local := PlanBackup(SystemBackupName, SystemBackupInventory(func(string) bool { return true }), nil)
+	local := PlanBackup(SystemBackupName, systemLegacyEntries(func(string) bool { return true }), nil)
 
 	rcloneTouched := false
 	err = func() error {

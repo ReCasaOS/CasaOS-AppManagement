@@ -26,11 +26,17 @@ func (f *fakeUnits) Stop(unit string) error {
 func (f *fakeUnits) Start(unit string) error   { f.started = append(f.started, unit); return nil }
 func (f *fakeUnits) Restart(unit string) error { f.restarted = append(f.restarted, unit); return nil }
 
-// What the box is: a fixed list, planned like bind mounts, with the absent ones
-// skipped and said so.
-func TestTheBoxIsAFixedListAndAbsentPartsAreSkippedWithAReason(t *testing.T) {
+// What the box is, outside the data folder: planned like bind mounts, with the
+// absent ones skipped and said so.
+func TestAbsentPartsOfTheBoxAreSkippedWithAReason(t *testing.T) {
 	present := map[string]bool{"/etc/casaos": true, "/var/lib/casaos/db": true, "/root/.config/rclone/rclone.conf": true}
-	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(func(p string) bool { return present[p] }), nil)
+	fs := boxFS(map[string][]systemChild{systemDataRoot: {}}, nil)
+	fs.Exists = func(p string) bool { return present[p] }
+	entries, err := SystemBackupInventory(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := PlanBackup(SystemBackupName, entries, nil)
 
 	if len(manifest.Operations) != 3 {
 		t.Fatalf("three present: %+v", manifest.Operations)
@@ -100,7 +106,7 @@ func TestABoxRestoreUsesThisBoxesPathsAndRestartsRcloneLast(t *testing.T) {
 	logInTempDir(t)
 
 	// a manifest as another box wrote it, with its own idea of where things were
-	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(func(string) bool { return true }), nil)
+	manifest := PlanBackup(SystemBackupName, systemLegacyEntries(func(string) bool { return true }), nil)
 	for i := range manifest.Operations {
 		manifest.Operations[i].Directory = !strings.HasSuffix(manifest.Operations[i].Source, ".conf")
 		manifest.Operations[i].Source = "/elsewhere" + manifest.Operations[i].Source
@@ -156,7 +162,7 @@ func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *test
 
 	// taken on a box with no Samba config: seven parts, numbered 1..7
 	present := func(p string) bool { return p != "/etc/samba/smb.casa.conf" }
-	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(present), nil)
+	manifest := PlanBackup(SystemBackupName, systemLegacyEntries(present), nil)
 	for i := range manifest.Operations {
 		manifest.Operations[i].Directory = !strings.HasSuffix(manifest.Operations[i].Source, ".conf")
 	}
