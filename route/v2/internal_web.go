@@ -190,6 +190,9 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 
 		// from the git app's state file alone, absent for any other app
 		Git: service.GitAppGrid(composeApp.Name),
+
+		// from the last daily read of the registries' tags, absent when there is none
+		NewerTags: newerTagsOf(composeApp.Name),
 	}
 
 	composeAppStoreInfo := composeAppWithStoreInfo.StoreInfo
@@ -323,4 +326,13 @@ func (c composeLoadErrorCache) of(project, configFiles string) *string {
 	c[project] = reason
 
 	return reason
+}
+
+// newerTagsOf is nil when the last pass found nothing for the app, so the field is left out.
+func newerTagsOf(app string) *[]codegen.NewerTag {
+	if found := service.NewerTagsOf(app); len(found) > 0 {
+		return &found
+	}
+
+	return nil
 }

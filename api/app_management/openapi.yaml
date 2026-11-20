@@ -5893,6 +5893,31 @@ components:
           items:
             $ref: "#/components/schemas/ComposeAppUpdateRunApp"
 
+    NewerTag:
+      description: Newer versions of one image pinned to a version, of the same flavour.
+      required: [service, image, current]
+      properties:
+        service:
+          type: string
+        image:
+          type: string
+          example: postgres:16.2
+        current:
+          description: The tag the app runs.
+          type: string
+          example: "16.2"
+        patch:
+          description: The highest bug-fix version above it, when there is one.
+          type: string
+        minor:
+          description: The highest version of the same major above it, when there is one.
+          type: string
+          example: "16.4"
+        major:
+          description: The highest version of a higher major, when there is one.
+          type: string
+          example: "17.0"
+
     ComposeAppUpdateRunApp:
       required:
         - id
@@ -6456,6 +6481,14 @@ components:
             this app has not been checked since the service started.
           type: boolean
           example: true
+        newer_tags:
+          description: |-
+            The images of the app pinned to a version for which the registry holds a
+            newer one, from the last daily pass. Said only: nothing is applied. Absent
+            when there is none, or nothing has been asked yet.
+          type: array
+          items:
+            $ref: "#/components/schemas/NewerTag"
         hidden_on_dashboard:
           description: |
             The owner chose to leave this app's icon out of the dashboard, for every
