@@ -202,6 +202,15 @@ func main() {
 			panic(err)
 		}
 
+		// The nightly update of the apps their owner turned on. Ten minutes because a night
+		// that found the box busy tries again at the next tick; what is not due costs one
+		// file read.
+		if _, err := crontab.AddFunc("@every 10m", func() {
+			service.RunDueAutoUpdates(ctx, service.BoxNow())
+		}); err != nil {
+			panic(err)
+		}
+
 		// The weekly cleanup of what holds the data of no app, when the owner switched it
 		// on. Ten minutes because a run that found the box busy tries again at the next
 		// tick; what is not due costs one file read.
