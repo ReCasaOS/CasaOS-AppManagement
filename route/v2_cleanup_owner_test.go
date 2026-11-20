@@ -17,6 +17,7 @@ func TestTheCleanupIsTheOwnersOnly(t *testing.T) {
 		{http.MethodDelete, "/cleanup/build-cache", ""},
 		{http.MethodPost, "/cleanup/images", `{"names":["sha256:x"]}`},
 		{http.MethodPost, "/cleanup/volumes", `{"names":["data"]}`},
+		{http.MethodPost, "/cleanup/orphans", `{"names":["gone"]}`},
 	} {
 		got := r.do(r.v2, c.method, "/v2/app_management"+c.path, r.user, c.body)
 		assert.Equal(t, got.Code, http.StatusForbidden, "%s %s: %s", c.method, c.path, bodyOf(got))

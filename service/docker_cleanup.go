@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -396,7 +397,18 @@ func dockerCleanup(ctx context.Context, cli cleanupDaemon) (*codegen.DockerClean
 		BuildCache: buildCacheSize(usage.BuildCache),
 		Images:     images,
 		Volumes:    volumes,
+		Orphans:    []string{},
 		Held:       held.Reason,
+	}
+	// Listed even when an app cannot be read: the folder of an app that is gone is the
+	// usual reason, and removing it is the way out. Not while something runs: an install
+	// has its folder before it has a container.
+	if held.Reason != CleanupHeldBusy {
+		if orphans, err := orphanFolders(ctx); err == nil {
+			report.Orphans = orphans
+		} else {
+			logger.Error("cleanup: the folders of the apps cannot be listed", zap.Error(err))
+		}
 	}
 	if held.Detail != "" {
 		report.Detail = &held.Detail
@@ -550,6 +562,86 @@ func removeLeftoverVolumes(ctx context.Context, cli cleanupDaemon, names []strin
 		if volume.Size > 0 {
 			result.Size += volume.Size
 		}
+	}
+
+	return result, nil
+}
+
+// orphanFolders is the folders among the apps that no container goes with: Docker Compose
+// knows no stack of that name, and it is not an app built from a repository. An install
+// that failed leaves one, and so does an app whose containers were removed by hand. The
+// app is not on the dashboard, and its folder still claims its images and its volumes.
+func orphanFolders(ctx context.Context) ([]string, error) {
+	stacks, err := ListComposeStacks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]struct{}{}
+	for _, stack := range stacks {
+		known[stack.ID] = struct{}{}
+	}
+	gitApps, err := GitAppNames()
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range gitApps {
+		known[name] = struct{}{}
+	}
+
+	folders, err := os.ReadDir(config.AppInfo.AppsPath)
+	if err != nil {
+		return nil, err
+	}
+	orphans := []string{}
+	for _, folder := range folders {
+		if _, has := known[folder.Name()]; !has && folder.IsDir() {
+			orphans = append(orphans, folder.Name())
+		}
+	}
+	sort.Strings(orphans)
+
+	return orphans, nil
+}
+
+// removedAppsPath is where the folder of an app that is gone is moved: beside the folder
+// of the apps, so on the same disk, and a rename is all it takes.
+func removedAppsPath() string {
+	return filepath.Join(filepath.Dir(filepath.Clean(config.AppInfo.AppsPath)), "apps-removed")
+}
+
+// RemoveOrphanFolders moves aside the folders asked for that are still orphans when it
+// runs. Moved, not deleted: a folder holds the compose file of the app, which is its
+// settings, and somebody who took its containers down by hand may want it back.
+func RemoveOrphanFolders(ctx context.Context, names []string) (*codegen.CleanupResult, error) {
+	end, err := beginCleanup()
+	if err != nil {
+		return nil, err
+	}
+	defer end()
+
+	orphans, err := orphanFolders(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &codegen.CleanupResult{Removed: []string{}, Refused: map[string]string{}}
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	for _, name := range names {
+		// a name is only ever one read off the folder itself: nothing asked for can
+		// reach outside it
+		if !slices.Contains(orphans, name) {
+			result.Refused[name] = "not a folder without a container any more"
+			continue
+		}
+		if err := os.MkdirAll(removedAppsPath(), 0o755); err != nil {
+			result.Refused[name] = err.Error()
+			continue
+		}
+		if err := os.Rename(filepath.Join(config.AppInfo.AppsPath, name), filepath.Join(removedAppsPath(), name+"-"+stamp)); err != nil {
+			result.Refused[name] = err.Error()
+			continue
+		}
+		result.Removed = append(result.Removed, name)
 	}
 
 	return result, nil
