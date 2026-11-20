@@ -1981,6 +1981,54 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /cleanup/schedule:
+    get:
+      summary: The weekly cleanup, and what the last cleanups freed
+      description: |
+        Whether the box cleans up by itself once a week, when the next run is due, and
+        the last runs, newest first: the weekly ones and what was freed by hand.
+
+        The weekly cleanup only ever takes the old app versions and the build cache,
+        which hold the data of no app. The owner's only.
+      operationId: cleanupSchedule
+      tags:
+        - Cleanup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupScheduleOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+    put:
+      summary: Turn the weekly cleanup on or off
+      description: |
+        Turned on, the first run is the next Sunday at four in the morning, on the
+        box's clock; the slot that just passed is not caught up. A run waits while
+        something runs on an app. The owner's only.
+      operationId: setCleanupSchedule
+      tags:
+        - Cleanup methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [weekly]
+              properties:
+                weekly:
+                  type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupScheduleOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /cleanup/volumes:
     post:
       summary: Delete leftover volumes
@@ -3949,6 +3997,17 @@ components:
                   data:
                     $ref: "#/components/schemas/DockerCleanup"
 
+    CleanupScheduleOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/CleanupSchedule"
+
     CleanupResultOK:
       description: OK
       content:
@@ -5533,6 +5592,47 @@ components:
         created:
           type: string
           format: date-time
+
+    CleanupSchedule:
+      description: The weekly cleanup and the last runs.
+      required: [weekly, runs]
+      properties:
+        weekly:
+          description: Whether the box cleans up by itself once a week.
+          type: boolean
+        next:
+          description: When the next weekly run is due. Absent when the switch is off.
+          type: string
+          format: date-time
+        runs:
+          description: The last runs, newest first.
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupRun"
+
+    CleanupRun:
+      description: One cleanup, and what it freed.
+      required: [at, what, scheduled, count, size]
+      properties:
+        at:
+          type: string
+          format: date-time
+        what:
+          description: weekly, old_versions, build_cache, images or volumes.
+          type: string
+        scheduled:
+          description: True for a run the box made by itself.
+          type: boolean
+        count:
+          description: How many images or volumes went.
+          type: integer
+        size:
+          description: Bytes freed.
+          type: integer
+          format: int64
+        error:
+          description: Why the run failed, when it did.
+          type: string
 
     CleanupResult:
       description: What a cleanup did.
