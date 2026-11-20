@@ -220,3 +220,10 @@ func TestNothingIsWrittenByAnotherAccountOrWhileTheAppIsBusy(t *testing.T) {
 	end()
 	assert.Equal(t, deleteCall(t, true, "/config/app.yml"), http.StatusOK)
 }
+
+func TestAMountDockerListsIsNotDeletedNorAFolderHoldingIt(t *testing.T) {
+	fakeContainer(t, true)
+
+	assert.Equal(t, deleteCall(t, true, "/config"), http.StatusBadRequest)
+	assert.Equal(t, filesCall(t, true, "list", "/config").Code, http.StatusOK)
+}

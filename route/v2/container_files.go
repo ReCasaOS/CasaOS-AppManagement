@@ -213,7 +213,8 @@ func containerTarget(ctx echo.Context, id, raw string) (*containerfs.Root, conta
 }
 
 // containerChange opens the container for a change at raw, and holds its app the while:
-// nothing is written while the app is updated, backed up or removed. done lets both go.
+// nothing is written while the app is updated, restored or removed (a backup copied from
+// the running app takes no hold, and is not waited for). done lets both go.
 func containerChange(ctx echo.Context, id, raw string) (root *containerfs.Root, p string, done func(), err error) {
 	root, of, p, err := containerTarget(ctx, id, raw)
 	if err != nil {
@@ -222,6 +223,13 @@ func containerChange(ctx echo.Context, id, raw string) (root *containerfs.Root, 
 	if p == "/" {
 		root.Close()
 		return nil, "", nil, containerfs.ErrBadName
+	}
+	// what Docker mounts is known: refused before the filesystem is asked again
+	for _, m := range of.mounts {
+		if m == p || strings.HasPrefix(m, p+"/") {
+			root.Close()
+			return nil, "", nil, containerfs.ErrOtherFilesystem
+		}
 	}
 	end := func() {}
 	if of.project != "" {
@@ -304,7 +312,7 @@ func (a *AppManagement) UploadContainerFile(ctx echo.Context, id codegen.Contain
 			part.Close()
 			continue
 		}
-		err = root.WriteFile(p, part, params.Replace != nil && *params.Replace)
+		err = root.WriteFile(p, bodyReader{part}, params.Replace != nil && *params.Replace)
 		part.Close()
 		if err != nil {
 			return containerFilesFailure(ctx, err)
@@ -315,6 +323,18 @@ func (a *AppManagement) UploadContainerFile(ctx echo.Context, id codegen.Contain
 }
 
 var errNotOwner = errors.New("only the owner can do this")
+
+// bodyReader tells a failure to read what was sent from a failure to write it.
+type bodyReader struct{ io.Reader }
+
+func (b bodyReader) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	if err != nil && err != io.EOF {
+		err = errBadContainerPath{fmt.Errorf("the file sent was cut: %w", err)}
+	}
+
+	return n, err
+}
 
 type errBadContainerPath struct{ error }
 
@@ -329,12 +349,18 @@ func containerFilesFailure(ctx echo.Context, err error) error {
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 	case errors.As(err, &bad), errors.Is(err, containerfs.ErrNotAFile), errors.Is(err, containerfs.ErrPseudoFile),
 		errors.Is(err, containerfs.ErrBadName), errors.Is(err, containerfs.ErrOtherFilesystem), errors.Is(err, syscall.EBUSY),
-		errors.Is(err, syscall.ENOTDIR), errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENXIO), errors.Is(err, syscall.ENODEV):
+		errors.Is(err, syscall.ENOTDIR), errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENXIO), errors.Is(err, syscall.ENODEV),
+		errors.Is(err, syscall.ENAMETOOLONG), errors.Is(err, syscall.EISDIR):
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
+		message = "the disk is full: " + message
+		return ctx.JSON(http.StatusInsufficientStorage, codegen.ResponseInternalServerError{Message: &message})
+	case errors.Is(err, syscall.ENOTEMPTY):
+		return ctx.JSON(http.StatusConflict, codegen.ResponseConflict{Message: &message})
 	case errors.Is(err, containerfs.ErrExist), errors.As(err, new(service.ErrAppBusy)):
 		return ctx.JSON(http.StatusConflict, codegen.ResponseConflict{Message: &message})
 	case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
-		message = "the box itself may not read this path: " + message
+		message = "the box itself may not reach this path: " + message
 		return ctx.JSON(http.StatusForbidden, codegen.ResponseForbidden{Message: &message})
 	case errors.Is(err, errContainerStopped):
 		return ctx.JSON(http.StatusConflict, codegen.ResponseConflict{Message: &message})

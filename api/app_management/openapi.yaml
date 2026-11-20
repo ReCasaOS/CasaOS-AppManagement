@@ -1945,6 +1945,8 @@ paths:
           $ref: "#/components/responses/ResponseInternalServerError"
         "501":
           $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
   /container/{id}/files/content:
     get:
       summary: A text file of a running container, up to 1 MB
@@ -2011,6 +2013,8 @@ paths:
           $ref: "#/components/responses/ResponseInternalServerError"
         "501":
           $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
   /container/{id}/files/download:
     get:
       summary: Download a file of a running container
@@ -2071,6 +2075,8 @@ paths:
           $ref: "#/components/responses/ResponseInternalServerError"
         "501":
           $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
 
   /container/{id}/files/upload:
     post:
@@ -2114,6 +2120,8 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
         "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
           $ref: "#/components/responses/ResponseInternalServerError"
 
   /container/{id}/healthcheck:

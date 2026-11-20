@@ -71,6 +71,12 @@ func isContainerFileDownload(c echo.Context) bool {
 	return c.Request().Method == http.MethodGet && c.Path() == V2APIPath+"/container/:id/files/download"
 }
 
+// isContainerFileUpload is streamed to the disk by its handler: the validator would read
+// the whole file into memory first, twice.
+func isContainerFileUpload(c echo.Context) bool {
+	return c.Request().Method == http.MethodPost && c.Path() == V2APIPath+"/container/:id/files/upload"
+}
+
 func InitV2Router() http.Handler {
 	appManagement := v2Route.NewAppManagement()
 
@@ -149,7 +155,7 @@ func InitV2Router() http.Handler {
 			// (ReCasaOS/CasaOS#7).
 			ExcludeReadOnlyValidations: true,
 		},
-		Skipper: func(c echo.Context) bool { return isGitWebhook(c) || isStatsRulesPut(c) },
+		Skipper: func(c echo.Context) bool { return isGitWebhook(c) || isStatsRulesPut(c) || isContainerFileUpload(c) },
 	}))
 
 	codegen.RegisterHandlersWithBaseURL(e, appManagement, V2APIPath)
