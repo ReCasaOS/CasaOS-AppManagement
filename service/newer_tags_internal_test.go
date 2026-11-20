@@ -27,6 +27,37 @@ func TestNewerTagsAreTheHighestOfEachLevelOfTheSameFlavour(t *testing.T) {
 	assert.Equal(t, major, "")
 }
 
+// Rebuilt from its numbers, `24.04` came out as `24.4`: a tag that does not exist.
+func TestATagIsOfferedAsTheRegistrySpellsIt(t *testing.T) {
+	_, _, major := newerTagsOf("22.04", []string{"22.10", "24.04", "26.04"})
+	assert.Equal(t, major, "26.04")
+
+	_, minor, major := newerTagsOf("2024.07.0", []string{"2024.10.2", "2025.08.1"})
+	assert.Equal(t, minor, "2024.10.2")
+	assert.Equal(t, major, "2025.08.1")
+}
+
+// An architecture, a distribution and its release, a CUDA or a PHP version are part of
+// the flavour: a suggestion across them is a tag that does not run here.
+func TestOnlyTheBuildCounterMayDifferWithinAFlavour(t *testing.T) {
+	for current, tags := range map[string][]string{
+		"1.2.3-arm32v7":       {"1.2.4-arm64v8"},
+		"1.2.3-armv6":         {"1.2.4-armv7"},
+		"16.2.0-debian-11-r5": {"16.2.0-debian-12-r1", "16.4.0-debian-12-r0"},
+		"1.2.3-ubuntu22.04":   {"1.2.3-ubuntu24.04"},
+		"1.2.3-cuda11.8":      {"1.2.4-cuda12.4"},
+		"1.2.3-php8.2":        {"1.2.4-php8.3"},
+		"1.2.3-alpine3.20":    {"1.3.0-alpine3.18"},
+	} {
+		patch, minor, major := newerTagsOf(current, tags)
+		assert.Equal(t, patch+minor+major, "", current)
+	}
+
+	patch, minor, _ := newerTagsOf("16.2.0-debian-11-r5", []string{"16.2.0-debian-11-r7", "16.4.0-debian-11-r0"})
+	assert.Equal(t, patch, "16.2.0-debian-11-r7")
+	assert.Equal(t, minor, "16.4.0-debian-11-r0")
+}
+
 func TestNothingNewerIsNothing(t *testing.T) {
 	for name, current := range map[string]string{
 		"already the highest": "2.1.0",
@@ -57,7 +88,13 @@ func TestAPrereleaseIsOfferedOnlyToAPrerelease(t *testing.T) {
 	assert.Equal(t, major, "2.0.0")
 
 	patch, _, _ := newerTagsOf("2.0.0-rc1", tags)
-	assert.Equal(t, patch, "2.0.0-rc2")
+	assert.Equal(t, patch, "2.0.0")
+
+	// a beta is told the release it leads to
+	_, _, major = newerTagsOf("2.0.0-beta.1", []string{"2.0.0", "3.0.0", "3.0.0-beta.1"})
+	assert.Equal(t, major, "3.0.0")
+	patch, _, _ = newerTagsOf("2.0.0-beta.1", []string{"2.0.0"})
+	assert.Equal(t, patch, "2.0.0")
 }
 
 func TestThePrefixAndTheNumberOfPartsAreKept(t *testing.T) {
@@ -83,22 +120,31 @@ func TestAPassAsksEachRepositoryOnceAndKeepsWhatItFound(t *testing.T) {
 	}
 	pinnedImages = func(context.Context) (map[string]map[string]string, error) {
 		return map[string]map[string]string{
-			"immich":   {"db": "postgres:16.2"},
-			"nextcloud": {"db": "postgres:16.2", "app": "nextcloud:1.2.3"},
-			"down":     {"web": "ghcr.io/down/app:1.0.0"},
+			"immich":    {"db": "postgres:16.2"},
+			"nextcloud": {"db": "docker.io/library/postgres:16.2", "app": "nextcloud:1.2.3"},
+			"down":      {"web": "ghcr.io/down/app:1.0.0"},
 		}, nil
 	}
 
 	CheckNewerTags(context.Background())
 
-	assert.Equal(t, asked["postgres:16.2"], 1)
-	immich := NewerTagsOf("immich")
+	// two spellings of one repository are read once
+	assert.Equal(t, asked["postgres:16.2"]+asked["docker.io/library/postgres:16.2"], 1)
+	immich := NewerTagsOf("immich", map[string]string{"db": "postgres:16.2"})
 	assert.Equal(t, len(immich), 1)
 	assert.Equal(t, *immich[0].Minor, "16.4")
 	assert.Equal(t, *immich[0].Major, "17.0")
 	assert.Assert(t, immich[0].Patch == nil)
-	assert.Equal(t, len(NewerTagsOf("nextcloud")), 2)
-	assert.Assert(t, NewerTagsOf("down") == nil)
+	assert.Equal(t, len(NewerTagsOf("nextcloud", map[string]string{"db": "docker.io/library/postgres:16.2", "app": "nextcloud:1.2.3"})), 2)
+	assert.Assert(t, NewerTagsOf("down", map[string]string{"web": "ghcr.io/down/app:1.0.0"}) == nil)
+
+	// the owner moved immich to 17.0: what was found for 16.2 is not said any more
+	assert.Assert(t, NewerTagsOf("immich", map[string]string{"db": "postgres:17.0"}) == nil)
+
+	// a registry that fails the next day keeps what the last pass found for its images
+	listTags = func(context.Context, string) ([]string, error) { return nil, errors.New("network not ready") }
+	CheckNewerTags(context.Background())
+	assert.Equal(t, len(NewerTagsOf("immich", map[string]string{"db": "postgres:16.2"})), 1)
 }
 
 // linuxserver/jellyfin holds tags like `2021.12.16` from when it tagged by date: read

@@ -12,10 +12,11 @@ import (
 // The tags a registry holds for a repository, for an image pinned to a version: the
 // update check asks whether `1.4.2` has a new build, this asks whether `1.4.3` exists.
 
-// tagsPagesMax bounds how many pages are read for one repository. A thousand tags a page:
-// repositories that tag every build hold tens of thousands, and the newest versions are
-// not reliably on the first pages, so this reads a fair amount, and no more.
-const tagsPagesMax = 20
+// tagsPagesMax bounds how many pages are read for one repository, a thousand tags a page.
+// Repositories that tag every build hold tens of thousands, and some registries list the
+// oldest first: a list cut short would leave out the newest versions and say something
+// wrong, so a repository with more is not concluded on at all.
+const tagsPagesMax = 50
 
 // ListTags is every tag the registry holds for the image's repository, read with the same
 // token as the update check. The tag or digest of imageName is ignored.
@@ -23,9 +24,6 @@ func ListTags(ctx context.Context, imageName string) ([]string, error) {
 	token, manifestURL, err := tokenAndURL(imageName)
 	if err != nil {
 		return nil, err
-	}
-	if token == "" {
-		return nil, fmt.Errorf("could not fetch token")
 	}
 	next, err := tagsListURL(manifestURL)
 	if err != nil {
@@ -62,6 +60,9 @@ func ListTags(ctx context.Context, imageName string) ([]string, error) {
 		if next, err = nextTagsPage(next, link); err != nil {
 			return nil, err
 		}
+	}
+	if next != "" {
+		return nil, fmt.Errorf("more than %d tags: not read to the end", tagsPagesMax*1000)
 	}
 
 	return tags, nil
