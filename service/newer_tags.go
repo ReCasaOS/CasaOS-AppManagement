@@ -2,7 +2,11 @@ package service
 
 import (
 	"context"
+	stdjson "encoding/json"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
+	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -294,4 +298,62 @@ func CheckNewerTags(ctx context.Context) {
 	newerTags.apps = found
 	newerTags.Unlock()
 	logger.Info("newer versions checked", zap.Int("apps", len(found)), zap.Time("at", time.Now()))
+	tellNewerTags(ctx, found)
+}
+
+// NewerTagsToldPath keeps the newer versions already told, so that a restart, or the next
+// day's pass, does not tell them again. A variable so a test writes elsewhere.
+var NewerTagsToldPath = "/var/lib/casaos/newer-tags-told.json"
+
+// toldTag is one newer version told: an app's image, and a tag it can move to.
+type toldTag struct {
+	App     string `json:"app"`
+	Image   string `json:"image"`
+	Current string `json:"current"`
+	Tag     string `json:"tag"`
+	Level   string `json:"level"`
+}
+
+// tellNewerTags says, for the alerts, the newer versions this pass found that were not
+// told before. The list kept is what this pass found: a version no longer offered (the app
+// moved to it, or its image changed) is forgotten, and told again if it comes back.
+func tellNewerTags(ctx context.Context, found map[string][]codegen.NewerTag) {
+	var all []toldTag
+	for app, entries := range found {
+		for _, e := range entries {
+			for level, tag := range map[string]*string{"patch": e.Patch, "minor": e.Minor, "major": e.Major} {
+				if tag != nil {
+					all = append(all, toldTag{App: app, Image: e.Image, Current: e.Current, Tag: *tag, Level: level})
+				}
+			}
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].App != all[j].App {
+			return all[i].App < all[j].App
+		}
+		return all[i].Tag < all[j].Tag
+	})
+
+	var told []toldTag
+	if content, err := os.ReadFile(NewerTagsToldPath); err == nil {
+		_ = stdjson.Unmarshal(content, &told)
+	}
+	var fresh []toldTag
+	for _, t := range all {
+		if !slices.Contains(told, t) {
+			fresh = append(fresh, t)
+		}
+	}
+	if content, err := stdjson.Marshal(all); err == nil {
+		if err := os.WriteFile(NewerTagsToldPath, content, 0o600); err != nil {
+			logger.Error("newer versions: what was told cannot be written", zap.Error(err))
+			return // told again tomorrow rather than told every day
+		}
+	}
+	if len(fresh) == 0 {
+		return
+	}
+	content, _ := stdjson.Marshal(fresh)
+	publishEvent(ctx, common.EventTypeNewerTagsFound, map[string]string{common.PropertyTypeNewerTags.Name: string(content)})
 }

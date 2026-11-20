@@ -4,10 +4,12 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"errors"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -418,6 +420,35 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 	}
 
 	finishAutoUpdateNight(slot, &run, removed, failures, seen)
+	tellAutoUpdateNight(ctx, run)
+}
+
+// publishEvent is how the night, the newer versions and the cleanup tell the alerts: a
+// variable so a test hears them.
+var publishEvent = PublishEventWrapper
+
+// tellAutoUpdateNight says what the night did, for the alerts: the apps it updated and the
+// ones whose update failed. A night that changed nothing says nothing.
+func tellAutoUpdateNight(ctx context.Context, run codegen.AutoUpdateRun) {
+	var updated, failed []string
+	for _, app := range run.Apps {
+		switch app.State {
+		case codegen.ComposeAppUpdateRunAppStateUpdated:
+			updated = append(updated, app.Id)
+		case codegen.ComposeAppUpdateRunAppStateFailed:
+			// left alone after two failed nights: told when it failed, not every night after
+			if app.Message == nil || !strings.HasPrefix(*app.Message, "left alone") {
+				failed = append(failed, app.Id)
+			}
+		}
+	}
+	if len(updated) == 0 && len(failed) == 0 {
+		return
+	}
+	publishEvent(ctx, common.EventTypeAutoUpdateNightEnd, map[string]string{
+		common.PropertyTypeAutoUpdateUpdated.Name: strings.Join(updated, ","),
+		common.PropertyTypeAutoUpdateFailed.Name:  strings.Join(failed, ","),
+	})
 }
 
 // finishAutoUpdateNight writes that the night is done, with its run when there was one,
