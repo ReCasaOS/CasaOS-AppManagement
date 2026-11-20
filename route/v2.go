@@ -65,6 +65,18 @@ func isLogsStream(c echo.Context) bool {
 	return c.Request().Method == http.MethodGet && c.Path() == V2APIPath+"/logs/stream"
 }
 
+// isContainerFileDownload takes its token from the query too: the browser downloads the
+// file itself, to the disk as it comes, rather than holding it in a page.
+func isContainerFileDownload(c echo.Context) bool {
+	return c.Request().Method == http.MethodGet && c.Path() == V2APIPath+"/container/:id/files/download"
+}
+
+// isContainerFileUpload is streamed to the disk by its handler: the validator would read
+// the whole file into memory first, twice.
+func isContainerFileUpload(c echo.Context) bool {
+	return c.Request().Method == http.MethodPost && c.Path() == V2APIPath+"/container/:id/files/upload"
+}
+
 func InitV2Router() http.Handler {
 	appManagement := v2Route.NewAppManagement()
 
@@ -101,7 +113,7 @@ func InitV2Router() http.Handler {
 		TokenLookupFuncs: []echo_middleware.ValuesExtractor{
 			func(c echo.Context) ([]string, error) {
 				authorization := c.Request().Header.Get(echo.HeaderAuthorization)
-				if authorization == "" && isLogsStream(c) {
+				if authorization == "" && (isLogsStream(c) || isContainerFileDownload(c)) {
 					return []string{c.QueryParam("token")}, nil
 				}
 				return []string{jwt.TokenFromAuthorization(authorization)}, nil
@@ -143,7 +155,7 @@ func InitV2Router() http.Handler {
 			// (ReCasaOS/CasaOS#7).
 			ExcludeReadOnlyValidations: true,
 		},
-		Skipper: func(c echo.Context) bool { return isGitWebhook(c) || isStatsRulesPut(c) },
+		Skipper: func(c echo.Context) bool { return isGitWebhook(c) || isStatsRulesPut(c) || isContainerFileUpload(c) },
 	}))
 
 	codegen.RegisterHandlersWithBaseURL(e, appManagement, V2APIPath)

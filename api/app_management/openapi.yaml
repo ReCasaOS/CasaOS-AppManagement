@@ -1884,6 +1884,246 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /container/{id}/files:
+    get:
+      summary: What a folder of a running container holds
+      description: |
+        Read from the host, in the container's own filesystem, image layers and volumes as
+        the container sees them: it works for images without a shell. A symlink resolves
+        inside the container. Folders first, then by name, at most 5000 entries.
+        The owner of the box only. Errors: 400 on a path that does not start with `/` or is
+        not a folder, a device, a socket or a file of /proc or /sys, 403 for another account
+        or a path the box itself may not read, 404 on a container or a path that is not there,
+        409 while the container is not running, 501 on a kernel older than 5.6.
+      operationId: containerFiles
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerFilesOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    delete:
+      summary: Delete a file, a link or a folder with all it holds, in a running container
+      description: |
+        A link goes itself, never what it names. A folder that is a volume's mount point,
+        or holds one, is refused before anything goes. Refused while an operation runs on
+        the app. The owner of the box only. Errors: 400 on `/`, a mount, a file of /proc or
+        /sys, or a read-only container; 403, 404, 409 (stopped, or busy) as for reading.
+      operationId: deleteContainerFile
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
+  /container/{id}/files/content:
+    get:
+      summary: A text file of a running container, up to 1 MB
+      description: |
+        As `GET /container/{id}/files`. Errors as there, and 413 on a file over 1 MB, 415 on
+        a file that is not text.
+      operationId: containerFileContent
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerFileContentOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "413":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "415":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    put:
+      summary: Write a text file of a running container
+      description: |
+        Creates the file, or replaces it when `replace` is set, keeping its mode and owner;
+        a new file is 0644 and belongs to the owner of its folder. Written aside, then moved
+        in place. A link or a folder is refused. Refused while an operation runs on the app.
+        Errors as for `DELETE /container/{id}/files`, and 409 on a name already taken
+        without `replace`.
+      operationId: writeContainerFileContent
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContainerFileWrite"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
+  /container/{id}/files/download:
+    get:
+      summary: Download a file of a running container
+      description: |
+        As `GET /container/{id}/files`, for one regular file, sent as it is. The token may
+        come in the `token` query parameter: the browser downloads it to the disk itself.
+      operationId: containerFileDownload
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerFileDownloadOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /container/{id}/files/folder:
+    post:
+      summary: Make a folder in a running container
+      description: |
+        Owned as its parent folder. Errors as for `DELETE /container/{id}/files`, and 409
+        on a name already taken.
+      operationId: makeContainerFolder
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContainerFolderMake"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /container/{id}/files/upload:
+    post:
+      summary: Send a file into a running container
+      description: |
+        The body is multipart, one part named `file`, streamed to the disk. `path` is the
+        file's full path. As `PUT /container/{id}/files/content` otherwise.
+      operationId: uploadContainerFile
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+        - name: replace
+          in: query
+          required: false
+          description: Replace a file already there
+          schema:
+            type: boolean
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /container/{id}/healthcheck:
     get:
       deprecated: true
@@ -3009,6 +3249,15 @@ components:
         type: string
       example: 09e70f4a7dd3fc43de6a1bc40d45c79f857544e13679e5b1a47409034a7ce621
 
+    ContainerPath:
+      name: path
+      description: An absolute path inside the container
+      in: query
+      required: true
+      schema:
+        type: string
+      example: /config
+
     DeleteConfigFolder:
       name: delete_config_folder
       description: Delete the config folder of the app, and with it its named Docker volumes. Left false, both stay, and the next install of the app finds its data.
@@ -3770,6 +4019,41 @@ components:
               - properties:
                   data:
                     $ref: "#/components/schemas/ComposeAppContainers"
+
+    ContainerFilesOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ContainerFiles"
+
+    ContainerFileContentOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ContainerFileContent"
+
+    ContainerFileDownloadOK:
+      description: OK
+      headers:
+        Content-Disposition:
+          description: "`attachment; filename*=UTF-8''<name, percent-encoded>`"
+          schema:
+            type: string
+      content:
+        application/octet-stream:
+          schema:
+            type: string
+            format: binary
 
     ContainerDetailOK:
       description: OK
@@ -4893,6 +5177,103 @@ components:
         output:
           type: string
           description: What the command printed. Empty for an account that is not the owner.
+
+    ContainerFileWrite:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+          example: /config/settings.yml
+        content:
+          type: string
+        replace:
+          type: boolean
+          description: Replace a file already there
+
+    ContainerFolderMake:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          example: /config/backups
+
+    ContainerFiles:
+      type: object
+      required: [path, entries, truncated, volumes]
+      properties:
+        path:
+          type: string
+          description: The folder, cleaned
+          example: /config
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContainerFileEntry"
+        truncated:
+          type: boolean
+          description: More than 5000 entries; the rest are left out
+        in_volume:
+          type: string
+          description: The mount point of the volume or bind mount this folder is in, absent when it is in the container's own layer, lost when the container is recreated
+        volumes:
+          type: array
+          description: Every mount point of the container
+          items:
+            type: string
+
+    ContainerFileEntry:
+      type: object
+      required: [name, type, size, mode, uid, gid, modified]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [dir, file, symlink, other]
+        link:
+          type: string
+          description: Where a symlink points, as written
+        size:
+          type: integer
+          format: int64
+        mode:
+          type: string
+          description: The permissions, as `ls -l` writes them without the type
+          example: rwxr-xr-x
+        octal:
+          type: string
+          example: "755"
+        uid:
+          type: integer
+          format: uint32
+        gid:
+          type: integer
+          format: uint32
+        user:
+          type: string
+          description: The name of uid in the container's /etc/passwd, absent when it has none
+        group:
+          type: string
+        modified:
+          type: string
+          format: date-time
+        volume:
+          type: boolean
+          description: This folder is a mount point of the container
+
+    ContainerFileContent:
+      type: object
+      required: [path, content, size]
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+        size:
+          type: integer
+          format: int64
 
     ContainerDetail:
       description: What one container is, for somebody who did not create it.
