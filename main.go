@@ -202,6 +202,15 @@ func main() {
 			panic(err)
 		}
 
+		// The weekly cleanup of what holds the data of no app, when the owner switched it
+		// on. Ten minutes because a run that found the box busy tries again at the next
+		// tick; what is not due costs one file read.
+		if _, err := crontab.AddFunc("@every 10m", func() {
+			service.RunDueCleanup(ctx, service.BoxNow())
+		}); err != nil {
+			panic(err)
+		}
+
 		// An app's container that crashes, turns unhealthy or keeps restarting, told on
 		// the message bus for the core's alerts. Docker's own events rather than a tick:
 		// a crash is news the moment it happens.

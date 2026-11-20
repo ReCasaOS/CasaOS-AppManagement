@@ -38,6 +38,7 @@ func (a *AppManagement) PruneDanglingImages(ctx echo.Context) error {
 	}
 
 	logger.Info("pruned dangling images", zap.Int("count", result.Count), zap.Int64("bytes", result.Size))
+	service.RecordManualCleanup(service.CleanupRunOldVersions, result.Count, result.Size)
 
 	return ctx.JSON(http.StatusOK, codegen.DanglingImagesOK{Data: result})
 }

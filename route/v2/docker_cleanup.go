@@ -43,6 +43,7 @@ func (a *AppManagement) PruneBuildCache(ctx echo.Context) error {
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
 	logger.Info("pruned the build cache", zap.Int64("bytes", freed))
+	service.RecordManualCleanup(service.CleanupRunBuildCache, 0, freed)
 
 	return ctx.JSON(http.StatusOK, codegen.CleanupResultOK{
 		Data: &codegen.CleanupResult{Removed: []string{}, Refused: map[string]string{}, Size: freed},
@@ -50,11 +51,47 @@ func (a *AppManagement) PruneBuildCache(ctx echo.Context) error {
 }
 
 func (a *AppManagement) RemoveLeftoverImages(ctx echo.Context) error {
-	return removeLeftovers(ctx, "images", service.RemoveLeftoverImages)
+	return removeLeftovers(ctx, service.CleanupRunImages, service.RemoveLeftoverImages)
 }
 
 func (a *AppManagement) RemoveLeftoverVolumes(ctx echo.Context) error {
-	return removeLeftovers(ctx, "volumes", service.RemoveLeftoverVolumes)
+	return removeLeftovers(ctx, service.CleanupRunVolumes, service.RemoveLeftoverVolumes)
+}
+
+// CleanupSchedule is the weekly switch and the last runs.
+func (a *AppManagement) CleanupSchedule(ctx echo.Context) error {
+	if !isOwner(ctx) {
+		return forbidden(ctx)
+	}
+	schedule, err := service.CleanupSchedule(service.BoxNow())
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.CleanupScheduleOK{Data: schedule})
+}
+
+func (a *AppManagement) SetCleanupSchedule(ctx echo.Context) error {
+	if !isOwner(ctx) {
+		return forbidden(ctx)
+	}
+	// a pointer: a body that leaves `weekly` out must not read as "turn it off"
+	var body struct {
+		Weekly *bool `json:"weekly"`
+	}
+	if err := ctx.Bind(&body); err != nil || body.Weekly == nil {
+		message := "weekly: true or false is required"
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+	schedule, err := service.SetCleanupWeekly(*body.Weekly, service.BoxNow())
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+	logger.Info("weekly cleanup switched", zap.Bool("on", *body.Weekly))
+
+	return ctx.JSON(http.StatusOK, codegen.CleanupScheduleOK{Data: schedule})
 }
 
 func (a *AppManagement) RemoveOrphanFolders(ctx echo.Context) error {
@@ -83,6 +120,9 @@ func removeLeftovers(ctx echo.Context, what string, remove func(context.Context,
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
 	logger.Info("deleted leftovers", zap.String("what", what), zap.Strings("removed", result.Removed), zap.Int64("bytes", result.Size))
+	if what != "folders" {
+		service.RecordManualCleanup(what, len(result.Removed), result.Size)
+	}
 
 	return ctx.JSON(http.StatusOK, codegen.CleanupResultOK{Data: result})
 }
