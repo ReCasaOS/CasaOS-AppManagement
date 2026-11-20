@@ -57,6 +57,10 @@ func (a *AppManagement) RemoveLeftoverVolumes(ctx echo.Context) error {
 	return removeLeftovers(ctx, "volumes", service.RemoveLeftoverVolumes)
 }
 
+func (a *AppManagement) RemoveOrphanFolders(ctx echo.Context) error {
+	return removeLeftovers(ctx, "folders", service.RemoveOrphanFolders)
+}
+
 // removeLeftovers is the two deletions: the owner's, a list that only narrows what the
 // report offers, a refusal while what the apps claim cannot be told.
 func removeLeftovers(ctx echo.Context, what string, remove func(context.Context, []string) (*codegen.CleanupResult, error)) error {

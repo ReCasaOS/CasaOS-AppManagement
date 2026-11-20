@@ -528,3 +528,67 @@ volumes:
 	_, declared := protection.Volumes["qbittorrent_config"]
 	assert.Assert(t, declared, "%v", protection.Volumes)
 }
+
+// The folder of an app that is gone: no stack, no container, and a compose file that
+// still claims an image. It is listed, and listed even when its file cannot be read,
+// since removing it is then the way out.
+func TestAFolderNoContainerGoesWithIsListedEvenWhenItCannotBeRead(t *testing.T) {
+	root := appFolders(t)
+	writeCompose(t, root, "gone", "services: [this is not a compose file")
+	writeCompose(t, root, "jellyfin", "name: jellyfin\nservices:\n  web:\n    image: jellyfin/jellyfin\n")
+	ListComposeStacks = func(context.Context) ([]api.Stack, error) {
+		return []api.Stack{{ID: "jellyfin", ConfigFiles: filepath.Join(root, "jellyfin", "docker-compose.yml")}}, nil
+	}
+
+	report, err := dockerCleanup(context.Background(), &fakeCleanupDaemon{})
+	assert.NilError(t, err)
+	assert.Equal(t, report.Held, CleanupHeldUnreadable)
+	// the app that has a container is not one, whatever its folder
+	assert.DeepEqual(t, report.Orphans, []string{"gone"})
+}
+
+// An install has its folder before it has a container.
+func TestNoFolderIsListedWhileAnOperationRuns(t *testing.T) {
+	root := appFolders(t)
+	writeCompose(t, root, "installing", "name: installing\nservices:\n  web:\n    image: nginx\n")
+	end, err := Begin("installing", "install")
+	assert.NilError(t, err)
+	defer end()
+
+	report, err := dockerCleanup(context.Background(), &fakeCleanupDaemon{})
+	assert.NilError(t, err)
+	assert.Equal(t, len(report.Orphans), 0)
+
+	_, err = RemoveOrphanFolders(context.Background(), []string{"installing"})
+	assert.ErrorIs(t, err, ErrCleanupHeld{Reason: CleanupHeldBusy})
+}
+
+// Moved aside, never deleted, and only a name that is an orphan right now: a path, or the
+// folder of an app that has a container, is refused and nothing of it moves.
+func TestAnOrphanFolderIsMovedAsideAndNothingElseIs(t *testing.T) {
+	root := filepath.Join(appFolders(t))
+	writeCompose(t, root, "gone", "name: gone\nservices:\n  web:\n    image: nginx\n")
+	writeCompose(t, root, "jellyfin", "name: jellyfin\nservices:\n  web:\n    image: jellyfin/jellyfin\n")
+	ListComposeStacks = func(context.Context) ([]api.Stack, error) {
+		return []api.Stack{{ID: "jellyfin", ConfigFiles: filepath.Join(root, "jellyfin", "docker-compose.yml")}}, nil
+	}
+
+	result, err := RemoveOrphanFolders(context.Background(), []string{"gone", "jellyfin", "../gone", "nothing"})
+	assert.NilError(t, err)
+	assert.DeepEqual(t, result.Removed, []string{"gone"})
+	assert.Equal(t, len(result.Refused), 3)
+
+	_, err = os.Stat(filepath.Join(root, "gone"))
+	assert.Assert(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(root, "jellyfin", "docker-compose.yml"))
+	assert.NilError(t, err)
+	moved, err := filepath.Glob(filepath.Join(removedAppsPath(), "gone-*", "docker-compose.yml"))
+	assert.NilError(t, err)
+	assert.Equal(t, len(moved), 1, "the compose file is kept, moved aside")
+
+	// and what the folder claimed is nobody's now
+	protection, err := appsProtection(context.Background())
+	assert.NilError(t, err)
+	_, claimed := protection.Projects["gone"]
+	assert.Assert(t, !claimed)
+}
