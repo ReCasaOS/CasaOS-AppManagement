@@ -498,3 +498,33 @@ volumes:
 	_, declared := protection.Volumes["myapp_data"]
 	assert.Assert(t, declared, "%v", protection.Volumes)
 }
+
+// A service that sets both `network_mode` and `networks` is a file compose refuses, and
+// the app runs all the same: it was started before the rule, or by another tool. One such
+// app held the whole cleanup on a real box. What it claims is still written in its file.
+func TestAnAppComposeWouldRefuseStillClaimsWhatItsFileDeclares(t *testing.T) {
+	root := appFolders(t)
+	writeCompose(t, root, "qbittorrent", `name: qbittorrent
+services:
+  app:
+    image: linuxserver/qbittorrent:5.0
+    network_mode: bridge
+    networks:
+      - default
+    volumes:
+      - config:/config
+volumes:
+  config:
+`)
+
+	// the strict load refuses it, which is what the rest of the service sees
+	_, err := LoadComposeAppFromConfigFile("qbittorrent", filepath.Join(root, "qbittorrent", "docker-compose.yml"))
+	assert.ErrorContains(t, err, "mutually exclusive")
+
+	protection, err := appsProtection(context.Background())
+	assert.NilError(t, err)
+	_, claimed := protection.Images["docker.io/linuxserver/qbittorrent:5.0"]
+	assert.Assert(t, claimed, "%v", protection.Images)
+	_, declared := protection.Volumes["qbittorrent_config"]
+	assert.Assert(t, declared, "%v", protection.Volumes)
+}

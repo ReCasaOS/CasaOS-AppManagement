@@ -14,6 +14,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/distribution/reference"
 	dockertypes "github.com/docker/docker/api/types"
@@ -179,7 +180,7 @@ var appsProtection = func(ctx context.Context) (cleanupProtection, error) {
 	}
 
 	for name, file := range files {
-		app, err := LoadComposeAppFromConfigFile(name, file)
+		app, err := claimsOf(name, file)
 		if err != nil {
 			return protection, fmt.Errorf("compose file of `%s`: %w", name, err)
 		}
@@ -189,6 +190,22 @@ var appsProtection = func(ctx context.Context) (cleanupProtection, error) {
 	}
 
 	return protection, nil
+}
+
+// claimsOf loads an app for what it claims. A file compose would refuse to start, for a
+// service that sets both `network_mode` and `networks` or the like, still says which
+// images and which volumes are the app's: it is read again without those checks. A file
+// that does not parse, or names an image that cannot be read, stays an error.
+func claimsOf(name, file string) (*ComposeApp, error) {
+	app, err := LoadComposeAppFromConfigFile(name, file)
+	if err == nil {
+		return app, nil
+	}
+	if lenient, again := loadComposeApp(name, file, cli.WithConsistency(false)); again == nil {
+		return lenient, nil
+	}
+
+	return nil, err
 }
 
 // leftoverImages is the tagged images no container holds and no installed app names,
