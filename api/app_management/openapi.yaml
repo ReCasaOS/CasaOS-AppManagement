@@ -409,6 +409,94 @@ paths:
         "404":
           $ref: "#/components/responses/ResponseNotFound"
 
+  /auto-update:
+    get:
+      summary: The apps that update by themselves, and the last nights
+      description: |
+        The apps whose owner turned on the nightly update, when the next night is,
+        and what became of each app the last nights, newest first. The owner's only.
+      operationId: autoUpdate
+      tags:
+        - Compose methods
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoUpdateOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+    put:
+      summary: How long an update waits before a night applies it
+      description: |
+        A night applies an update only once it has been known for this many days,
+        counted from the night that first found it: an image published broken is
+        usually replaced within a day or two. From 0 to 30; 3 when never set. The
+        owner's only.
+      operationId: setAutoUpdate
+      tags:
+        - Compose methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [min_days]
+              properties:
+                min_days:
+                  type: integer
+                  minimum: 0
+                  maximum: 30
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoUpdateOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /compose/{id}/auto-update:
+    put:
+      summary: Turn the nightly update of one app on or off
+      description: |
+        Every night at two, on the box's clock, an app turned on is updated when it
+        has an update, one app after another, with the update button's own update: an
+        app that does not start again is put back on the files and the images it ran,
+        and the failure raises an alert. The first app turned on waits for the next
+        night. A night waits while something runs on an app or an upgrade of the
+        system is open, and is skipped when it cannot start within two hours. An app
+        that failed two nights in a row is left alone until its switch is turned off
+        and on again. Apps built from a repository deploy by themselves already and
+        are refused. The owner's only.
+      operationId: setAppAutoUpdate
+      tags:
+        - Compose methods
+      parameters:
+        - $ref: "#/components/parameters/ComposeAppID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoUpdateOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /image-updates:
     post:
       summary: Check every installed app for a newer image
@@ -4019,6 +4107,17 @@ components:
                   data:
                     $ref: "#/components/schemas/CleanupResult"
 
+    AutoUpdateOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/AutoUpdate"
+
     DanglingImagesOK:
       description: OK
       content:
@@ -5760,6 +5859,40 @@ components:
           items:
             $ref: "#/components/schemas/ComposeAppUpdateRunApp"
 
+    AutoUpdate:
+      description: The apps that update by themselves, and the last nights.
+      required: [apps, min_days, runs]
+      properties:
+        apps:
+          description: The apps turned on.
+          type: array
+          items:
+            type: string
+        min_days:
+          description: Days an update must have been known before a night applies it.
+          type: integer
+        next:
+          description: When the next night is due. Absent when no app is turned on.
+          type: string
+          format: date-time
+        runs:
+          description: The last nights, newest first.
+          type: array
+          items:
+            $ref: "#/components/schemas/AutoUpdateRun"
+
+    AutoUpdateRun:
+      description: One night, and what became of each app turned on.
+      required: [at, apps]
+      properties:
+        at:
+          type: string
+          format: date-time
+        apps:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComposeAppUpdateRunApp"
+
     ComposeAppUpdateRunApp:
       required:
         - id
@@ -5777,7 +5910,9 @@ components:
             - current
             - failed
         message:
-          description: The reason, when the app stayed current for one, or the error.
+          description: |-
+            The reason, when the app stayed current for one, or the error. In a night,
+            `queued` is an update that waits to be old enough, and says until when.
           type: string
 
     ImageUpdateCheckResult:

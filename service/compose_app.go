@@ -1018,8 +1018,13 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 
 	success := false
 
+	// the images the app runs now, by tag: a pull that keeps a tag moves it
+	held := imagesRunBy(ctx, dockerClient, a)
+
 	defer func() {
 		if !success {
+			pointTagsBack(ctx, dockerClient, a.Name, held)
+
 			if err := file.CopySingleFile(backupComposeFile, currentComposeFile, ""); err != nil {
 				logger.Error("failed to restore original compose file", zap.Error(err), zap.String("src", backupComposeFile), zap.String("dst", currentComposeFile))
 				return

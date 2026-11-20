@@ -2,7 +2,9 @@ package v2
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/service"
@@ -93,4 +95,80 @@ func (a *AppManagement) ComposeAppUpdateRun(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, codegen.ComposeAppUpdateRunOK{Data: run})
+}
+
+// AutoUpdate is the apps that update by themselves and the last nights.
+func (a *AppManagement) AutoUpdate(ctx echo.Context) error {
+	if !isOwner(ctx) {
+		return forbidden(ctx)
+	}
+	view, err := service.AutoUpdate(service.BoxNow())
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.AutoUpdateOK{Data: view})
+}
+
+func (a *AppManagement) SetAppAutoUpdate(ctx echo.Context, id codegen.ComposeAppID) error {
+	if !isOwner(ctx) {
+		return forbidden(ctx)
+	}
+	// a pointer: a body that leaves `enabled` out must not read as "turn it off"
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := ctx.Bind(&body); err != nil || body.Enabled == nil {
+		message := "enabled: true or false is required"
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	// turning off is always allowed, so an app that is gone can still be taken off
+	if *body.Enabled {
+		installed, err := service.InstalledAppsForAutoUpdate(ctx.Request().Context())
+		if err != nil {
+			message := err.Error()
+			return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+		}
+		if !slices.Contains(installed, id) {
+			message := fmt.Sprintf("`%s` is not an app the night can update: it is not installed, or it is built from a repository", id)
+			return ctx.JSON(http.StatusNotFound, codegen.ResponseNotFound{Message: &message})
+		}
+	}
+
+	view, err := service.SetAppAutoUpdate(id, *body.Enabled, service.BoxNow())
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+	logger.Info("automatic update switched", zap.String("app", id), zap.Bool("on", *body.Enabled))
+
+	return ctx.JSON(http.StatusOK, codegen.AutoUpdateOK{Data: view})
+}
+
+// SetAutoUpdate sets how long an update waits before a night applies it.
+func (a *AppManagement) SetAutoUpdate(ctx echo.Context) error {
+	if !isOwner(ctx) {
+		return forbidden(ctx)
+	}
+	var body struct {
+		MinDays *int `json:"min_days"`
+	}
+	if err := ctx.Bind(&body); err != nil || body.MinDays == nil {
+		message := "min_days: a number of days is required"
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+	view, err := service.SetAutoUpdateMinDays(*body.MinDays, service.BoxNow())
+	if errors.Is(err, service.ErrAutoUpdateMinDays) {
+		message := err.Error()
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+	logger.Info("automatic updates wait", zap.Int("days", *body.MinDays))
+
+	return ctx.JSON(http.StatusOK, codegen.AutoUpdateOK{Data: view})
 }

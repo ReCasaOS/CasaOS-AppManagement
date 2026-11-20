@@ -1,0 +1,487 @@
+package service
+
+import (
+	"context"
+	stdjson "encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"go.uber.org/zap"
+)
+
+// Apps that update by themselves, at night, one app at a time.
+//
+// Off for every app until its owner turns it on, app by app: an update is the one thing
+// here that can break an app with nobody watching. What runs is the update button's own
+// update, rollback included: an app that does not start again is put back on the files
+// and the images it ran, and the failure raises the alert every failed update raises.
+
+// AutoUpdatePath is where the apps that update by themselves and the last runs are
+// kept. A variable so a test can put it somewhere of its own.
+var AutoUpdatePath = "/var/lib/casaos/auto-update.json"
+
+// autoUpdateRunsKept is how many nights are remembered.
+const autoUpdateRunsKept = 30
+
+// autoUpdateFailuresHeld is how many nights in a row an app may fail before the night
+// leaves it alone: each failure stops the app for a while, and the next night would
+// fail the same way.
+const autoUpdateFailuresHeld = 2
+
+// autoUpdateSlot is when the apps update: every night at two, on the box's clock, before
+// the window in which the box updates itself.
+var autoUpdateSlot = BackupSchedule{Every: ScheduleDaily, At: "02:00"}
+
+// autoUpdateWindow is how long after its slot a night may still run. A box that was off
+// or busy all that time skips the night: an app is never updated in the afternoon.
+const autoUpdateWindow = 2 * time.Hour
+
+// autoUpdateMinDaysDefault is how many days an update must have been known before a
+// night applies it, when the owner chose nothing. An image published broken is usually
+// replaced within a day or two; three days lets that happen elsewhere first.
+const autoUpdateMinDaysDefault = 3
+
+// autoUpdateMinDaysMax is the longest wait the owner can choose.
+const autoUpdateMinDaysMax = 30
+
+// autoUpdateMark is the name the night is listed under while it runs, so that the box's
+// own update waits for it.
+const autoUpdateMark = "auto-update"
+
+type autoUpdateState struct {
+	Apps []string `json:"apps"`
+	// the night last run or skipped, or the one current when the first app was turned on
+	LastSlot time.Time `json:"last_slot"`
+	// nights in a row each app failed; at autoUpdateFailuresHeld it is left alone
+	Failures map[string]int `json:"failures,omitempty"`
+	// when the night first found each app had an update, which the wait counts from
+	Seen map[string]time.Time `json:"seen,omitempty"`
+	// days an update must have been known before a night applies it; nil is the default
+	MinDays *int                    `json:"min_days,omitempty"`
+	Runs    []codegen.AutoUpdateRun `json:"runs"`
+}
+
+// minDays is the wait the owner chose, or the default.
+func (s autoUpdateState) minDays() int {
+	if s.MinDays == nil {
+		return autoUpdateMinDaysDefault
+	}
+
+	return *s.MinDays
+}
+
+var autoUpdateLock sync.Mutex
+
+// autoUpdateNight is held while a night runs. The job ticks every ten minutes and a night
+// of many apps lasts longer: a second tick must not start the same night again while the
+// first has not written that it is done.
+var autoUpdateNight sync.Mutex
+
+func readAutoUpdate() (autoUpdateState, error) {
+	state := autoUpdateState{Apps: []string{}, Runs: []codegen.AutoUpdateRun{}, Failures: map[string]int{}, Seen: map[string]time.Time{}}
+	content, err := os.ReadFile(AutoUpdatePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	if err := stdjson.Unmarshal(content, &state); err != nil {
+		return state, err
+	}
+	if state.Apps == nil {
+		state.Apps = []string{}
+	}
+	if state.Runs == nil {
+		state.Runs = []codegen.AutoUpdateRun{}
+	}
+	if state.Failures == nil {
+		state.Failures = map[string]int{}
+	}
+	if state.Seen == nil {
+		state.Seen = map[string]time.Time{}
+	}
+
+	return state, nil
+}
+
+// Written beside and renamed: a file cut short would turn every app's switch off.
+func writeAutoUpdate(state autoUpdateState) error {
+	encoded, err := stdjson.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(AutoUpdatePath), 0o700); err != nil {
+		return err
+	}
+	temp := AutoUpdatePath + ".tmp"
+	if err := os.WriteFile(temp, encoded, 0o600); err != nil {
+		return err
+	}
+
+	return os.Rename(temp, AutoUpdatePath)
+}
+
+func autoUpdateOf(state autoUpdateState, now time.Time) *codegen.AutoUpdate {
+	view := &codegen.AutoUpdate{Apps: append([]string{}, state.Apps...), MinDays: state.minDays(), Runs: []codegen.AutoUpdateRun{}}
+	for i := len(state.Runs) - 1; i >= 0; i-- {
+		view.Runs = append(view.Runs, state.Runs[i])
+	}
+	if len(state.Apps) > 0 {
+		if slot, err := mostRecentSlot(autoUpdateSlot, now); err == nil {
+			next := time.Date(slot.Year(), slot.Month(), slot.Day()+1, slot.Hour(), slot.Minute(), 0, 0, slot.Location())
+			if slot.After(state.LastSlot) && now.Before(slot.Add(autoUpdateWindow)) {
+				// tonight's, not run yet: due at the next tick
+				next = slot
+			}
+			view.Next = &next
+		}
+	}
+
+	return view
+}
+
+// AutoUpdate is the apps that update by themselves, when the next night is, and the
+// last nights, newest first.
+func AutoUpdate(now time.Time) (*codegen.AutoUpdate, error) {
+	autoUpdateLock.Lock()
+	defer autoUpdateLock.Unlock()
+
+	state, err := readAutoUpdate()
+	if err != nil {
+		return nil, err
+	}
+
+	return autoUpdateOf(state, now), nil
+}
+
+// SetAppAutoUpdate turns the nightly update of one app on or off. The first app turned
+// on waits for the next night: the one that just passed is not caught up, or the switch
+// would update at once. Turning an app on again clears the failures that held it.
+func SetAppAutoUpdate(app string, on bool, now time.Time) (*codegen.AutoUpdate, error) {
+	autoUpdateLock.Lock()
+	defer autoUpdateLock.Unlock()
+
+	state, err := readAutoUpdate()
+	if err != nil {
+		return nil, err
+	}
+	has := slices.Contains(state.Apps, app)
+	switch {
+	case on && !has:
+		if len(state.Apps) == 0 {
+			slot, err := mostRecentSlot(autoUpdateSlot, now)
+			if err != nil {
+				return nil, err
+			}
+			state.LastSlot = slot
+		}
+		state.Apps = append(state.Apps, app)
+		sort.Strings(state.Apps)
+		delete(state.Failures, app)
+	case !on && has:
+		state.Apps = slices.DeleteFunc(state.Apps, func(name string) bool { return name == app })
+		delete(state.Failures, app)
+		delete(state.Seen, app)
+	default:
+		// nothing changes: nothing is written
+		return autoUpdateOf(state, now), nil
+	}
+	if err := writeAutoUpdate(state); err != nil {
+		return nil, err
+	}
+
+	return autoUpdateOf(state, now), nil
+}
+
+// SetAutoUpdateMinDays sets how many days an update must have been known before a night
+// applies it.
+func SetAutoUpdateMinDays(days int, now time.Time) (*codegen.AutoUpdate, error) {
+	if days < 0 || days > autoUpdateMinDaysMax {
+		return nil, ErrAutoUpdateMinDays
+	}
+
+	autoUpdateLock.Lock()
+	defer autoUpdateLock.Unlock()
+
+	state, err := readAutoUpdate()
+	if err != nil {
+		return nil, err
+	}
+	state.MinDays = &days
+	if err := writeAutoUpdate(state); err != nil {
+		return nil, err
+	}
+
+	return autoUpdateOf(state, now), nil
+}
+
+// ErrAutoUpdateMinDays is a wait out of bounds.
+var ErrAutoUpdateMinDays = errors.New("min_days: from 0 to 30 days")
+
+// osUpgradeOpenForAutoUpdate is a variable so a test can open an upgrade without the
+// core's file.
+var osUpgradeOpenForAutoUpdate = osUpgradeOpen
+
+// autoUpdateCheck says whether an app has an update, asking the registries again. A
+// variable so a test asks none.
+var autoUpdateCheck = UpdateAvailableForRun
+
+// autoUpdateOne updates one app as the run of every app does. A variable so a test runs
+// no update.
+var autoUpdateOne = UpdateOneForRun
+
+// installedApps is the apps the night can update: the compose apps, without the ones
+// built from a repository, which deploy by themselves already. A variable so a test
+// installs what it likes.
+var installedApps = func(ctx context.Context) ([]string, error) {
+	apps, err := MyService.Compose().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	gitApps, err := GitAppNames()
+	if err != nil {
+		return nil, err
+	}
+	names := []string{}
+	for name := range apps {
+		if !slices.Contains(gitApps, name) {
+			names = append(names, name)
+		}
+	}
+
+	return names, nil
+}
+
+// appRemoved says an app is uninstalled: its folder among the apps is gone. An app Docker
+// Compose does not list right now, one waiting for its storage, is not.
+var appRemoved = func(app string) bool {
+	_, err := os.Stat(filepath.Join(config.AppInfo.AppsPath, app))
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// appBusy is a variable so a test can hold an app without an operation.
+var appBusy = held
+
+// RunDueAutoUpdates updates the apps that are turned on when their night has come.
+// What is not due costs one file read.
+func RunDueAutoUpdates(ctx context.Context, now time.Time) {
+	if !autoUpdateNight.TryLock() {
+		return
+	}
+	defer autoUpdateNight.Unlock()
+
+	autoUpdateLock.Lock()
+	state, err := readAutoUpdate()
+	autoUpdateLock.Unlock()
+	if err != nil {
+		logger.Error("automatic updates: their settings cannot be read", zap.Error(err))
+		return
+	}
+	if len(state.Apps) == 0 {
+		return
+	}
+	slot, err := mostRecentSlot(autoUpdateSlot, now)
+	if err != nil || !slot.After(state.LastSlot) {
+		return
+	}
+	// Past its window, a night is skipped rather than run in the day.
+	if !now.Before(slot.Add(autoUpdateWindow)) {
+		logger.Info("automatic updates: the night was missed, the box was off or busy", zap.Time("night", slot))
+		finishAutoUpdateNight(slot, nil, nil, nil, nil)
+		return
+	}
+	// The night waits, slot undone, for what must not be crossed: an upgrade of the
+	// system, an operation on an app, a cleanup, a move of the data of Docker, an update
+	// of every app. The next tick tries again.
+	if open, _ := osUpgradeOpenForAutoUpdate(); open {
+		return
+	}
+	if cleanupHeld() != "" {
+		return
+	}
+	if !startAutoUpdateNight() {
+		return
+	}
+	defer endAutoUpdateNight()
+
+	// Listed from the first look at an app to the last, so that the box's own update,
+	// which waits for nothing else, waits for the night.
+	done := markInProgress(autoUpdateMark, "update")
+	defer done()
+
+	runAutoUpdates(ctx, slot, now)
+}
+
+// runAutoUpdates updates the apps turned on that are installed, one after another, and
+// writes what became of each. The list is read again before each app: one turned off
+// while the night runs is left alone.
+func runAutoUpdates(ctx context.Context, slot, now time.Time) {
+	installed, err := installedApps(ctx)
+	if err != nil {
+		// nothing can be told of the apps: the night is tried again at the next tick
+		logger.Error("automatic updates: the apps cannot be listed", zap.Error(err))
+		return
+	}
+
+	autoUpdateLock.Lock()
+	state, err := readAutoUpdate()
+	autoUpdateLock.Unlock()
+	if err != nil {
+		logger.Error("automatic updates: their settings cannot be read", zap.Error(err))
+		return
+	}
+
+	run := codegen.AutoUpdateRun{At: now, Apps: []codegen.ComposeAppUpdateRunApp{}}
+	removed := []string{}
+	failures := map[string]int{}
+	// when each app's update was first found; a zero time forgets it
+	seen := map[string]time.Time{}
+	wait := time.Duration(state.minDays()) * 24 * time.Hour
+	for _, app := range state.Apps {
+		autoUpdateLock.Lock()
+		current, err := readAutoUpdate()
+		autoUpdateLock.Unlock()
+		if err != nil || !slices.Contains(current.Apps, app) {
+			continue
+		}
+		// an upgrade of the system opened during the night stops it here
+		if open, _ := osUpgradeOpenForAutoUpdate(); open {
+			logger.Info("automatic updates: an upgrade of the system opened, the night stops", zap.String("before", app))
+			break
+		}
+		if !slices.Contains(installed, app) {
+			if appRemoved(app) {
+				removed = append(removed, app)
+			}
+			continue
+		}
+		// busy with something else tonight: no failure, the next night tries again
+		if appBusy(app) {
+			continue
+		}
+		entry := codegen.ComposeAppUpdateRunApp{Id: app}
+		if current.Failures[app] >= autoUpdateFailuresHeld {
+			message := "left alone: it failed two nights in a row; turn its switch off and on again to try once more"
+			entry.State, entry.Message = codegen.ComposeAppUpdateRunAppStateFailed, &message
+			run.Apps = append(run.Apps, entry)
+			continue
+		}
+
+		available, result, message := autoUpdateCheck(ctx, app)
+		if !available {
+			entry.State = result
+			if message != "" {
+				entry.Message = &message
+			}
+			run.Apps = append(run.Apps, entry)
+			// nothing to wait for any more
+			seen[app] = time.Time{}
+			continue
+		}
+		// The wait counts from the night that first found the update: the box cannot
+		// tell when the image was published, only when it saw it.
+		first, known := current.Seen[app]
+		if !known {
+			first = now
+			seen[app] = now
+		}
+		if due := first.Add(wait); now.Before(due) {
+			waiting := "waiting: a new version was found on " + first.Format("2006-01-02") + "; applied from " + due.Format("2006-01-02")
+			entry.State, entry.Message = codegen.ComposeAppUpdateRunAppStateQueued, &waiting
+			run.Apps = append(run.Apps, entry)
+			continue
+		}
+
+		result, message = autoUpdateOne(ctx, app)
+		entry.State = result
+		if message != "" {
+			entry.Message = &message
+		}
+		run.Apps = append(run.Apps, entry)
+		if result == codegen.ComposeAppUpdateRunAppStateFailed {
+			failures[app] = current.Failures[app] + 1
+		} else {
+			failures[app] = 0
+			// updated, or up to date by the time it ran: the next update waits afresh
+			seen[app] = time.Time{}
+		}
+		logger.Info("automatic update", zap.String("app", app), zap.String("state", string(result)), zap.String("message", message))
+	}
+
+	finishAutoUpdateNight(slot, &run, removed, failures, seen)
+}
+
+// finishAutoUpdateNight writes that the night is done, with its run when there was one,
+// the apps that are gone forgotten, and the count of failures of each app updated.
+func finishAutoUpdateNight(slot time.Time, run *codegen.AutoUpdateRun, removed []string, failures map[string]int, seen map[string]time.Time) {
+	autoUpdateLock.Lock()
+	defer autoUpdateLock.Unlock()
+
+	state, err := readAutoUpdate()
+	if err != nil {
+		logger.Error("automatic updates: their night cannot be written", zap.Error(err))
+		return
+	}
+	state.LastSlot = slot
+	state.Apps = slices.DeleteFunc(state.Apps, func(name string) bool { return slices.Contains(removed, name) })
+	for app, count := range failures {
+		if count == 0 {
+			delete(state.Failures, app)
+		} else {
+			state.Failures[app] = count
+		}
+	}
+	for app, at := range seen {
+		if at.IsZero() {
+			delete(state.Seen, app)
+		} else {
+			state.Seen[app] = at
+		}
+	}
+	for _, app := range removed {
+		delete(state.Failures, app)
+		delete(state.Seen, app)
+	}
+	if run != nil {
+		state.Runs = append(state.Runs, *run)
+		if len(state.Runs) > autoUpdateRunsKept {
+			state.Runs = state.Runs[len(state.Runs)-autoUpdateRunsKept:]
+		}
+	}
+	if err := writeAutoUpdate(state); err != nil {
+		logger.Error("automatic updates: their night cannot be written", zap.Error(err))
+	}
+}
+
+// startAutoUpdateNight claims the updates for the night, or says an update of every app
+// runs. The night and that run exclude each other: two pulls at once, and an app found
+// busy by the one that lost the race, is what a person sees as a failure.
+func startAutoUpdateNight() bool {
+	updateAll.Lock()
+	defer updateAll.Unlock()
+
+	if updateAll.run != nil && updateAll.run.FinishedAt == nil {
+		return false
+	}
+	updateAll.night = true
+
+	return true
+}
+
+func endAutoUpdateNight() {
+	updateAll.Lock()
+	defer updateAll.Unlock()
+	updateAll.night = false
+}
+
+// InstalledAppsForAutoUpdate is the apps the night can update.
+func InstalledAppsForAutoUpdate(ctx context.Context) ([]string, error) { return installedApps(ctx) }

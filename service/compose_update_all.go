@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -105,6 +106,8 @@ func PlanUpdateAll(apps map[string]*ComposeApp, available func(*ComposeApp) bool
 var updateAll struct {
 	sync.Mutex
 	run *codegen.ComposeAppUpdateRun
+	// set while the nightly update of the apps runs (app_auto_update.go)
+	night bool
 }
 
 // ForgetFinishedUpdateAllRun forgets the last run once it is over, as a restart of this
@@ -150,6 +153,9 @@ func StartUpdateAll(ids []string, update func(ctx context.Context, id string) (c
 	if updateAll.run != nil && updateAll.run.FinishedAt == nil {
 		return nil, ErrUpdateAllRunning
 	}
+	if updateAll.night {
+		return nil, fmt.Errorf("%w: the nightly update of the apps is running", ErrUpdateAllRunning)
+	}
 
 	run := &codegen.ComposeAppUpdateRun{StartedAt: time.Now(), Apps: make([]codegen.ComposeAppUpdateRunApp, 0, len(ids))}
 	for _, id := range ids {
@@ -190,6 +196,32 @@ func setUpdateAllState(run *codegen.ComposeAppUpdateRun, i int, state codegen.Co
 // UpdateOneForRun is what the run does to one app: what the update button does,
 // the check its name promises included, waited for; and the reason, when nothing
 // happens.
+// UpdateAvailableForRun is the check UpdateOneForRun starts with, alone: whether the app
+// has an update, from the registries asked again, and the reason when it has none or
+// the check failed.
+func UpdateAvailableForRun(ctx context.Context, id string) (bool, codegen.ComposeAppUpdateRunAppState, string) {
+	apps, err := MyService.Compose().List(ctx)
+	if err != nil {
+		return false, codegen.ComposeAppUpdateRunAppStateFailed, err.Error()
+	}
+
+	app, ok := apps[id]
+	if !ok {
+		return false, codegen.ComposeAppUpdateRunAppStateFailed, "not installed"
+	}
+
+	if err := CheckImageUpdatesForApp(ctx, app); err != nil {
+		logger.Info("could not check images", zap.Error(err), zap.String("appID", id))
+	}
+	MyService.AppStoreManagement().ForgetUpgradable(id)
+
+	if available, reason := MyService.AppStoreManagement().UpdateAvailability(app); !available {
+		return false, codegen.ComposeAppUpdateRunAppStateCurrent, reason
+	}
+
+	return true, "", ""
+}
+
 func UpdateOneForRun(ctx context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string) {
 	apps, err := MyService.Compose().List(ctx)
 	if err != nil {
