@@ -202,6 +202,23 @@ func main() {
 			panic(err)
 		}
 
+		// Newer versions of the images pinned to one, read from the registries' tags once a
+		// day, and a few minutes after a start. Said only, on the dashboard: nothing is
+		// applied. A day because tags move slowly and a tag list can be long.
+		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Minute):
+			}
+			service.CheckNewerTags(ctx)
+		}()
+		if _, err := crontab.AddFunc("@every 24h", func() {
+			service.CheckNewerTags(ctx)
+		}); err != nil {
+			panic(err)
+		}
+
 		// The nightly update of the apps their owner turned on. Ten minutes because a night
 		// that found the box busy tries again at the next tick; what is not due costs one
 		// file read.
