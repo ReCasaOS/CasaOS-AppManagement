@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,12 +25,16 @@ var (
 // for and answers what `answers` says.
 func nightBox(t *testing.T, answers map[string]codegen.ComposeAppUpdateRunAppState) *[]string {
 	t.Helper()
-	wasPath, wasUpgrade, wasOne, wasInstalled, wasRemoved, wasBusy := AutoUpdatePath, osUpgradeOpenForAutoUpdate, autoUpdateOne, installedApps, appRemoved, appBusy
+	wasPath, wasUpgrade, wasOne, wasInstalled, wasRemoved, wasBusy, wasCheck := AutoUpdatePath, osUpgradeOpenForAutoUpdate, autoUpdateOne, installedApps, appRemoved, appBusy, autoUpdateCheck
 	AutoUpdatePath = filepath.Join(t.TempDir(), "auto-update.json")
 	osUpgradeOpenForAutoUpdate = func() (bool, error) { return false, nil }
 	installedApps = func(context.Context) ([]string, error) { return []string{"immich", "jellyfin"}, nil }
 	appRemoved = func(app string) bool { return app == "seerr" }
 	appBusy = func(string) bool { return false }
+	// every app has an update, and none waits: the tests of the wait set their own
+	autoUpdateCheck = func(context.Context, string) (bool, codegen.ComposeAppUpdateRunAppState, string) { return true, "", "" }
+	zero := 0
+	assert.NilError(t, writeAutoUpdate(autoUpdateState{Apps: []string{}, MinDays: &zero}))
 	updated := &[]string{}
 	autoUpdateOne = func(_ context.Context, app string) (codegen.ComposeAppUpdateRunAppState, string) {
 		*updated = append(*updated, app)
@@ -42,7 +47,7 @@ func nightBox(t *testing.T, answers map[string]codegen.ComposeAppUpdateRunAppSta
 		return codegen.ComposeAppUpdateRunAppStateCurrent, "no update"
 	}
 	t.Cleanup(func() {
-		AutoUpdatePath, osUpgradeOpenForAutoUpdate, autoUpdateOne, installedApps, appRemoved, appBusy = wasPath, wasUpgrade, wasOne, wasInstalled, wasRemoved, wasBusy
+		AutoUpdatePath, osUpgradeOpenForAutoUpdate, autoUpdateOne, installedApps, appRemoved, appBusy, autoUpdateCheck = wasPath, wasUpgrade, wasOne, wasInstalled, wasRemoved, wasBusy, wasCheck
 	})
 
 	return updated
@@ -341,4 +346,73 @@ func TestAnAppBusyTonightIsTriedTheNextNightWithoutAFailure(t *testing.T) {
 	state, err := readAutoUpdate()
 	assert.NilError(t, err)
 	assert.Equal(t, state.Failures["jellyfin"], 0)
+}
+
+// An image published broken is usually replaced within a day or two: an update waits until
+// it has been known for the days the owner chose, counted from the night that found it.
+func TestAnUpdateWaitsUntilItHasBeenKnownLongEnough(t *testing.T) {
+	updated := nightBox(t, nil)
+	_, err := SetAutoUpdateMinDays(3, afternoon)
+	assert.NilError(t, err)
+	_, err = SetAppAutoUpdate("jellyfin", true, afternoon)
+	assert.NilError(t, err)
+
+	// found the first night, waits two more
+	for night := 0; night < 3; night++ {
+		RunDueAutoUpdates(context.Background(), tonight.AddDate(0, 0, night).Add(time.Minute))
+	}
+	assert.Equal(t, len(*updated), 0)
+	view, err := AutoUpdate(tonight.AddDate(0, 0, 2).Add(time.Hour))
+	assert.NilError(t, err)
+	assert.Equal(t, view.MinDays, 3)
+	assert.Equal(t, view.Runs[0].Apps[0].State, codegen.ComposeAppUpdateRunAppStateQueued)
+	assert.Assert(t, strings.Contains(*view.Runs[0].Apps[0].Message, "applied from 2026-11-22"), *view.Runs[0].Apps[0].Message)
+
+	// the fourth night, three days after it was found
+	RunDueAutoUpdates(context.Background(), tonight.AddDate(0, 0, 3).Add(time.Minute))
+	assert.DeepEqual(t, *updated, []string{"jellyfin"})
+
+	// and the next update waits afresh
+	state, err := readAutoUpdate()
+	assert.NilError(t, err)
+	_, still := state.Seen["jellyfin"]
+	assert.Assert(t, !still)
+}
+
+// An app found up to date forgets the update it was waiting for: one that comes back
+// later waits the whole time again.
+func TestAnAppFoundUpToDateForgetsTheWait(t *testing.T) {
+	nightBox(t, nil)
+	_, err := SetAutoUpdateMinDays(3, afternoon)
+	assert.NilError(t, err)
+	_, err = SetAppAutoUpdate("jellyfin", true, afternoon)
+	assert.NilError(t, err)
+
+	RunDueAutoUpdates(context.Background(), tonight.Add(time.Minute))
+	autoUpdateCheck = func(context.Context, string) (bool, codegen.ComposeAppUpdateRunAppState, string) {
+		return false, codegen.ComposeAppUpdateRunAppStateCurrent, "up to date"
+	}
+	RunDueAutoUpdates(context.Background(), tonight.AddDate(0, 0, 1).Add(time.Minute))
+
+	state, err := readAutoUpdate()
+	assert.NilError(t, err)
+	_, still := state.Seen["jellyfin"]
+	assert.Assert(t, !still)
+}
+
+func TestTheWaitIsThreeDaysUntilChosenAndBounded(t *testing.T) {
+	nightBox(t, nil)
+	assert.NilError(t, os.Remove(AutoUpdatePath))
+
+	view, err := AutoUpdate(afternoon)
+	assert.NilError(t, err)
+	assert.Equal(t, view.MinDays, 3)
+
+	_, err = SetAutoUpdateMinDays(31, afternoon)
+	assert.ErrorIs(t, err, ErrAutoUpdateMinDays)
+	_, err = SetAutoUpdateMinDays(-1, afternoon)
+	assert.ErrorIs(t, err, ErrAutoUpdateMinDays)
+	view, err = SetAutoUpdateMinDays(0, afternoon)
+	assert.NilError(t, err)
+	assert.Equal(t, view.MinDays, 0)
 }

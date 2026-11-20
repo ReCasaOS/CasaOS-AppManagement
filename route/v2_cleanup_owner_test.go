@@ -21,6 +21,7 @@ func TestTheCleanupIsTheOwnersOnly(t *testing.T) {
 		{http.MethodGet, "/cleanup/schedule", ""},
 		{http.MethodPut, "/cleanup/schedule", `{"weekly":true}`},
 		{http.MethodGet, "/auto-update", ""},
+		{http.MethodPut, "/auto-update", `{"min_days":1}`},
 		{http.MethodPut, "/compose/jarvis/auto-update", `{"enabled":true}`},
 	} {
 		got := r.do(r.v2, c.method, "/v2/app_management"+c.path, r.user, c.body)

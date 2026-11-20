@@ -146,3 +146,29 @@ func (a *AppManagement) SetAppAutoUpdate(ctx echo.Context, id codegen.ComposeApp
 
 	return ctx.JSON(http.StatusOK, codegen.AutoUpdateOK{Data: view})
 }
+
+// SetAutoUpdate sets how long an update waits before a night applies it.
+func (a *AppManagement) SetAutoUpdate(ctx echo.Context) error {
+	if !isOwner(ctx) {
+		return forbidden(ctx)
+	}
+	var body struct {
+		MinDays *int `json:"min_days"`
+	}
+	if err := ctx.Bind(&body); err != nil || body.MinDays == nil {
+		message := "min_days: a number of days is required"
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+	view, err := service.SetAutoUpdateMinDays(*body.MinDays, service.BoxNow())
+	if errors.Is(err, service.ErrAutoUpdateMinDays) {
+		message := err.Error()
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+	if err != nil {
+		message := err.Error()
+		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
+	}
+	logger.Info("automatic updates wait", zap.Int("days", *body.MinDays))
+
+	return ctx.JSON(http.StatusOK, codegen.AutoUpdateOK{Data: view})
+}

@@ -44,6 +44,14 @@ var autoUpdateSlot = BackupSchedule{Every: ScheduleDaily, At: "02:00"}
 // or busy all that time skips the night: an app is never updated in the afternoon.
 const autoUpdateWindow = 2 * time.Hour
 
+// autoUpdateMinDaysDefault is how many days an update must have been known before a
+// night applies it, when the owner chose nothing. An image published broken is usually
+// replaced within a day or two; three days lets that happen elsewhere first.
+const autoUpdateMinDaysDefault = 3
+
+// autoUpdateMinDaysMax is the longest wait the owner can choose.
+const autoUpdateMinDaysMax = 30
+
 // autoUpdateMark is the name the night is listed under while it runs, so that the box's
 // own update waits for it.
 const autoUpdateMark = "auto-update"
@@ -53,8 +61,21 @@ type autoUpdateState struct {
 	// the night last run or skipped, or the one current when the first app was turned on
 	LastSlot time.Time `json:"last_slot"`
 	// nights in a row each app failed; at autoUpdateFailuresHeld it is left alone
-	Failures map[string]int          `json:"failures,omitempty"`
-	Runs     []codegen.AutoUpdateRun `json:"runs"`
+	Failures map[string]int `json:"failures,omitempty"`
+	// when the night first found each app had an update, which the wait counts from
+	Seen map[string]time.Time `json:"seen,omitempty"`
+	// days an update must have been known before a night applies it; nil is the default
+	MinDays *int                    `json:"min_days,omitempty"`
+	Runs    []codegen.AutoUpdateRun `json:"runs"`
+}
+
+// minDays is the wait the owner chose, or the default.
+func (s autoUpdateState) minDays() int {
+	if s.MinDays == nil {
+		return autoUpdateMinDaysDefault
+	}
+
+	return *s.MinDays
 }
 
 var autoUpdateLock sync.Mutex
@@ -65,7 +86,7 @@ var autoUpdateLock sync.Mutex
 var autoUpdateNight sync.Mutex
 
 func readAutoUpdate() (autoUpdateState, error) {
-	state := autoUpdateState{Apps: []string{}, Runs: []codegen.AutoUpdateRun{}, Failures: map[string]int{}}
+	state := autoUpdateState{Apps: []string{}, Runs: []codegen.AutoUpdateRun{}, Failures: map[string]int{}, Seen: map[string]time.Time{}}
 	content, err := os.ReadFile(AutoUpdatePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return state, nil
@@ -84,6 +105,9 @@ func readAutoUpdate() (autoUpdateState, error) {
 	}
 	if state.Failures == nil {
 		state.Failures = map[string]int{}
+	}
+	if state.Seen == nil {
+		state.Seen = map[string]time.Time{}
 	}
 
 	return state, nil
@@ -107,7 +131,7 @@ func writeAutoUpdate(state autoUpdateState) error {
 }
 
 func autoUpdateOf(state autoUpdateState, now time.Time) *codegen.AutoUpdate {
-	view := &codegen.AutoUpdate{Apps: append([]string{}, state.Apps...), Runs: []codegen.AutoUpdateRun{}}
+	view := &codegen.AutoUpdate{Apps: append([]string{}, state.Apps...), MinDays: state.minDays(), Runs: []codegen.AutoUpdateRun{}}
 	for i := len(state.Runs) - 1; i >= 0; i-- {
 		view.Runs = append(view.Runs, state.Runs[i])
 	}
@@ -166,6 +190,7 @@ func SetAppAutoUpdate(app string, on bool, now time.Time) (*codegen.AutoUpdate, 
 	case !on && has:
 		state.Apps = slices.DeleteFunc(state.Apps, func(name string) bool { return name == app })
 		delete(state.Failures, app)
+		delete(state.Seen, app)
 	default:
 		// nothing changes: nothing is written
 		return autoUpdateOf(state, now), nil
@@ -177,9 +202,38 @@ func SetAppAutoUpdate(app string, on bool, now time.Time) (*codegen.AutoUpdate, 
 	return autoUpdateOf(state, now), nil
 }
 
+// SetAutoUpdateMinDays sets how many days an update must have been known before a night
+// applies it.
+func SetAutoUpdateMinDays(days int, now time.Time) (*codegen.AutoUpdate, error) {
+	if days < 0 || days > autoUpdateMinDaysMax {
+		return nil, ErrAutoUpdateMinDays
+	}
+
+	autoUpdateLock.Lock()
+	defer autoUpdateLock.Unlock()
+
+	state, err := readAutoUpdate()
+	if err != nil {
+		return nil, err
+	}
+	state.MinDays = &days
+	if err := writeAutoUpdate(state); err != nil {
+		return nil, err
+	}
+
+	return autoUpdateOf(state, now), nil
+}
+
+// ErrAutoUpdateMinDays is a wait out of bounds.
+var ErrAutoUpdateMinDays = errors.New("min_days: from 0 to 30 days")
+
 // osUpgradeOpenForAutoUpdate is a variable so a test can open an upgrade without the
 // core's file.
 var osUpgradeOpenForAutoUpdate = osUpgradeOpen
+
+// autoUpdateCheck says whether an app has an update, asking the registries again. A
+// variable so a test asks none.
+var autoUpdateCheck = UpdateAvailableForRun
 
 // autoUpdateOne updates one app as the run of every app does. A variable so a test runs
 // no update.
@@ -242,7 +296,7 @@ func RunDueAutoUpdates(ctx context.Context, now time.Time) {
 	// Past its window, a night is skipped rather than run in the day.
 	if !now.Before(slot.Add(autoUpdateWindow)) {
 		logger.Info("automatic updates: the night was missed, the box was off or busy", zap.Time("night", slot))
-		finishAutoUpdateNight(slot, nil, nil, nil)
+		finishAutoUpdateNight(slot, nil, nil, nil, nil)
 		return
 	}
 	// The night waits, slot undone, for what must not be crossed: an upgrade of the
@@ -289,6 +343,9 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 	run := codegen.AutoUpdateRun{At: now, Apps: []codegen.ComposeAppUpdateRunApp{}}
 	removed := []string{}
 	failures := map[string]int{}
+	// when each app's update was first found; a zero time forgets it
+	seen := map[string]time.Time{}
+	wait := time.Duration(state.minDays()) * 24 * time.Hour
 	for _, app := range state.Apps {
 		autoUpdateLock.Lock()
 		current, err := readAutoUpdate()
@@ -319,7 +376,32 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 			continue
 		}
 
-		result, message := autoUpdateOne(ctx, app)
+		available, result, message := autoUpdateCheck(ctx, app)
+		if !available {
+			entry.State = result
+			if message != "" {
+				entry.Message = &message
+			}
+			run.Apps = append(run.Apps, entry)
+			// nothing to wait for any more
+			seen[app] = time.Time{}
+			continue
+		}
+		// The wait counts from the night that first found the update: the box cannot
+		// tell when the image was published, only when it saw it.
+		first, known := current.Seen[app]
+		if !known {
+			first = now
+			seen[app] = now
+		}
+		if due := first.Add(wait); now.Before(due) {
+			waiting := "waiting: a new version was found on " + first.Format("2006-01-02") + "; applied from " + due.Format("2006-01-02")
+			entry.State, entry.Message = codegen.ComposeAppUpdateRunAppStateQueued, &waiting
+			run.Apps = append(run.Apps, entry)
+			continue
+		}
+
+		result, message = autoUpdateOne(ctx, app)
 		entry.State = result
 		if message != "" {
 			entry.Message = &message
@@ -329,16 +411,18 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 			failures[app] = current.Failures[app] + 1
 		} else {
 			failures[app] = 0
+			// updated, or up to date by the time it ran: the next update waits afresh
+			seen[app] = time.Time{}
 		}
 		logger.Info("automatic update", zap.String("app", app), zap.String("state", string(result)), zap.String("message", message))
 	}
 
-	finishAutoUpdateNight(slot, &run, removed, failures)
+	finishAutoUpdateNight(slot, &run, removed, failures, seen)
 }
 
 // finishAutoUpdateNight writes that the night is done, with its run when there was one,
 // the apps that are gone forgotten, and the count of failures of each app updated.
-func finishAutoUpdateNight(slot time.Time, run *codegen.AutoUpdateRun, removed []string, failures map[string]int) {
+func finishAutoUpdateNight(slot time.Time, run *codegen.AutoUpdateRun, removed []string, failures map[string]int, seen map[string]time.Time) {
 	autoUpdateLock.Lock()
 	defer autoUpdateLock.Unlock()
 
@@ -356,8 +440,16 @@ func finishAutoUpdateNight(slot time.Time, run *codegen.AutoUpdateRun, removed [
 			state.Failures[app] = count
 		}
 	}
+	for app, at := range seen {
+		if at.IsZero() {
+			delete(state.Seen, app)
+		} else {
+			state.Seen[app] = at
+		}
+	}
 	for _, app := range removed {
 		delete(state.Failures, app)
+		delete(state.Seen, app)
 	}
 	if run != nil {
 		state.Runs = append(state.Runs, *run)

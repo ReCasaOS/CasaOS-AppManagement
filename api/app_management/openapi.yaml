@@ -425,6 +425,37 @@ paths:
           $ref: "#/components/responses/ResponseForbidden"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
+    put:
+      summary: How long an update waits before a night applies it
+      description: |
+        A night applies an update only once it has been known for this many days,
+        counted from the night that first found it: an image published broken is
+        usually replaced within a day or two. From 0 to 30; 3 when never set. The
+        owner's only.
+      operationId: setAutoUpdate
+      tags:
+        - Compose methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [min_days]
+              properties:
+                min_days:
+                  type: integer
+                  minimum: 0
+                  maximum: 30
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoUpdateOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
 
   /compose/{id}/auto-update:
     put:
@@ -5830,13 +5861,16 @@ components:
 
     AutoUpdate:
       description: The apps that update by themselves, and the last nights.
-      required: [apps, runs]
+      required: [apps, min_days, runs]
       properties:
         apps:
           description: The apps turned on.
           type: array
           items:
             type: string
+        min_days:
+          description: Days an update must have been known before a night applies it.
+          type: integer
         next:
           description: When the next night is due. Absent when no app is turned on.
           type: string
@@ -5876,7 +5910,9 @@ components:
             - current
             - failed
         message:
-          description: The reason, when the app stayed current for one, or the error.
+          description: |-
+            The reason, when the app stayed current for one, or the error. In a night,
+            `queued` is an update that waits to be old enough, and says until when.
           type: string
 
     ImageUpdateCheckResult:
