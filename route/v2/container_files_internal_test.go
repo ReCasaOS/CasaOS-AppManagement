@@ -19,6 +19,9 @@ import (
 	"gotest.tools/v3/assert"
 )
 
+// more mount points Docker lists for the fake container
+var fakeMounts []string
+
 // a container: /config on a volume, /app in its own layer, a binary and a big file
 func fakeContainer(t *testing.T, running bool) {
 	t.Helper()
@@ -41,7 +44,7 @@ func fakeContainer(t *testing.T, running bool) {
 		if err == containerfs.ErrUnsupported {
 			t.Skip(err)
 		}
-		return root, containerOf{mounts: []string{"/config"}, project: "files-test-app"}, err
+		return root, containerOf{mounts: append([]string{"/config"}, fakeMounts...), project: "files-test-app"}, err
 	}
 }
 
@@ -226,4 +229,14 @@ func TestAMountDockerListsIsNotDeletedNorAFolderHoldingIt(t *testing.T) {
 
 	assert.Equal(t, deleteCall(t, true, "/config"), http.StatusBadRequest)
 	assert.Equal(t, filesCall(t, true, "list", "/config").Code, http.StatusOK)
+}
+
+// A file Docker lists as bound in is written (in place), never deleted.
+func TestAFileBoundInIsWrittenNotDeleted(t *testing.T) {
+	fakeContainer(t, true)
+	fakeMounts = []string{"/config/app.yml"}
+	defer func() { fakeMounts = nil }()
+
+	assert.Equal(t, writeTextCall(t, "/config/app.yml", "port: 1", true), http.StatusOK)
+	assert.Equal(t, deleteCall(t, true, "/config/app.yml"), http.StatusBadRequest)
 }

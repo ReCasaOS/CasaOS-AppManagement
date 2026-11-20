@@ -71,7 +71,13 @@ func openBelow(dir int, name string, flags int) (int, error) {
 	}
 }
 
-// isMount says whether the name of dir is a mount point, of any namespace's making.
+// isMount says whether the name of dir is a mount point of the tree it is reached
+// through: the container's own mounts, whichever namespace made them.
+//
+// shortcut: a mount point of another container reached through this one's own folders
+// (a folder of the box bound into two apps) is not seen, and removing it detaches it
+// there until that app restarts, as `rm -rf` from the host's shell would; reading every
+// container's mountinfo would see it.
 func isMount(dir int, name string) (bool, error) {
 	fd, err := openBelow(dir, name, unix.O_PATH)
 	if errors.Is(err, unix.EXDEV) {
@@ -172,8 +178,9 @@ func (r *Root) WriteFile(p string, content io.Reader, replace bool) error {
 		return err
 	}
 	if mounted {
-		// shortcut: the box's file is truncated before it is written; a disk that fills up
-		// in between leaves it short. Written aside on the box's disk if this is ever met.
+		// shortcut: the content is held aside in the container's own folder first, so a
+		// container whose own files are read-only cannot have a file of the box rewritten
+		// here; an O_TMPFILE on the box's disk if this is ever met
 		return copyInto(fd, name, f, p)
 	}
 	// chown first: it clears setuid and setgid, which the chmod then puts back
@@ -213,8 +220,9 @@ func placeNew(dir int, tmp, name string) error {
 	if err := unix.Linkat(dir, tmp, dir, name, 0); err != nil {
 		return err
 	}
+	unix.Unlinkat(dir, tmp, 0) // the file is in place: an aside name left behind is harmless
 
-	return unix.Unlinkat(dir, tmp, 0)
+	return nil
 }
 
 // createAside makes a new file in dir, for a content before it takes its name.
@@ -261,8 +269,18 @@ func copyInto(dir int, name string, from *os.File, p string) error {
 	}
 	to := os.NewFile(uintptr(fd), name)
 	defer to.Close()
+	size, err := from.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
 	if _, err := from.Seek(0, io.SeekStart); err != nil {
 		return err
+	}
+	// the room is taken before the file is cut: a full disk fails here, the file whole
+	if size > 0 {
+		if err := unix.Fallocate(fd, 0, 0, size); err != nil && !errors.Is(err, unix.EOPNOTSUPP) {
+			return &os.PathError{Op: "write", Path: p, Err: err}
+		}
 	}
 	if err := to.Truncate(0); err != nil {
 		return err

@@ -215,7 +215,7 @@ func containerTarget(ctx echo.Context, id, raw string) (*containerfs.Root, conta
 // containerChange opens the container for a change at raw, and holds its app the while:
 // nothing is written while the app is updated, restored or removed (a backup copied from
 // the running app takes no hold, and is not waited for). done lets both go.
-func containerChange(ctx echo.Context, id, raw string) (root *containerfs.Root, p string, done func(), err error) {
+func containerChange(ctx echo.Context, id, raw string, removing bool) (root *containerfs.Root, p string, done func(), err error) {
 	root, of, p, err := containerTarget(ctx, id, raw)
 	if err != nil {
 		return nil, "", nil, err
@@ -224,9 +224,10 @@ func containerChange(ctx echo.Context, id, raw string) (root *containerfs.Root, 
 		root.Close()
 		return nil, "", nil, containerfs.ErrBadName
 	}
-	// what Docker mounts is known: refused before the filesystem is asked again
+	// what Docker mounts is known: a removal is refused before the filesystem is asked
+	// again. A file bound in is written in place, so a write goes on.
 	for _, m := range of.mounts {
-		if m == p || strings.HasPrefix(m, p+"/") {
+		if removing && (m == p || strings.HasPrefix(m, p+"/")) {
 			root.Close()
 			return nil, "", nil, containerfs.ErrOtherFilesystem
 		}
@@ -244,7 +245,7 @@ func containerChange(ctx echo.Context, id, raw string) (root *containerfs.Root, 
 
 // DeleteContainerFile deletes a file, a link or a folder of a running container.
 func (a *AppManagement) DeleteContainerFile(ctx echo.Context, id codegen.ContainerID, params codegen.DeleteContainerFileParams) error {
-	root, p, done, err := containerChange(ctx, string(id), params.Path)
+	root, p, done, err := containerChange(ctx, string(id), params.Path, true)
 	if err != nil {
 		return containerFilesFailure(ctx, err)
 	}
@@ -262,7 +263,7 @@ func (a *AppManagement) MakeContainerFolder(ctx echo.Context, id codegen.Contain
 	if err := ctx.Bind(&body); err != nil {
 		return containerFilesFailure(ctx, errBadContainerPath{err})
 	}
-	root, p, done, err := containerChange(ctx, string(id), body.Path)
+	root, p, done, err := containerChange(ctx, string(id), body.Path, false)
 	if err != nil {
 		return containerFilesFailure(ctx, err)
 	}
@@ -280,7 +281,7 @@ func (a *AppManagement) WriteContainerFileContent(ctx echo.Context, id codegen.C
 	if err := ctx.Bind(&body); err != nil {
 		return containerFilesFailure(ctx, errBadContainerPath{err})
 	}
-	root, p, done, err := containerChange(ctx, string(id), body.Path)
+	root, p, done, err := containerChange(ctx, string(id), body.Path, false)
 	if err != nil {
 		return containerFilesFailure(ctx, err)
 	}
@@ -294,7 +295,7 @@ func (a *AppManagement) WriteContainerFileContent(ctx echo.Context, id codegen.C
 
 // UploadContainerFile streams the one file of a multipart body into a running container.
 func (a *AppManagement) UploadContainerFile(ctx echo.Context, id codegen.ContainerID, params codegen.UploadContainerFileParams) error {
-	root, p, done, err := containerChange(ctx, string(id), params.Path)
+	root, p, done, err := containerChange(ctx, string(id), params.Path, false)
 	if err != nil {
 		return containerFilesFailure(ctx, err)
 	}
