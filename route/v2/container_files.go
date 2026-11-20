@@ -38,15 +38,21 @@ const (
 // errContainerStopped is a container that has no process to read the files through.
 var errContainerStopped = errors.New(containerNotRunning)
 
-// openContainerRoot is the filesystem of a running container and its mount points. A
-// variable so a test hands a folder of its own.
-var openContainerRoot = func(ctx context.Context, id string) (*containerfs.Root, []string, error) {
+// containerOf is what the routes need of a running container besides its files.
+type containerOf struct {
+	mounts  []string // what an update keeps
+	project string   // the compose app it belongs to, "" for a container of its own
+}
+
+// openContainerRoot is the filesystem of a running container and what else the routes
+// need of it. A variable so a test hands a folder of its own.
+var openContainerRoot = func(ctx context.Context, id string) (*containerfs.Root, containerOf, error) {
 	inspected, err := service.MyService.Docker().DescribeContainer(ctx, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, containerOf{}, err
 	}
 	if inspected.State == nil || !inspected.State.Running || inspected.State.Pid <= 0 {
-		return nil, nil, errContainerStopped
+		return nil, containerOf{}, errContainerStopped
 	}
 	// what an update keeps: a volume or a folder of the box, not a tmpfs
 	mounts := []string{}
@@ -57,10 +63,10 @@ var openContainerRoot = func(ctx context.Context, id string) (*containerfs.Root,
 	}
 	root, err := containerfs.OfProcess(inspected.State.Pid)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil, errContainerStopped // gone between the two
+		return nil, containerOf{}, errContainerStopped // gone between the two
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, containerOf{}, err
 	}
 	// The pid was read before the root was opened. Had the container stopped in between
 	// and the pid gone to a process of the box, the root would be the box's own: asked
@@ -68,10 +74,10 @@ var openContainerRoot = func(ctx context.Context, id string) (*containerfs.Root,
 	again, err := service.MyService.Docker().DescribeContainer(ctx, id)
 	if err != nil || again.State == nil || !again.State.Running || again.State.Pid != inspected.State.Pid || again.State.StartedAt != inspected.State.StartedAt {
 		root.Close()
-		return nil, nil, errContainerStopped
+		return nil, containerOf{}, errContainerStopped
 	}
 
-	return root, mounts, nil
+	return root, containerOf{mounts: mounts, project: composeProjectOf(inspected)}, nil
 }
 
 // ContainerFiles lists a folder of a running container.
@@ -184,20 +190,128 @@ func (a *AppManagement) ContainerFileDownload(ctx echo.Context, id codegen.Conta
 
 // containerPath checks the caller and the path, and opens the container's filesystem.
 func containerPath(ctx echo.Context, id, raw string) (*containerfs.Root, []string, string, error) {
+	root, of, p, err := containerTarget(ctx, id, raw)
+
+	return root, of.mounts, p, err
+}
+
+func containerTarget(ctx echo.Context, id, raw string) (*containerfs.Root, containerOf, string, error) {
 	if !isOwner(ctx) {
-		return nil, nil, "", errNotOwner
+		return nil, containerOf{}, "", errNotOwner
 	}
 	p, err := containerfs.Clean(raw)
 	if err != nil {
-		return nil, nil, "", errBadContainerPath{err}
+		return nil, containerOf{}, "", errBadContainerPath{err}
 	}
-	root, mounts, err := openContainerRoot(ctx.Request().Context(), id)
+	root, of, err := openContainerRoot(ctx.Request().Context(), id)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, containerOf{}, "", err
 	}
-	sort.Strings(mounts)
+	sort.Strings(of.mounts)
 
-	return root, mounts, p, nil
+	return root, of, p, nil
+}
+
+// containerChange opens the container for a change at raw, and holds its app the while:
+// nothing is written while the app is updated, backed up or removed. done lets both go.
+func containerChange(ctx echo.Context, id, raw string) (root *containerfs.Root, p string, done func(), err error) {
+	root, of, p, err := containerTarget(ctx, id, raw)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if p == "/" {
+		root.Close()
+		return nil, "", nil, containerfs.ErrBadName
+	}
+	end := func() {}
+	if of.project != "" {
+		if end, err = service.Begin(of.project, "files"); err != nil {
+			root.Close()
+			return nil, "", nil, err
+		}
+	}
+
+	return root, p, func() { end(); root.Close() }, nil
+}
+
+// DeleteContainerFile deletes a file, a link or a folder of a running container.
+func (a *AppManagement) DeleteContainerFile(ctx echo.Context, id codegen.ContainerID, params codegen.DeleteContainerFileParams) error {
+	root, p, done, err := containerChange(ctx, string(id), params.Path)
+	if err != nil {
+		return containerFilesFailure(ctx, err)
+	}
+	defer done()
+	if err := root.Remove(p); err != nil {
+		return containerFilesFailure(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.ResponseOK{Message: utils.Ptr("OK")})
+}
+
+// MakeContainerFolder makes a folder in a running container.
+func (a *AppManagement) MakeContainerFolder(ctx echo.Context, id codegen.ContainerID) error {
+	var body codegen.ContainerFolderMake
+	if err := ctx.Bind(&body); err != nil {
+		return containerFilesFailure(ctx, errBadContainerPath{err})
+	}
+	root, p, done, err := containerChange(ctx, string(id), body.Path)
+	if err != nil {
+		return containerFilesFailure(ctx, err)
+	}
+	defer done()
+	if err := root.Mkdir(p); err != nil {
+		return containerFilesFailure(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.ResponseOK{Message: utils.Ptr("OK")})
+}
+
+// WriteContainerFileContent writes a text file of a running container.
+func (a *AppManagement) WriteContainerFileContent(ctx echo.Context, id codegen.ContainerID) error {
+	var body codegen.ContainerFileWrite
+	if err := ctx.Bind(&body); err != nil {
+		return containerFilesFailure(ctx, errBadContainerPath{err})
+	}
+	root, p, done, err := containerChange(ctx, string(id), body.Path)
+	if err != nil {
+		return containerFilesFailure(ctx, err)
+	}
+	defer done()
+	if err := root.WriteFile(p, strings.NewReader(body.Content), body.Replace != nil && *body.Replace); err != nil {
+		return containerFilesFailure(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.ResponseOK{Message: utils.Ptr("OK")})
+}
+
+// UploadContainerFile streams the one file of a multipart body into a running container.
+func (a *AppManagement) UploadContainerFile(ctx echo.Context, id codegen.ContainerID, params codegen.UploadContainerFileParams) error {
+	root, p, done, err := containerChange(ctx, string(id), params.Path)
+	if err != nil {
+		return containerFilesFailure(ctx, err)
+	}
+	defer done()
+	reader, err := ctx.Request().MultipartReader()
+	if err != nil {
+		return containerFilesFailure(ctx, errBadContainerPath{err})
+	}
+	for {
+		part, err := reader.NextPart()
+		if err != nil {
+			return containerFilesFailure(ctx, errBadContainerPath{errors.New("no part named file in the body")})
+		}
+		if part.FormName() != "file" {
+			part.Close()
+			continue
+		}
+		err = root.WriteFile(p, part, params.Replace != nil && *params.Replace)
+		part.Close()
+		if err != nil {
+			return containerFilesFailure(ctx, err)
+		}
+
+		return ctx.JSON(http.StatusOK, codegen.ResponseOK{Message: utils.Ptr("OK")})
+	}
 }
 
 var errNotOwner = errors.New("only the owner can do this")
@@ -210,9 +324,15 @@ func containerFilesFailure(ctx echo.Context, err error) error {
 	switch {
 	case errors.Is(err, errNotOwner):
 		return forbidden(ctx)
+	case errors.Is(err, syscall.EROFS):
+		message = "the container's files are read-only: " + message
+		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 	case errors.As(err, &bad), errors.Is(err, containerfs.ErrNotAFile), errors.Is(err, containerfs.ErrPseudoFile),
+		errors.Is(err, containerfs.ErrBadName), errors.Is(err, containerfs.ErrOtherFilesystem), errors.Is(err, syscall.EBUSY),
 		errors.Is(err, syscall.ENOTDIR), errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENXIO), errors.Is(err, syscall.ENODEV):
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	case errors.Is(err, containerfs.ErrExist), errors.As(err, new(service.ErrAppBusy)):
+		return ctx.JSON(http.StatusConflict, codegen.ResponseConflict{Message: &message})
 	case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
 		message = "the box itself may not read this path: " + message
 		return ctx.JSON(http.StatusForbidden, codegen.ResponseForbidden{Message: &message})

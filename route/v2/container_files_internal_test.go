@@ -14,6 +14,7 @@ import (
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/containerfs"
+	"github.com/ReCasaOS/CasaOS-AppManagement/service"
 	"github.com/labstack/echo/v4"
 	"gotest.tools/v3/assert"
 )
@@ -32,15 +33,15 @@ func fakeContainer(t *testing.T, running bool) {
 
 	was := openContainerRoot
 	t.Cleanup(func() { openContainerRoot = was })
-	openContainerRoot = func(context.Context, string) (*containerfs.Root, []string, error) {
+	openContainerRoot = func(context.Context, string) (*containerfs.Root, containerOf, error) {
 		if !running {
-			return nil, nil, errContainerStopped
+			return nil, containerOf{}, errContainerStopped
 		}
 		root, err := containerfs.Open(dir)
 		if err == containerfs.ErrUnsupported {
 			t.Skip(err)
 		}
-		return root, []string{"/config"}, err
+		return root, containerOf{mounts: []string{"/config"}, project: "files-test-app"}, err
 	}
 }
 
@@ -137,4 +138,85 @@ func TestTheModeIsWrittenAsLsWritesIt(t *testing.T) {
 	assert.Equal(t, modeText(0o4755|os.ModeSetuid), "rwsr-xr-x")
 	assert.Equal(t, modeText(0o644|os.ModeSetgid), "rw-r-Sr--")
 	assert.Equal(t, modeOctal(0o755|os.ModeSetuid), "4755")
+}
+
+func writeCall(t *testing.T, owner bool, method, target, contentType, body string, handle func(*AppManagement, echo.Context) error) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	if contentType != "" {
+		request.Header.Set(echo.HeaderContentType, contentType)
+	}
+	if owner {
+		request = internalRequest(t, request)
+	} else {
+		request.Header.Set("user_id", "2")
+	}
+	recorder := httptest.NewRecorder()
+	assert.NilError(t, handle(&AppManagement{}, echo.New().NewContext(request, recorder)))
+
+	return recorder
+}
+
+func mkdirCall(t *testing.T, owner bool, p string) int {
+	return writeCall(t, owner, http.MethodPost, "/", echo.MIMEApplicationJSON, `{"path":"`+p+`"}`, func(a *AppManagement, c echo.Context) error {
+		return a.MakeContainerFolder(c, "c1")
+	}).Code
+}
+
+func writeTextCall(t *testing.T, p, content string, replace bool) int {
+	body, _ := json.Marshal(map[string]any{"path": p, "content": content, "replace": replace})
+	return writeCall(t, true, http.MethodPut, "/", echo.MIMEApplicationJSON, string(body), func(a *AppManagement, c echo.Context) error {
+		return a.WriteContainerFileContent(c, "c1")
+	}).Code
+}
+
+func deleteCall(t *testing.T, owner bool, p string) int {
+	return writeCall(t, owner, http.MethodDelete, "/", "", "", func(a *AppManagement, c echo.Context) error {
+		return a.DeleteContainerFile(c, "c1", codegen.DeleteContainerFileParams{Path: p})
+	}).Code
+}
+
+func TestTheOwnerMakesWritesAndDeletes(t *testing.T) {
+	fakeContainer(t, true)
+
+	assert.Equal(t, mkdirCall(t, true, "/config/backups"), http.StatusOK)
+	assert.Equal(t, mkdirCall(t, true, "/config/backups"), http.StatusConflict)
+	assert.Equal(t, writeTextCall(t, "/config/backups/a.txt", "one", false), http.StatusOK)
+	assert.Equal(t, writeTextCall(t, "/config/backups/a.txt", "two", false), http.StatusConflict)
+	assert.Equal(t, writeTextCall(t, "/config/backups/a.txt", "two", true), http.StatusOK)
+	res := filesCall(t, true, "content", "/config/backups/a.txt")
+	assert.Assert(t, strings.Contains(res.Body.String(), `"content":"two"`), res.Body.String())
+
+	assert.Equal(t, deleteCall(t, true, "/config/backups"), http.StatusOK)
+	assert.Equal(t, filesCall(t, true, "list", "/config/backups").Code, http.StatusNotFound)
+	assert.Equal(t, deleteCall(t, true, "/"), http.StatusBadRequest)
+}
+
+func TestAFileIsUploadedStreamed(t *testing.T) {
+	fakeContainer(t, true)
+	body := "--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nbinary\x00data\r\n--b--\r\n"
+	upload := func(replace bool) int {
+		return writeCall(t, true, http.MethodPost, "/", "multipart/form-data; boundary=b", body, func(a *AppManagement, c echo.Context) error {
+			return a.UploadContainerFile(c, "c1", codegen.UploadContainerFileParams{Path: "/app/x.bin", Replace: &replace})
+		}).Code
+	}
+
+	assert.Equal(t, upload(false), http.StatusOK)
+	assert.Equal(t, upload(false), http.StatusConflict)
+	res := filesCall(t, true, "download", "/app/x.bin")
+	assert.Equal(t, res.Body.String(), "binary\x00data")
+}
+
+func TestNothingIsWrittenByAnotherAccountOrWhileTheAppIsBusy(t *testing.T) {
+	fakeContainer(t, true)
+
+	assert.Equal(t, mkdirCall(t, false, "/config/x"), http.StatusForbidden)
+	assert.Equal(t, deleteCall(t, false, "/config/app.yml"), http.StatusForbidden)
+
+	end, err := service.Begin("files-test-app", "update")
+	assert.NilError(t, err)
+	assert.Equal(t, mkdirCall(t, true, "/config/x"), http.StatusConflict)
+	assert.Equal(t, deleteCall(t, true, "/config/app.yml"), http.StatusConflict)
+	end()
+	assert.Equal(t, deleteCall(t, true, "/config/app.yml"), http.StatusOK)
 }

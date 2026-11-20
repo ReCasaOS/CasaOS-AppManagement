@@ -4,6 +4,7 @@ package containerfs
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -53,3 +54,16 @@ func (r *Root) OpenFile(string) (*os.File, fs.FileInfo, error) {
 	return nil, nil, ErrUnsupported
 }
 func (r *Root) Names(string) map[uint32]string { return map[uint32]string{} }
+
+// ErrExist is a name already taken.
+var ErrExist = errors.New("there is already something of that name")
+
+// ErrBadName is a name that cannot be one.
+var ErrBadName = errors.New("not a name a file can have")
+
+// ErrOtherFilesystem is a folder that holds another filesystem.
+var ErrOtherFilesystem = errors.New("a volume or another filesystem is mounted inside this folder: delete inside it instead")
+
+func (r *Root) Mkdir(string) error                     { return ErrUnsupported }
+func (r *Root) WriteFile(string, io.Reader, bool) error { return ErrUnsupported }
+func (r *Root) Remove(string) error                    { return ErrUnsupported }

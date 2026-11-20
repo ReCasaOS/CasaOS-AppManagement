@@ -1917,6 +1917,34 @@ paths:
         "501":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+    delete:
+      summary: Delete a file, a link or a folder with all it holds, in a running container
+      description: |
+        A link goes itself, never what it names. A folder that is a volume's mount point,
+        or holds one, is refused before anything goes. Refused while an operation runs on
+        the app. The owner of the box only. Errors: 400 on `/`, a mount, a file of /proc or
+        /sys, or a read-only container; 403, 404, 409 (stopped, or busy) as for reading.
+      operationId: deleteContainerFile
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
   /container/{id}/files/content:
     get:
       summary: A text file of a running container, up to 1 MB
@@ -1949,6 +1977,40 @@ paths:
         "501":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+    put:
+      summary: Write a text file of a running container
+      description: |
+        Creates the file, or replaces it when `replace` is set, keeping its mode and owner;
+        a new file is 0644 and belongs to the owner of its folder. Written aside, then moved
+        in place. A link or a folder is refused. Refused while an operation runs on the app.
+        Errors as for `DELETE /container/{id}/files`, and 409 on a name already taken
+        without `replace`.
+      operationId: writeContainerFileContent
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContainerFileWrite"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
   /container/{id}/files/download:
     get:
       summary: Download a file of a running container
@@ -1964,6 +2026,83 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ContainerFileDownloadOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /container/{id}/files/folder:
+    post:
+      summary: Make a folder in a running container
+      description: |
+        Owned as its parent folder. Errors as for `DELETE /container/{id}/files`, and 409
+        on a name already taken.
+      operationId: makeContainerFolder
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContainerFolderMake"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /container/{id}/files/upload:
+    post:
+      summary: Send a file into a running container
+      description: |
+        The body is multipart, one part named `file`, streamed to the disk. `path` is the
+        file's full path. As `PUT /container/{id}/files/content` otherwise.
+      operationId: uploadContainerFile
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+        - name: replace
+          in: query
+          required: false
+          description: Replace a file already there
+          schema:
+            type: boolean
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
         "400":
           $ref: "#/components/responses/ResponseBadRequest"
         "403":
@@ -5030,6 +5169,27 @@ components:
         output:
           type: string
           description: What the command printed. Empty for an account that is not the owner.
+
+    ContainerFileWrite:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+          example: /config/settings.yml
+        content:
+          type: string
+        replace:
+          type: boolean
+          description: Replace a file already there
+
+    ContainerFolderMake:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          example: /config/backups
 
     ContainerFiles:
       type: object
