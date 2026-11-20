@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -60,8 +61,8 @@ func TestOnlyTheBuildCounterMayDifferWithinAFlavour(t *testing.T) {
 
 func TestNothingNewerIsNothing(t *testing.T) {
 	for name, current := range map[string]string{
-		"already the highest": "2.1.0",
-		"not a version":       "latest",
+		"already the highest":  "2.1.0",
+		"not a version":        "latest",
 		"a word after numbers": "1.4.2x",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -118,6 +119,9 @@ func TestAPassAsksEachRepositoryOnceAndKeepsWhatItFound(t *testing.T) {
 		}
 		return []string{"16.2", "16.4", "17.0", "1.2.3", "1.3.0"}, nil
 	}
+	wasTold := NewerTagsToldPath
+	NewerTagsToldPath = filepath.Join(t.TempDir(), "told.json")
+	t.Cleanup(func() { NewerTagsToldPath = wasTold })
 	pinnedImages = func(context.Context) (map[string]map[string]string, error) {
 		return map[string]map[string]string{
 			"immich":    {"db": "postgres:16.2"},

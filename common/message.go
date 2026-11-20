@@ -149,6 +149,52 @@ var (
 	}
 )
 
+// What the box did by itself, for the alerts (CasaOS#170): the night's automatic updates,
+// newer versions of images pinned to one, the weekly cleanup.
+var (
+	PropertyTypeAutoUpdateUpdated = message_bus.PropertyType{
+		Name:        "auto-update:updated",
+		Description: utils.Ptr("the apps the night updated, by name, comma-separated"),
+	}
+	PropertyTypeAutoUpdateFailed = message_bus.PropertyType{
+		Name:        "auto-update:failed",
+		Description: utils.Ptr("the apps whose update failed that night, by name, comma-separated; each runs the version it had"),
+	}
+	PropertyTypeNewerTags = message_bus.PropertyType{
+		Name:        "newer-tags:found",
+		Description: utils.Ptr("the newer versions found since the last time they were told, as JSON [{app, image, current, tag, level}]"),
+	}
+	PropertyTypeCleanupCount = message_bus.PropertyType{
+		Name:        "cleanup:count",
+		Description: utils.Ptr("how many old versions of images the cleanup removed"),
+	}
+	PropertyTypeCleanupSize = message_bus.PropertyType{
+		Name:        "cleanup:size",
+		Description: utils.Ptr("the bytes the cleanup freed"),
+	}
+
+	EventTypeAutoUpdateNightEnd = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "auto-update:night-end",
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeAutoUpdateUpdated, PropertyTypeAutoUpdateFailed},
+	}
+	EventTypeNewerTagsFound = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "newer-tags:found",
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeNewerTags},
+	}
+	EventTypeCleanupEnd = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "cleanup:end",
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeCleanupCount, PropertyTypeCleanupSize},
+	}
+	EventTypeCleanupError = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "cleanup:error",
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeMessage},
+	}
+)
+
 var EventTypes = []message_bus.EventType{
 	// app-store
 	EventTypeAppStoreRegisterBegin, EventTypeAppStoreRegisterEnd, EventTypeAppStoreRegisterError,
@@ -165,6 +211,7 @@ var EventTypes = []message_bus.EventType{
 	EventTypeAppGitBuildBegin, EventTypeAppGitBuildProgress, EventTypeAppGitBuildEnd, EventTypeAppGitBuildError,
 	EventTypeAppGitDeployEnd, EventTypeAppGitDeployError,
 	EventTypeAppContainerDied, EventTypeAppContainerUnhealthy, EventTypeAppContainerRestarting, EventTypeAppContainerHealthy,
+	EventTypeAutoUpdateNightEnd, EventTypeNewerTagsFound, EventTypeCleanupEnd, EventTypeCleanupError,
 
 	// resources
 	EventTypeResourceAlertFiring, EventTypeResourceAlertResolved,

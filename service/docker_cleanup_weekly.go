@@ -4,8 +4,10 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"errors"
+	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -231,6 +233,15 @@ func runWeeklyCleanup(ctx context.Context, cli cleanupDaemon, slot, now time.Tim
 
 	if err := RecordCleanupRun(run, &slot); err != nil {
 		logger.Error("weekly cleanup: its run cannot be written", zap.Error(err))
+	}
+	// for the alerts: what the weekly cleanup freed, or why it could not
+	if run.Error != nil {
+		publishEvent(ctx, common.EventTypeCleanupError, map[string]string{common.PropertyTypeMessage.Name: *run.Error})
+	} else {
+		publishEvent(ctx, common.EventTypeCleanupEnd, map[string]string{
+			common.PropertyTypeCleanupCount.Name: strconv.Itoa(run.Count),
+			common.PropertyTypeCleanupSize.Name:  strconv.FormatInt(run.Size, 10),
+		})
 	}
 }
 
