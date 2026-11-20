@@ -1653,6 +1653,12 @@ func (a *ComposeApp) HealthCheck() (bool, error) {
 }
 
 func LoadComposeAppFromConfigFile(appID string, configFile string) (*ComposeApp, error) {
+	return loadComposeApp(appID, configFile)
+}
+
+// loadComposeApp is LoadComposeAppFromConfigFile with more options for the loader, which
+// come last and so win.
+func loadComposeApp(appID string, configFile string, more ...cli.ProjectOptionsFn) (*ComposeApp, error) {
 	// Every file compose recorded, named explicitly. configFile is one path, or the
 	// comma-separated list a stack's containers carry when it was started from several (an
 	// override beside the main file, `-f a.yml -f b.yml`). Left to look for a default name in
@@ -1692,15 +1698,17 @@ func LoadComposeAppFromConfigFile(appID string, configFile string) (*ComposeApp,
 		nil,
 		backend,
 		nil,
-		cli.WithWorkingDirectory(options.ProjectDir), // this has to be the first option, otherwise it will assume the dir where this program is running is the working directory.
+		append([]cli.ProjectOptionsFn{
+			cli.WithWorkingDirectory(options.ProjectDir), // this has to be the first option, otherwise it will assume the dir where this program is running is the working directory.
 
-		cli.WithOsEnv,
-		cli.WithDotEnv,
-		cli.WithEnv(env),
-		cli.WithConfigFileEnv,
-		cli.WithDefaultConfigPath,
-		cli.WithEnvFiles(options.EnvFiles...),
-		cli.WithName(options.ProjectName),
+			cli.WithOsEnv,
+			cli.WithDotEnv,
+			cli.WithEnv(env),
+			cli.WithConfigFileEnv,
+			cli.WithDefaultConfigPath,
+			cli.WithEnvFiles(options.EnvFiles...),
+			cli.WithName(options.ProjectName),
+		}, more...)...,
 	)
 
 	return (*ComposeApp)(project), err
