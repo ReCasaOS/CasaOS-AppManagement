@@ -80,6 +80,10 @@ var sameForTheOwner = map[string]string{
 	"/v2/app_management/backup/destinations/:name/runs/:app/:stamp/files": "no rclone in the harness: the hidden app is asked about under a probe name, and the owner's read fails as an unknown one does",
 	"/v2/app_management/git/:app":                                         "no Docker daemon in the harness: the owner's read fails at it too",
 	"/v2/app_management/git/:app/tags":                                    "no Docker daemon in the harness, as above",
+	// a user is refused these before any container is looked up
+	"/v2/app_management/container/:id/files":          "the owner's alone, and no Docker daemon in the harness: the owner's read fails at it too",
+	"/v2/app_management/container/:id/files/content":  "as above",
+	"/v2/app_management/container/:id/files/download": "as above",
 }
 
 // writes are refused to a user before any handler reads the name; the owner is not asked
