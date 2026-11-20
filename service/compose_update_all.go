@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -105,6 +106,8 @@ func PlanUpdateAll(apps map[string]*ComposeApp, available func(*ComposeApp) bool
 var updateAll struct {
 	sync.Mutex
 	run *codegen.ComposeAppUpdateRun
+	// set while the nightly update of the apps runs (app_auto_update.go)
+	night bool
 }
 
 // ForgetFinishedUpdateAllRun forgets the last run once it is over, as a restart of this
@@ -149,6 +152,9 @@ func StartUpdateAll(ids []string, update func(ctx context.Context, id string) (c
 
 	if updateAll.run != nil && updateAll.run.FinishedAt == nil {
 		return nil, ErrUpdateAllRunning
+	}
+	if updateAll.night {
+		return nil, fmt.Errorf("%w: the nightly update of the apps is running", ErrUpdateAllRunning)
 	}
 
 	run := &codegen.ComposeAppUpdateRun{StartedAt: time.Now(), Apps: make([]codegen.ComposeAppUpdateRunApp, 0, len(ids))}

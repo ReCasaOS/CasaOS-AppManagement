@@ -1023,7 +1023,7 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 
 	defer func() {
 		if !success {
-			pointTagsBack(ctx, dockerClient, held)
+			pointTagsBack(ctx, dockerClient, a.Name, held)
 
 			if err := file.CopySingleFile(backupComposeFile, currentComposeFile, ""); err != nil {
 				logger.Error("failed to restore original compose file", zap.Error(err), zap.String("src", backupComposeFile), zap.String("dst", currentComposeFile))

@@ -430,12 +430,14 @@ paths:
     put:
       summary: Turn the nightly update of one app on or off
       description: |
-        Every night at three, on the box's clock, an app turned on is updated when it
+        Every night at two, on the box's clock, an app turned on is updated when it
         has an update, one app after another, with the update button's own update: an
         app that does not start again is put back on the files and the images it ran,
         and the failure raises an alert. The first app turned on waits for the next
         night. A night waits while something runs on an app or an upgrade of the
-        system is open. Apps built from a repository deploy by themselves already and
+        system is open, and is skipped when it cannot start within two hours. An app
+        that failed two nights in a row is left alone until its switch is turned off
+        and on again. Apps built from a repository deploy by themselves already and
         are refused. The owner's only.
       operationId: setAppAutoUpdate
       tags:
