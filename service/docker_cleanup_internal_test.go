@@ -143,11 +143,41 @@ func TestLeftoverVolumesAreWhatNoContainerHoldsAndNoAppOwns(t *testing.T) {
 	assert.Equal(t, got[0].Created.Year(), 2026)
 }
 
-func TestAnImageAnAppNamesThatCannotBeReadIsAnError(t *testing.T) {
+// `ghcr.io/x/chatbot-ui@undefined` held the whole cleanup on a real box. Docker cannot
+// read such a reference, so no image was ever pulled under it and it names none the
+// daemon holds: it is no reason to offer nothing. Its repository can be read, and every
+// image of it is kept.
+func TestAnImageReferenceThatCannotBeReadKeepsItsRepositoryAndHoldsNothing(t *testing.T) {
 	protection := emptyProtection()
-	err := protection.protect(&types.Project{Name: "odd", Services: types.Services{"web": {Name: "web", Image: "Not A Reference"}}})
+	assert.NilError(t, protection.protect(&types.Project{Name: "chatbot-ui", Services: types.Services{
+		"web":  {Name: "web", Image: "ghcr.io/mckaywrigley/chatbot-ui@undefined"},
+		"side": {Name: "side", Image: "registry.local:5000/team/side:bad tag"},
+		"odd":  {Name: "odd", Image: "Not A Reference"},
+	}}))
 
-	assert.ErrorContains(t, err, "odd")
+	left := leftoverImages([]*image.Summary{
+		{ID: "kept", RepoTags: []string{"ghcr.io/mckaywrigley/chatbot-ui:main"}},
+		{ID: "kept-too", RepoTags: []string{"registry.local:5000/team/side:1"}},
+		{ID: "left", RepoTags: []string{"alpine:3.20"}},
+	}, protection)
+	assert.DeepEqual(t, ids(left), []string{"left"})
+
+	// and its volumes are the app's all the same
+	_, owned := protection.Projects["chatbot-ui"]
+	assert.Assert(t, owned)
+}
+
+func TestRepositoryOfReadsWhatItCan(t *testing.T) {
+	for ref, want := range map[string]string{
+		"ghcr.io/mckaywrigley/chatbot-ui@undefined": "ghcr.io/mckaywrigley/chatbot-ui",
+		"nginx:bad tag":                           "docker.io/library/nginx",
+		"registry.local:5000/team/side:bad tag":   "registry.local:5000/team/side",
+		"registry.local:5000/team/side@sha256:zz": "registry.local:5000/team/side",
+		"Not A Reference":                         "",
+		"":                                        "",
+	} {
+		assert.Equal(t, repositoryOf(ref), want, ref)
+	}
 }
 
 func TestBuildCacheSizeCountsWhatNoBuildUses(t *testing.T) {
