@@ -32,6 +32,9 @@ var ErrUnsupported = errors.New("a container's files can only be read on Linux")
 // ErrNotAFile is a path that is not a regular file.
 var ErrNotAFile = errors.New("not a file")
 
+// ErrPseudoFile is a file of /proc, /sys and the like.
+var ErrPseudoFile = errors.New("a file of the kernel (/proc, /sys) is not read from here")
+
 func OfProcess(int) (*Root, error) { return nil, ErrUnsupported }
 func Open(string) (*Root, error)   { return nil, ErrUnsupported }
 func (r *Root) Close() error       { return nil }

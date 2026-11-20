@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"golang.org/x/sys/unix"
 	"gotest.tools/v3/assert"
 )
 
@@ -104,4 +105,56 @@ func TestAPathMustBeAbsolute(t *testing.T) {
 	p, err := Clean("/app/../etc/")
 	assert.NilError(t, err)
 	assert.Equal(t, p, "/etc")
+}
+
+// A device node or a FIFO, even under a name the box reads by itself, is never opened:
+// opening a device runs its driver as the host's root.
+func TestADeviceOrAFifoIsNeverOpened(t *testing.T) {
+	dir, root := fakeRoot(t)
+
+	assert.NilError(t, unix.Mkfifo(filepath.Join(dir, "app", "pipe"), 0o644))
+	_, _, err := root.OpenFile("/app/pipe")
+	assert.Equal(t, err, ErrNotAFile)
+
+	if os.Geteuid() != 0 {
+		t.Skip("mknod needs root")
+	}
+	// /dev/null's numbers in place of /etc/passwd
+	passwd := filepath.Join(dir, "etc", "passwd")
+	assert.NilError(t, os.Remove(passwd))
+	assert.NilError(t, unix.Mknod(passwd, unix.S_IFCHR|0o644, int(unix.Mkdev(1, 3))))
+	_, _, err = root.OpenFile("/etc/passwd")
+	assert.Equal(t, err, ErrNotAFile)
+	assert.Equal(t, len(root.Names("/etc/passwd")), 0)
+}
+
+// /proc and /sys are made up by the kernel, with the host's rights: not read from here.
+func TestAFileOfTheKernelIsNotRead(t *testing.T) {
+	root, err := Open("/")
+	if err == ErrUnsupported {
+		t.Skip(err)
+	}
+	assert.NilError(t, err)
+	defer root.Close()
+
+	_, _, err = root.OpenFile("/proc/self/environ")
+	assert.Equal(t, err, ErrPseudoFile)
+	_, _, err = root.OpenFile("/proc/self/status")
+	assert.Equal(t, err, ErrPseudoFile)
+}
+
+func TestTheSpecialBitsAreKept(t *testing.T) {
+	dir, root := fakeRoot(t)
+	assert.NilError(t, os.MkdirAll(filepath.Join(dir, "tmp"), 0o777))
+	assert.NilError(t, os.Chmod(filepath.Join(dir, "tmp"), 0o777|os.ModeSticky))
+
+	entries, _, err := root.List("/", 100)
+	assert.NilError(t, err)
+	for _, e := range entries {
+		if e.Name == "tmp" {
+			assert.Equal(t, e.Mode, os.FileMode(0o777)|os.ModeSticky)
+			return
+		}
+	}
+	t.Fatal("tmp not listed")
 }

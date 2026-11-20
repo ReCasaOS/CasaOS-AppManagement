@@ -81,7 +81,14 @@ func (r *Root) open(p string, flags int) (*os.File, error) {
 		Flags:   uint64(flags | unix.O_CLOEXEC),
 		Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_MAGICLINKS,
 	}
-	fd, err := unix.Openat2(r.fd, rel, &how)
+	var fd int
+	var err error
+	// the kernel answers EAGAIN when a rename or a mount raced the resolution
+	for try := 0; try < 3; try++ {
+		if fd, err = unix.Openat2(r.fd, rel, &how); err != unix.EAGAIN {
+			break
+		}
+	}
 	if errors.Is(err, unix.ENOSYS) {
 		return nil, ErrUnsupported
 	}
@@ -92,6 +99,9 @@ func (r *Root) open(p string, flags int) (*os.File, error) {
 	return os.NewFile(uintptr(fd), p), nil
 }
 
+// readMax bounds the names read from one folder before the cut to the max shown.
+const readMax = 100000
+
 // List is what dir holds, folders first, then by name, at most max entries; truncated
 // says more were left out.
 func (r *Root) List(dir string, max int) (entries []Entry, truncated bool, err error) {
@@ -101,23 +111,28 @@ func (r *Root) List(dir string, max int) (entries []Entry, truncated bool, err e
 	}
 	defer f.Close()
 
-	names, err := f.Readdirnames(max + 1)
+	// read further than shown, so that the cut keeps the first names in order rather
+	// than whichever the disk gave first
+	names, err := f.Readdirnames(readMax)
 	if err != nil && err != io.EOF {
 		return nil, false, err
 	}
+	sort.Strings(names)
 	if len(names) > max {
 		names, truncated = names[:max], true
 	}
 	fd := int(f.Fd())
 	for _, name := range names {
 		var st unix.Stat_t
+		// shortcut: a dead network mount below dir hangs this stat, and the request with it,
+		// as it hangs `ls`; a timeout per entry if it is ever met
 		if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			continue // gone since it was listed
 		}
 		entry := Entry{
 			Name:     name,
 			Size:     st.Size,
-			Mode:     permissions(st.Mode),
+			Mode:     Permissions(st.Mode),
 			UID:      st.Uid,
 			GID:      st.Gid,
 			Modified: time.Unix(st.Mtim.Unix()),
@@ -147,20 +162,51 @@ func (r *Root) List(dir string, max int) (entries []Entry, truncated bool, err e
 // ErrNotAFile is a path that is a folder, a device or a socket rather than a file.
 var ErrNotAFile = errors.New("not a file")
 
+// ErrPseudoFile is a file of /proc, /sys and the like: made up by the kernel when read,
+// with the rights of the host's root rather than the container's.
+var ErrPseudoFile = errors.New("a file of the kernel (/proc, /sys) is not read from here")
+
+// pseudo are the filesystems whose files the kernel makes up when read.
+var pseudo = map[int64]bool{
+	unix.PROC_SUPER_MAGIC: true, unix.SYSFS_MAGIC: true, unix.DEBUGFS_MAGIC: true,
+	unix.SECURITYFS_MAGIC: true, unix.CGROUP_SUPER_MAGIC: true, unix.CGROUP2_SUPER_MAGIC: true,
+	unix.TRACEFS_MAGIC: true, unix.BPF_FS_MAGIC: true, unix.EFIVARFS_MAGIC: true,
+}
+
 // OpenFile opens a regular file for reading. The caller closes it.
+//
+// The path is first opened O_PATH, which reaches no driver: a device node, even one an
+// image made in place of /etc/passwd, is never opened by the host's root. Only a regular
+// file of a real filesystem is then opened for reading, through that very inode.
 func (r *Root) OpenFile(p string) (*os.File, fs.FileInfo, error) {
-	f, err := r.open(p, unix.O_RDONLY|unix.O_NONBLOCK)
+	ref, err := r.open(p, unix.O_PATH)
 	if err != nil {
 		return nil, nil, err
 	}
+	defer ref.Close()
+	var st unix.Stat_t
+	if err := unix.Fstat(int(ref.Fd()), &st); err != nil {
+		return nil, nil, &os.PathError{Op: "stat", Path: p, Err: err}
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil, nil, ErrNotAFile
+	}
+	var sfs unix.Statfs_t
+	if err := unix.Fstatfs(int(ref.Fd()), &sfs); err != nil {
+		return nil, nil, &os.PathError{Op: "statfs", Path: p, Err: err}
+	}
+	if pseudo[int64(sfs.Type)] {
+		return nil, nil, ErrPseudoFile
+	}
+	fd, err := unix.Open(fmt.Sprintf("/proc/self/fd/%d", ref.Fd()), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOCTTY, 0)
+	if err != nil {
+		return nil, nil, &os.PathError{Op: "open", Path: p, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), p)
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
 		return nil, nil, err
-	}
-	if !info.Mode().IsRegular() {
-		f.Close()
-		return nil, nil, ErrNotAFile
 	}
 
 	return f, info, nil
@@ -195,7 +241,8 @@ func (r *Root) Names(file string) map[uint32]string {
 	return out
 }
 
-func permissions(mode uint32) fs.FileMode {
+// Permissions is the mode bits of a stat as a FileMode: rwx, setuid, setgid and sticky.
+func Permissions(mode uint32) fs.FileMode {
 	perm := fs.FileMode(mode & 0o777)
 	if mode&unix.S_ISUID != 0 {
 		perm |= fs.ModeSetuid

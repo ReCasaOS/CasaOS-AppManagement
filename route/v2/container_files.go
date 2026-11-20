@@ -1,6 +1,7 @@
 package v2
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/containerfs"
 	"github.com/ReCasaOS/CasaOS-AppManagement/service"
 	"github.com/ReCasaOS/CasaOS-Common/utils"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/errdefs"
 	"github.com/labstack/echo/v4"
 )
@@ -46,13 +48,30 @@ var openContainerRoot = func(ctx context.Context, id string) (*containerfs.Root,
 	if inspected.State == nil || !inspected.State.Running || inspected.State.Pid <= 0 {
 		return nil, nil, errContainerStopped
 	}
+	// what an update keeps: a volume or a folder of the box, not a tmpfs
 	mounts := []string{}
 	for _, m := range inspected.Mounts {
-		mounts = append(mounts, path.Clean(m.Destination))
+		if m.Type == mount.TypeBind || m.Type == mount.TypeVolume {
+			mounts = append(mounts, path.Clean(m.Destination))
+		}
 	}
 	root, err := containerfs.OfProcess(inspected.State.Pid)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, errContainerStopped // gone between the two
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	// The pid was read before the root was opened. Had the container stopped in between
+	// and the pid gone to a process of the box, the root would be the box's own: asked
+	// again, the same container must still run under the same pid since the same start.
+	again, err := service.MyService.Docker().DescribeContainer(ctx, id)
+	if err != nil || again.State == nil || !again.State.Running || again.State.Pid != inspected.State.Pid || again.State.StartedAt != inspected.State.StartedAt {
+		root.Close()
+		return nil, nil, errContainerStopped
+	}
 
-	return root, mounts, err
+	return root, mounts, nil
 }
 
 // ContainerFiles lists a folder of a running container.
@@ -77,8 +96,8 @@ func (a *AppManagement) ContainerFiles(ctx echo.Context, id codegen.ContainerID,
 			Name:     e.Name,
 			Type:     codegen.Other,
 			Size:     e.Size,
-			Mode:     e.Mode.String()[len(e.Mode.String())-9:],
-			Octal:    utils.Ptr(fmt.Sprintf("%o", e.Mode.Perm())),
+			Mode:     modeText(e.Mode),
+			Octal:    utils.Ptr(modeOctal(e.Mode)),
 			Uid:      e.UID,
 			Gid:      e.GID,
 			Modified: e.Modified,
@@ -191,8 +210,12 @@ func containerFilesFailure(ctx echo.Context, err error) error {
 	switch {
 	case errors.Is(err, errNotOwner):
 		return forbidden(ctx)
-	case errors.As(err, &bad), errors.Is(err, containerfs.ErrNotAFile), errors.Is(err, syscall.ENOTDIR):
+	case errors.As(err, &bad), errors.Is(err, containerfs.ErrNotAFile), errors.Is(err, containerfs.ErrPseudoFile),
+		errors.Is(err, syscall.ENOTDIR), errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENXIO), errors.Is(err, syscall.ENODEV):
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+		message = "the box itself may not read this path: " + message
+		return ctx.JSON(http.StatusForbidden, codegen.ResponseForbidden{Message: &message})
 	case errors.Is(err, errContainerStopped):
 		return ctx.JSON(http.StatusConflict, codegen.ResponseConflict{Message: &message})
 	case errdefs.IsNotFound(err), errors.Is(err, os.ErrNotExist):
@@ -228,5 +251,40 @@ func contains(list []string, s string) bool {
 
 // isText is valid UTF-8 with no NUL byte.
 func isText(data []byte) bool {
-	return utf8.Valid(data) && !strings.ContainsRune(string(data), 0)
+	return utf8.Valid(data) && bytes.IndexByte(data, 0) < 0
+}
+
+// modeText is the permissions as `ls -l` writes them, setuid, setgid and sticky included.
+func modeText(m fs.FileMode) string {
+	text := []byte(m.Perm().String()[1:])
+	special := func(at int, on bool, lower, upper byte) {
+		if on {
+			if text[at] == 'x' {
+				text[at] = lower
+			} else {
+				text[at] = upper
+			}
+		}
+	}
+	special(2, m&fs.ModeSetuid != 0, 's', 'S')
+	special(5, m&fs.ModeSetgid != 0, 's', 'S')
+	special(8, m&fs.ModeSticky != 0, 't', 'T')
+
+	return string(text)
+}
+
+// modeOctal is the permissions in octal, `1777` for /tmp.
+func modeOctal(m fs.FileMode) string {
+	bits := uint32(m.Perm())
+	if m&fs.ModeSetuid != 0 {
+		bits |= 0o4000
+	}
+	if m&fs.ModeSetgid != 0 {
+		bits |= 0o2000
+	}
+	if m&fs.ModeSticky != 0 {
+		bits |= 0o1000
+	}
+
+	return fmt.Sprintf("%o", bits)
 }

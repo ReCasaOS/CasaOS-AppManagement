@@ -130,3 +130,11 @@ func TestTheAnswersSayWhatIsWrong(t *testing.T) {
 	fakeContainer(t, false)
 	assert.Equal(t, filesCall(t, true, "list", "/").Code, http.StatusConflict)
 }
+
+func TestTheModeIsWrittenAsLsWritesIt(t *testing.T) {
+	assert.Equal(t, modeText(0o777|os.ModeSticky), "rwxrwxrwt")
+	assert.Equal(t, modeOctal(0o777|os.ModeSticky), "1777")
+	assert.Equal(t, modeText(0o4755|os.ModeSetuid), "rwsr-xr-x")
+	assert.Equal(t, modeText(0o644|os.ModeSetgid), "rw-r-Sr--")
+	assert.Equal(t, modeOctal(0o755|os.ModeSetuid), "4755")
+}

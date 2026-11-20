@@ -1892,8 +1892,9 @@ paths:
         the container sees them: it works for images without a shell. A symlink resolves
         inside the container. Folders first, then by name, at most 5000 entries.
         The owner of the box only. Errors: 400 on a path that does not start with `/` or is
-        not a folder, 403 for another account, 404 on a container or a path that is not
-        there, 409 while the container is not running, 501 on a kernel older than 5.6.
+        not a folder, a device, a socket or a file of /proc or /sys, 403 for another account
+        or a path the box itself may not read, 404 on a container or a path that is not there,
+        409 while the container is not running, 501 on a kernel older than 5.6.
       operationId: containerFiles
       tags:
         - Container methods
@@ -1912,6 +1913,8 @@ paths:
         "409":
           $ref: "#/components/responses/ResponseConflict"
         "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
           $ref: "#/components/responses/ResponseInternalServerError"
 
   /container/{id}/files/content:
@@ -1937,12 +1940,21 @@ paths:
           $ref: "#/components/responses/ResponseNotFound"
         "409":
           $ref: "#/components/responses/ResponseConflict"
+        "413":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "415":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
 
   /container/{id}/files/download:
     get:
       summary: Download a file of a running container
       description: |
-        As `GET /container/{id}/files`, for one regular file, sent as it is.
+        As `GET /container/{id}/files`, for one regular file, sent as it is. The token may
+        come in the `token` query parameter: the browser downloads it to the disk itself.
       operationId: containerFileDownload
       tags:
         - Container methods
@@ -1960,6 +1972,10 @@ paths:
           $ref: "#/components/responses/ResponseNotFound"
         "409":
           $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
 
   /container/{id}/healthcheck:
     get:
@@ -3883,7 +3899,7 @@ components:
       description: OK
       headers:
         Content-Disposition:
-          description: '`attachment; filename="<name>"`'
+          description: "`attachment; filename*=UTF-8''<name, percent-encoded>`"
           schema:
             type: string
       content:

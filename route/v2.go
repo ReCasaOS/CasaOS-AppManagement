@@ -65,6 +65,12 @@ func isLogsStream(c echo.Context) bool {
 	return c.Request().Method == http.MethodGet && c.Path() == V2APIPath+"/logs/stream"
 }
 
+// isContainerFileDownload takes its token from the query too: the browser downloads the
+// file itself, to the disk as it comes, rather than holding it in a page.
+func isContainerFileDownload(c echo.Context) bool {
+	return c.Request().Method == http.MethodGet && c.Path() == V2APIPath+"/container/:id/files/download"
+}
+
 func InitV2Router() http.Handler {
 	appManagement := v2Route.NewAppManagement()
 
@@ -101,7 +107,7 @@ func InitV2Router() http.Handler {
 		TokenLookupFuncs: []echo_middleware.ValuesExtractor{
 			func(c echo.Context) ([]string, error) {
 				authorization := c.Request().Header.Get(echo.HeaderAuthorization)
-				if authorization == "" && isLogsStream(c) {
+				if authorization == "" && (isLogsStream(c) || isContainerFileDownload(c)) {
 					return []string{c.QueryParam("token")}, nil
 				}
 				return []string{jwt.TokenFromAuthorization(authorization)}, nil
