@@ -84,6 +84,22 @@ func imageKeys(ref string) (repo string, keys []string, err error) {
 	return repo, keys, nil
 }
 
+// repositoryOf is the repository of a reference whose tag or digest cannot be read, or
+// nothing when the name cannot be read either.
+func repositoryOf(ref string) string {
+	name, _, _ := strings.Cut(ref, "@")
+	// a colon after the last slash starts a tag; before it, it is the port of a registry
+	if colon := strings.LastIndex(name, ":"); colon > strings.LastIndex(name, "/") {
+		name = name[:colon]
+	}
+	named, err := reference.ParseNormalizedNamed(name)
+	if err != nil {
+		return ""
+	}
+
+	return named.Name()
+}
+
 // protect adds what one loaded app claims.
 func (p *cleanupProtection) protect(project *types.Project) error {
 	p.Projects[project.Name] = struct{}{}
@@ -100,7 +116,14 @@ func (p *cleanupProtection) protect(project *types.Project) error {
 		}
 		repo, keys, err := imageKeys(service.Image)
 		if err != nil {
-			return fmt.Errorf("image `%s` of `%s`: %w", service.Image, project.Name, err)
+			// A reference Docker cannot read, `name@undefined` on a real box, names no
+			// image the daemon holds: nothing was ever pulled under it, so it cannot hold
+			// the cleanup. What can be read of it, the repository, is kept whole.
+			if repo := repositoryOf(service.Image); repo != "" {
+				p.Repos[repo] = struct{}{}
+			}
+
+			continue
 		}
 		if service.Build != nil {
 			p.Repos[repo] = struct{}{}
