@@ -195,6 +195,8 @@ type fakeCleanupDaemon struct {
 	// the dangling images, and the filter ImageList was handed
 	dangling []image.Summary
 	listed   filters.Args
+	// whether ImageList was asked to count each image's containers
+	counted bool
 	// names that are removed without the image going: another name still points at it
 	lingers map[string]bool
 	images  []string
@@ -212,6 +214,7 @@ func (d *fakeCleanupDaemon) DiskUsage(_ context.Context, options dockertypes.Dis
 
 func (d *fakeCleanupDaemon) ImageList(_ context.Context, options image.ListOptions) ([]image.Summary, error) {
 	d.listed = options.Filters
+	d.counted = options.ContainerCount
 
 	return d.dangling, nil
 }

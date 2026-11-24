@@ -4,8 +4,10 @@ import (
 	"context"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"go.uber.org/zap"
 )
 
 // Old app versions: the images no tag points at any more, which is what an update leaves
@@ -17,14 +19,15 @@ import (
 // an image an app pins by its digest has no tag either, on a daemon that keeps images the
 // classic way: it is dangling to Docker and the app's all the same, so what an installed
 // app names by digest is left out. Each image is then removed by its id and never forced,
-// so one a container still holds stays.
+// so one a container still holds stays; such an image is not counted either, or Free up
+// would keep showing what it cannot free (CasaOS#167).
 func danglingOnly() filters.Args {
 	return filters.NewArgs(filters.Arg("dangling", "true"))
 }
 
-// oldVersions is the dangling images no installed app names by digest.
+// oldVersions is the dangling images no installed app names by digest and no container uses.
 func oldVersions(ctx context.Context, cli cleanupDaemon) ([]image.Summary, error) {
-	list, err := cli.ImageList(ctx, image.ListOptions{Filters: danglingOnly(), SharedSize: true})
+	list, err := cli.ImageList(ctx, image.ListOptions{Filters: danglingOnly(), SharedSize: true, ContainerCount: true})
 	if err != nil || len(list) == 0 {
 		// nothing dangling is the usual answer, and it needs no app read
 		return nil, err
@@ -36,7 +39,8 @@ func oldVersions(ctx context.Context, cli cleanupDaemon) ([]image.Summary, error
 
 	old := []image.Summary{}
 	for _, img := range list {
-		if !imageClaimed(img.RepoDigests, protection) {
+		// a container uses it (Containers > 0); -1 is a daemon that did not count, left to the removal
+		if img.Containers <= 0 && !imageClaimed(img.RepoDigests, protection) {
 			old = append(old, img)
 		}
 	}
@@ -98,7 +102,9 @@ func pruneDanglingImages(ctx context.Context, cli cleanupDaemon) (*codegen.Dangl
 	for _, img := range old {
 		// by id and not forced: an image a container holds, or one two repositories
 		// name, is refused by the daemon and stays
-		if _, err := cli.ImageRemove(ctx, img.ID, image.RemoveOptions{}); err == nil {
+		if _, err := cli.ImageRemove(ctx, img.ID, image.RemoveOptions{}); err != nil {
+			logger.Info("cleanup: an old app version stays", zap.String("image", img.ID), zap.Error(err))
+		} else {
 			freed = append(freed, img)
 		}
 	}

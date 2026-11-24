@@ -91,6 +91,27 @@ func TestAnOldVersionTheDaemonRefusesIsNotCountedAsFreed(t *testing.T) {
 	assert.Equal(t, freed.Size, int64(0))
 }
 
+// CasaOS#167: an old version a container still uses (an app whose container was not
+// recreated after its update, a stopped leftover) is refused by the daemon, so Free up
+// left it, and the count kept saying it was there to free.
+func TestAnOldVersionAContainerUsesIsNeitherCountedNorAsked(t *testing.T) {
+	daemon := aBoxWithOldVersions(t)
+	daemon.dangling = append(daemon.dangling,
+		image.Summary{ID: "held", RepoDigests: []string{"firefox@sha256:" + otherSha}, Size: 275, Containers: 1},
+		image.Summary{ID: "unknown", Size: 40, Containers: -1})
+
+	report, err := danglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.Assert(t, daemon.counted, "the daemon must be asked to count the containers")
+	assert.Equal(t, report.Count, 2)
+	assert.Equal(t, report.Size, int64(340))
+
+	freed, err := pruneDanglingImages(context.Background(), daemon)
+	assert.NilError(t, err)
+	assert.Equal(t, freed.Count, 2)
+	assert.DeepEqual(t, daemon.images, []string{"left", "unknown"})
+}
+
 // While an operation runs, or when an app cannot be read, the old versions say nothing
 // to free and free nothing.
 func TestOldVersionsAreHeldLikeTheRest(t *testing.T) {
