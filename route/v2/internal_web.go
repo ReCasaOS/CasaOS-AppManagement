@@ -72,6 +72,12 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 			}
 		}
 
+		if composeApp := (*service.ComposeApp)(app.Compose); composeApp != nil {
+			if main := composeApp.App(composeApp.MainServiceName()); main != nil {
+				item.Version, item.ReleaseNotes = appVersionOf(containersByApp[composeApp.Name][main.Name], main.Image)
+			}
+		}
+
 		if item.Name != nil && slices.Contains(dashboardHidden, *item.Name) {
 			item.HiddenOnDashboard = lo.ToPtr(true)
 		}

@@ -6862,6 +6862,20 @@ components:
             this app has not been checked since the service started.
           type: boolean
           example: true
+        version:
+          description: |-
+            The version the app's main container runs: the image's
+            `org.opencontainers.image.version` label, else its tag unless that is `latest`.
+            Absent when neither says one, or no container of the main service exists.
+          type: string
+          example: 1.27.2
+        release_notes:
+          description: |-
+            Where the main image's project publishes its releases: the GitHub releases
+            page named by the image's `org.opencontainers.image.source` label. Absent for
+            any other source.
+          type: string
+          example: https://github.com/syncthing/syncthing/releases
         newer_tags:
           description: |-
             The images of the app pinned to a version for which the registry holds a
