@@ -237,7 +237,7 @@ func TestCompareImagesNeverLeavesLoopback(t *testing.T) {
 	for _, base := range []string{"http://example.com", "https://" + elsewhere.Listener.Addr().String(), "http://192.0.2.1:80"} {
 		assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, "vuln-scan.url"), []byte(base), 0o600))
 		_, _, _, _, err := compareImages(context.Background(), "a", "b")
-		assert.Assert(t, err != nil, base)
+		assert.ErrorContains(t, err, "the scan module address is not on loopback", base)
 	}
 }
 
