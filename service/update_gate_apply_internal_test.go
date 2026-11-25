@@ -34,15 +34,23 @@ const (
 // createRecorder is compose's Up as pullAndApply drives it, recording each definition created.
 type createRecorder struct {
 	api.Compose
-	created []*types.Project
+	created  []*types.Project
+	started  int
+	failNext error // what a create of the update's definition answers
 }
 
 func (c *createRecorder) Create(_ context.Context, project *types.Project, _ api.CreateOptions) error {
 	c.created = append(c.created, project)
+	if _, next := project.Services["app"].Environment["VERSION"]; next {
+		return c.failNext
+	}
 	return nil
 }
 
-func (c *createRecorder) Start(context.Context, string, api.StartOptions) error { return nil }
+func (c *createRecorder) Start(context.Context, string, api.StartOptions) error {
+	c.started++
+	return nil
+}
 
 // createdNext reports whether the update's own definition was ever created.
 func (c *createRecorder) createdNext() bool {
@@ -233,7 +241,32 @@ func TestBlockedUpdatePutsEverythingBack(t *testing.T) {
 	assert.Equal(t, r.daemon.tags["app:latest"], "sha256:old")
 	// never forced: Docker keeps an image a container or another tag holds
 	assert.DeepEqual(t, r.daemon.removed, []client.ImageRemoveOptions{{}})
-	assert.Assert(t, !r.compose.createdNext(), "the update's own definition was created")
+	// nothing was recreated before the gate, so nothing is brought back: no create, no start
+	// of any definition, old or new
+	assert.Equal(t, len(r.compose.created), 0)
+	assert.Equal(t, r.compose.started, 0)
+}
+
+// Any other failure still brings the old app back up from the files put back.
+func TestFailedUpdateStillRestartsTheOldApp(t *testing.T) {
+	r := newGateRig(t, nil)
+	r.compose.failNext = errors.New("manifest for app:latest not found")
+
+	err := r.app.pullAndApply(context.Background(), []byte(gatedNext), nil, true)
+	assert.ErrorContains(t, err, "manifest")
+	assert.Equal(t, r.checks(), 1)
+
+	compose, err := os.ReadFile(r.composeFile)
+	assert.NilError(t, err)
+	assert.Equal(t, string(compose), gatedCompose)
+	// the update's definition, refused, then the old one
+	assert.Equal(t, len(r.compose.created), 2)
+	_, next := r.compose.created[0].Services["app"].Environment["VERSION"]
+	assert.Assert(t, next)
+	_, next = r.compose.created[1].Services["app"].Environment["VERSION"]
+	assert.Assert(t, !next, "the old definition was not brought back")
+	assert.Equal(t, r.compose.started, 1)
+	assert.Equal(t, len(r.daemon.removed), 0)
 }
 
 // A blocked update is not an error: the owner is told it was blocked, and the update ends.

@@ -1064,6 +1064,12 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 				}
 			}
 
+			// a blocked update stopped before any container was touched: re-upping would only
+			// start what was stopped, drop orphans, or recreate on a tag left on the blocked image
+			if blocked != nil {
+				return
+			}
+
 			// with RemoveOrphans: the new file may have added a service, and its container
 			// is not in the definition we just restored
 			if err := a.up(ctx, service, true); err != nil {
