@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -72,11 +73,19 @@ var compareImages = func(ctx context.Context, current, candidate string) (string
 	if err != nil {
 		return "", 0, 0, nil, err
 	}
+	// the internal secret goes to the module on this box, nowhere else
+	if h := req.URL.Hostname(); req.URL.Scheme != "http" || (h != "127.0.0.1" && h != "::1" && h != "localhost") {
+		return "", 0, 0, nil, fmt.Errorf("the scan module address is not on loopback: %s", req.URL.Redacted())
+	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", external.InternalAuthorization(config.CommonInfo.RuntimePath))
+	if err := external.InternalRequestEditor(config.CommonInfo.RuntimePath)(ctx, req); err != nil {
+		return "", 0, 0, nil, err
+	}
 
-	// no timeout of its own: the scans take seconds to minutes, ctx carries the limit
-	res, err := http.DefaultClient.Do(req)
+	// no timeout of its own: the scans take seconds to minutes, ctx carries the limit.
+	// A redirect is not followed: it would carry the secret elsewhere.
+	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := noRedirect.Do(req)
 	if err != nil {
 		return "", 0, 0, nil, err
 	}
@@ -94,7 +103,7 @@ var compareImages = func(ctx context.Context, current, candidate string) (string
 			Reason            string                   `json:"reason"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&out); err != nil {
 		return "", 0, 0, nil, err
 	}
 	d := out.Data

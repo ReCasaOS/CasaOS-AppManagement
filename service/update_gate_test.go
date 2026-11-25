@@ -13,6 +13,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/logstore"
+	"github.com/ReCasaOS/CasaOS-Common/external"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/container"
 	"gotest.tools/v3/assert"
@@ -202,6 +203,7 @@ func TestCompareImagesAsksTheModule(t *testing.T) {
 	status := http.StatusOK
 	module := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, r.URL.Path, "/v2/vuln_scan/compare")
+		assert.Equal(t, r.Header.Get("Authorization"), external.InternalAuthorization(config.CommonInfo.RuntimePath))
 		assert.NilError(t, json.NewDecoder(r.Body).Decode(&got))
 		w.WriteHeader(status)
 		if status == http.StatusOK {
@@ -222,5 +224,34 @@ func TestCompareImagesAsksTheModule(t *testing.T) {
 
 	status = http.StatusNotFound
 	_, _, _, _, err = compareImages(context.Background(), "sha256:a", "sha256:b")
+	assert.Assert(t, err != nil)
+}
+
+func TestCompareImagesNeverLeavesLoopback(t *testing.T) {
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("the scan module address was contacted")
+	}))
+	defer elsewhere.Close()
+	setRuntimePathForTest(t)
+	for _, base := range []string{"http://example.com", "https://" + elsewhere.Listener.Addr().String(), "http://192.0.2.1:80"} {
+		assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, "vuln-scan.url"), []byte(base), 0o600))
+		_, _, _, _, err := compareImages(context.Background(), "a", "b")
+		assert.Assert(t, err != nil, base)
+	}
+}
+
+func TestCompareImagesDoesNotFollowRedirects(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("the redirect was followed")
+	}))
+	defer target.Close()
+	module := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer module.Close()
+	setRuntimePathForTest(t)
+	assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, "vuln-scan.url"), []byte(module.URL), 0o600))
+
+	_, _, _, _, err := compareImages(context.Background(), "a", "b")
 	assert.Assert(t, err != nil)
 }
