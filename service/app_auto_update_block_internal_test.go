@@ -170,12 +170,17 @@ func TestTargetImages(t *testing.T) {
 	running := gateApp(map[string]string{"app": "app:1.1", "db": "db@sha256:aa", "cache": "cache:latest", "vpn": "vpn:3"})
 	store := gateApp(map[string]string{"app": "app:1.2", "db": "db@sha256:bb", "cache": "cache:7"})
 
-	assert.DeepEqual(t, targetImages(running, store), map[string]string{
+	assert.DeepEqual(t, targetImages(running, nil, store), map[string]string{
 		"app": "app:1.2", "db": "db@sha256:bb", "cache": "cache:latest", "vpn": "vpn:3",
 	})
-	assert.DeepEqual(t, targetImages(running, nil), map[string]string{
+	assert.DeepEqual(t, targetImages(running, nil, nil), map[string]string{
 		"app": "app:1.1", "db": "db@sha256:aa", "cache": "cache:latest", "vpn": "vpn:3",
 	})
+
+	// `cache:${TAG}` with TAG=latest runs as cache:latest, but the file's tag is not a floating
+	// one: the update writes the catalogue's
+	written := gateApp(map[string]string{"cache": "cache:${TAG}"})
+	assert.Equal(t, targetImages(running, written, store)["cache"], "cache:7")
 }
 
 // A registry that does not answer cannot say the image is the same: the night tries, and a

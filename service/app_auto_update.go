@@ -310,28 +310,48 @@ var updateTargetImages = func(ctx context.Context, app string) (map[string]strin
 	}
 	// a git app's update writes back its own file: its images stay
 	if _, err := loadGitApp(app); err == nil {
-		return targetImages(running, nil), nil
+		return targetImages(running, nil, nil), nil
 	}
 	store, err := running.storeComposeAppForUpdate()
+	if err != nil || store == nil {
+		return targetImages(running, nil, nil), err
+	}
+	if len(running.ComposeFiles) == 0 {
+		return nil, ErrComposeFileNotFound
+	}
+	// the update decides on the images as written, `.env` references kept, as updatedComposeYAML does
+	keys, err := running.EnvKeys()
+	if err != nil {
+		return nil, err
+	}
+	written, err := LoadComposeAppForEditing(app, running.ComposeFiles[0], keys)
 	if err != nil {
 		return nil, err
 	}
 
-	return targetImages(running, store), nil
+	return targetImages(running, written, store), nil
 }
 
 // targetImages is what updatedComposeYAML writes, service by service: the catalogue's image
-// where the update writes it, the app's own everywhere else. A nil store keeps every image.
+// where the update writes it, the app's own (as it runs) everywhere else. Whether it writes is
+// decided on the image as written in the file (`app:${TAG}`), when written has the service.
+// A nil store keeps every image.
 // shortcut: an override file beside the main one that sets an image is not read; the ref
 // then differs from the one blocked, and the night tries rather than wrongly skips.
-func targetImages(running, store *ComposeApp) map[string]string {
+func targetImages(running, written, store *ComposeApp) map[string]string {
 	images := map[string]string{}
 	for name, service := range running.Services {
 		images[name] = service.Image
 		if store == nil {
 			continue
 		}
-		if fromStore, ok := store.Services[name]; ok && updateWritesStoreImage(service.Image, fromStore.Image) {
+		asWritten := service.Image
+		if written != nil {
+			if w, ok := written.Services[name]; ok {
+				asWritten = w.Image
+			}
+		}
+		if fromStore, ok := store.Services[name]; ok && updateWritesStoreImage(asWritten, fromStore.Image) {
 			images[name] = fromStore.Image
 		}
 	}
