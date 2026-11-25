@@ -153,22 +153,36 @@ func (a *AppManagement) SetAutoUpdate(ctx echo.Context) error {
 		return forbidden(ctx)
 	}
 	var body struct {
-		MinDays *int `json:"min_days"`
+		MinDays          *int  `json:"min_days"`
+		ScanBeforeUpdate *bool `json:"scan_before_update"`
 	}
-	if err := ctx.Bind(&body); err != nil || body.MinDays == nil {
-		message := "min_days: a number of days is required"
+	if err := ctx.Bind(&body); err != nil || (body.MinDays == nil && body.ScanBeforeUpdate == nil) {
+		message := "min_days or scan_before_update is required"
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 	}
-	view, err := service.SetAutoUpdateMinDays(*body.MinDays, service.BoxNow())
-	if errors.Is(err, service.ErrAutoUpdateMinDays) {
-		message := err.Error()
-		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	var view *codegen.AutoUpdate
+	var err error
+	// the wait first: one out of bounds refuses the whole body, nothing applied
+	if body.MinDays != nil {
+		view, err = service.SetAutoUpdateMinDays(*body.MinDays, service.BoxNow())
+		if errors.Is(err, service.ErrAutoUpdateMinDays) {
+			message := err.Error()
+			return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+		}
+		if err == nil {
+			logger.Info("automatic updates wait", zap.Int("days", *body.MinDays))
+		}
+	}
+	if err == nil && body.ScanBeforeUpdate != nil {
+		view, err = service.SetScanBeforeUpdate(*body.ScanBeforeUpdate, service.BoxNow())
+		if err == nil {
+			logger.Info("update scan switched", zap.Bool("on", *body.ScanBeforeUpdate))
+		}
 	}
 	if err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusInternalServerError, codegen.ResponseInternalServerError{Message: &message})
 	}
-	logger.Info("automatic updates wait", zap.Int("days", *body.MinDays))
 
 	return ctx.JSON(http.StatusOK, codegen.AutoUpdateOK{Data: view})
 }

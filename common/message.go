@@ -147,6 +147,11 @@ var (
 		Name:        "app:updated",
 		Description: utils.Ptr("true if the app now runs what the update installed"),
 	}
+
+	PropertyTypeAppUpdateBlockedImages = message_bus.PropertyType{
+		Name:        "app:update-blocked-images",
+		Description: utils.Ptr("the images a blocked update stopped on, as JSON [{service, image, repo_digests, id, current, candidate, added}]"),
+	}
 )
 
 // What the box did by itself, for the alerts (CasaOS#170): the night's automatic updates,
@@ -159,6 +164,10 @@ var (
 	PropertyTypeAutoUpdateFailed = message_bus.PropertyType{
 		Name:        "auto-update:failed",
 		Description: utils.Ptr("the apps whose update failed that night, by name, comma-separated; each runs the version it had"),
+	}
+	PropertyTypeAutoUpdateBlocked = message_bus.PropertyType{
+		Name:        "auto-update:blocked",
+		Description: utils.Ptr("the apps whose update the night undid because its new image carries more critical vulnerabilities, by name, comma-separated; each runs the version it had"),
 	}
 	PropertyTypeNewerTags = message_bus.PropertyType{
 		Name:        "newer-tags:found",
@@ -176,7 +185,7 @@ var (
 	EventTypeAutoUpdateNightEnd = message_bus.EventType{
 		SourceID:         AppManagementServiceName,
 		Name:             "auto-update:night-end",
-		PropertyTypeList: []message_bus.PropertyType{PropertyTypeAutoUpdateUpdated, PropertyTypeAutoUpdateFailed},
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeAutoUpdateUpdated, PropertyTypeAutoUpdateFailed, PropertyTypeAutoUpdateBlocked},
 	}
 	EventTypeNewerTagsFound = message_bus.EventType{
 		SourceID:         AppManagementServiceName,
@@ -202,7 +211,7 @@ var EventTypes = []message_bus.EventType{
 	// app
 	EventTypeAppInstallBegin, EventTypeAppInstallProgress, EventTypeAppInstallEnd, EventTypeAppInstallError,
 	EventTypeAppUninstallBegin, EventTypeAppUninstallEnd, EventTypeAppUninstallError,
-	EventTypeAppUpdateBegin, EventTypeAppUpdateEnd, EventTypeAppUpdateError,
+	EventTypeAppUpdateBegin, EventTypeAppUpdateEnd, EventTypeAppUpdateError, EventTypeAppUpdateBlocked,
 	EventTypeBackupBegin, EventTypeBackupProgress, EventTypeBackupEnd, EventTypeBackupError, EventTypeBackupCheckError,
 	EventTypeAppApplyChangesBegin, EventTypeAppApplyChangesEnd, EventTypeAppApplyChangesError,
 	EventTypeAppStartBegin, EventTypeAppStartEnd, EventTypeAppStartError,
@@ -341,6 +350,16 @@ var (
 		Name:     "app:update-error",
 		PropertyTypeList: []message_bus.PropertyType{
 			PropertyTypeMessage,
+		},
+	}
+
+	// published instead of app:update-error when the new images were worse and the update
+	// was undone: the app runs what it ran before, which is not a failure
+	EventTypeAppUpdateBlocked = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:update-blocked",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeMessage, PropertyTypeAppUpdateBlockedImages,
 		},
 	}
 

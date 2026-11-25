@@ -36,6 +36,7 @@ import (
 	"github.com/docker/compose/v5/pkg/api"
 	"github.com/docker/compose/v5/pkg/compose"
 	"github.com/go-resty/resty/v2"
+	"github.com/moby/moby/client"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -242,7 +243,7 @@ func (a *ComposeApp) SetTitle(title, lang string) {
 
 // Update is what the update button does: the app is replaced in the background
 // and the request returns at once; the events of the update say the rest.
-func (a *ComposeApp) Update(ctx context.Context) error {
+func (a *ComposeApp) Update(ctx context.Context, skipScan bool) error {
 	end, err := Begin(a.Name, "update")
 	if err != nil {
 		return err
@@ -256,7 +257,7 @@ func (a *ComposeApp) Update(ctx context.Context) error {
 
 	go func() {
 		defer end()
-		_ = a.applyUpdate(ctx, newComposeYAML)
+		_ = a.applyUpdate(ctx, newComposeYAML, !skipScan)
 	}()
 
 	return nil
@@ -276,7 +277,7 @@ func (a *ComposeApp) UpdateNow(ctx context.Context) error {
 		return err
 	}
 
-	return a.applyUpdate(ctx, newComposeYAML)
+	return a.applyUpdate(ctx, newComposeYAML, true)
 }
 
 // prepareUpdate is the compose file the update writes, and the context its events
@@ -301,18 +302,9 @@ func (a *ComposeApp) prepareUpdate(ctx context.Context) ([]byte, context.Context
 	// an app whose images really had moved and which the check had just said so about.
 	// The grid offers that button on every compose app, so the refusal was reachable
 	// from the menu of any of them.
-	storeInfo, err := a.StoreInfo(true)
-	if err != nil && !errors.Is(err, ErrComposeExtensionNameXCasaOSNotFound) {
+	storeComposeApp, err := a.storeComposeAppForUpdate()
+	if err != nil {
 		return nil, ctx, err
-	}
-
-	// nil means no catalogue entry, which is an answer rather than a failure
-	var storeComposeApp *ComposeApp
-
-	if storeInfo != nil && storeInfo.StoreAppID != nil && *storeInfo.StoreAppID != "" {
-		if storeComposeApp, err = MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID); err != nil {
-			return nil, ctx, err
-		}
 	}
 
 	newComposeYAML, err := a.composeYAMLForUpdate(storeComposeApp)
@@ -332,19 +324,46 @@ func (a *ComposeApp) prepareUpdate(ctx context.Context) ([]byte, context.Context
 	return newComposeYAML, ctx, nil
 }
 
-// applyUpdate replaces the app with the compose file given and says so on the
-// bus, begin to end, error included.
-func (a *ComposeApp) applyUpdate(ctx context.Context, newComposeYAML []byte) error {
-	go PublishEventWrapper(ctx, common.EventTypeAppUpdateBegin, nil)
+// storeComposeAppForUpdate is the catalogue's version of the app an update takes its images
+// from; nil means no catalogue entry, which is an answer rather than a failure.
+func (a *ComposeApp) storeComposeAppForUpdate() (*ComposeApp, error) {
+	storeInfo, err := a.StoreInfo(true)
+	if err != nil && !errors.Is(err, ErrComposeExtensionNameXCasaOSNotFound) {
+		return nil, err
+	}
+	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
+		return nil, nil
+	}
 
-	defer PublishEventWrapper(ctx, common.EventTypeAppUpdateEnd, nil)
+	return MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID)
+}
+
+// applyUpdate replaces the app with the compose file given and says so on the
+// bus, begin to end, error included. gate asks the scan module first (update_gate.go).
+func (a *ComposeApp) applyUpdate(ctx context.Context, newComposeYAML []byte, gate bool) error {
+	go publishEvent(ctx, common.EventTypeAppUpdateBegin, nil)
+
+	defer publishEvent(ctx, common.EventTypeAppUpdateEnd, nil)
 
 	MyService.AppStoreManagement().StartUpgrade(a.Name)
 	defer MyService.AppStoreManagement().FinishUpgrade(a.Name)
 
 	before := mainImage(a)
-	if err := a.PullAndApply(ctx, newComposeYAML); err != nil {
-		go PublishEventWrapper(ctx, common.EventTypeAppUpdateError, map[string]string{
+	if err := a.PullAndApply(ctx, newComposeYAML, gate); err != nil {
+		// not a failure: the app runs what it ran before, and the owner is told why
+		var blocked *UpdateBlockedError
+		if errors.As(err, &blocked) {
+			images, _ := json.Marshal(blocked.Images)
+			go publishEvent(ctx, common.EventTypeAppUpdateBlocked, map[string]string{
+				common.PropertyTypeMessage.Name:                err.Error(),
+				common.PropertyTypeAppUpdateBlockedImages.Name: string(images),
+			})
+
+			logger.Info("update blocked: the new images are worse", zap.Error(err), zap.String("name", a.Name))
+			return err
+		}
+
+		go publishEvent(ctx, common.EventTypeAppUpdateError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
 		})
 
@@ -614,18 +633,18 @@ func (a *ComposeApp) Pull(ctx context.Context) error {
 	for i, name := range serviceNames {
 		app := a.Services[name]
 		if err := func() error {
-			go PublishEventWrapper(ctx, common.EventTypeImagePullBegin, map[string]string{
+			go publishEvent(ctx, common.EventTypeImagePullBegin, map[string]string{
 				common.PropertyTypeImageName.Name: app.Image,
 			})
 
-			defer PublishEventWrapper(ctx, common.EventTypeImagePullEnd, map[string]string{
+			defer publishEvent(ctx, common.EventTypeImagePullEnd, map[string]string{
 				common.PropertyTypeImageName.Name: app.Image,
 			})
 
 			if err := docker.PullImage(ctx, app.Image, func(out io.ReadCloser) {
 				pullImageProgress(ctx, out, app.Image, serviceNum, i+1)
 			}); err != nil {
-				go PublishEventWrapper(ctx, common.EventTypeImagePullError, map[string]string{
+				go publishEvent(ctx, common.EventTypeImagePullError, map[string]string{
 					common.PropertyTypeImageName.Name: app.Image,
 					common.PropertyTypeMessage.Name:   err.Error(),
 				})
@@ -896,14 +915,14 @@ func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Compose
 // service they no longer name is what a switch or a rollback left of the version it replaced.
 func (a *ComposeApp) upWithCheckRequire(ctx context.Context, service composeCreateStarter, removeOrphans bool) error {
 	if err := a.prepareSources(); err != nil {
-		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
+		go publishEvent(ctx, common.EventTypeContainerStartError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
 		})
 		return err
 	}
 
 	if err := a.up(ctx, service, removeOrphans); err != nil {
-		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
+		go publishEvent(ctx, common.EventTypeContainerStartError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
 		})
 		return err
@@ -985,14 +1004,18 @@ func (a *ComposeApp) reapplyGlobals(ctx context.Context, service composeCreateSt
 	return a.Create(ctx, api.CreateOptions{}, service)
 }
 
-func (a *ComposeApp) PullAndApply(ctx context.Context, newComposeYAML []byte) error {
-	return a.pullAndApply(ctx, newComposeYAML, nil)
+func (a *ComposeApp) PullAndApply(ctx context.Context, newComposeYAML []byte, gate bool) error {
+	return a.pullAndApply(ctx, newComposeYAML, nil, gate)
 }
+
+// applyDocker is the daemon pullAndApply works with, a variable so a test gives it a fake one.
+var applyDocker = apiService
 
 // pullAndApply writes the new compose file and, when newEnv is not nil, the new `.env` (empty
 // removes it), then pulls and (re)creates the app; both files are put back if that fails, so disk
-// and running state never diverge.
-func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, newEnv *[]byte) error {
+// and running state never diverge. gate asks the scan module about the pulled images before
+// anything is recreated: an update it blocks is undone like a failed one.
+func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, newEnv *[]byte, gate bool) error {
 	// backup current compose file
 	currentComposeFile := a.ComposeFiles[0]
 
@@ -1010,13 +1033,14 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 	}
 
 	// start compose app
-	service, dockerClient, err := apiService()
+	service, dockerClient, err := applyDocker()
 	if err != nil {
 		return err
 	}
 	defer dockerClient.Close()
 
 	success := false
+	var blocked *UpdateBlockedError
 
 	// the images the app runs now, by tag: a pull that keeps a tag moves it
 	held := imagesRunBy(ctx, dockerClient, a)
@@ -1024,6 +1048,14 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 	defer func() {
 		if !success {
 			pointTagsBack(ctx, dockerClient, a.Name, held)
+
+			// the images the gate refused, now that no tag of this app names them. Never
+			// forced: Docker keeps one a container or another tag holds, another app's included.
+			if blocked != nil {
+				for _, image := range blocked.Images {
+					_, _ = dockerClient.ImageRemove(ctx, image.ID, client.ImageRemoveOptions{})
+				}
+			}
 
 			if err := file.CopySingleFile(backupComposeFile, currentComposeFile, ""); err != nil {
 				logger.Error("failed to restore original compose file", zap.Error(err), zap.String("src", backupComposeFile), zap.String("dst", currentComposeFile))
@@ -1035,6 +1067,12 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 					logger.Error("failed to restore original .env", zap.Error(err), zap.String("path", a.EnvFile()))
 					return
 				}
+			}
+
+			// a blocked update stopped before any container was touched: re-upping would only
+			// start what was stopped, drop orphans, or recreate on a tag left on the blocked image
+			if blocked != nil {
+				return
 			}
 
 			// with RemoveOrphans: the new file may have added a service, and its container
@@ -1069,10 +1107,18 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 		return err
 	}
 
-	go PublishEventWrapper(ctx, common.EventTypeContainerStartBegin, nil)
+	// nil or *UpdateBlockedError: nothing has been recreated yet, the defer undoes the rest
+	if gate && ScanBeforeUpdate() {
+		if err := checkCandidates(ctx, dockerClient, a, newComposeApp); err != nil {
+			errors.As(err, &blocked)
+			return err
+		}
+	}
+
+	go publishEvent(ctx, common.EventTypeContainerStartBegin, nil)
 	PublishInstallStep(ctx, InstallStepStart)
 
-	defer PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, nil)
+	defer publishEvent(ctx, common.EventTypeContainerStartEnd, nil)
 
 	// an app that fails to start counts as a failed apply: the files are put back and the
 	// previous app started from them, so disk and running state never diverge
@@ -1379,12 +1425,12 @@ func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[
 	go func(ctx context.Context) {
 		defer end()
 
-		go PublishEventWrapper(ctx, common.EventTypeAppApplyChangesBegin, nil)
+		go publishEvent(ctx, common.EventTypeAppApplyChangesBegin, nil)
 
-		defer PublishEventWrapper(ctx, common.EventTypeAppApplyChangesEnd, nil)
+		defer publishEvent(ctx, common.EventTypeAppApplyChangesEnd, nil)
 
-		if err := a.pullAndApply(ctx, newComposeYAML, newEnv); err != nil {
-			go PublishEventWrapper(ctx, common.EventTypeAppApplyChangesError, map[string]string{
+		if err := a.pullAndApply(ctx, newComposeYAML, newEnv, false); err != nil {
+			go publishEvent(ctx, common.EventTypeAppApplyChangesError, map[string]string{
 				common.PropertyTypeMessage.Name: err.Error(),
 			})
 

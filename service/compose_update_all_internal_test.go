@@ -68,14 +68,14 @@ func TestTheRunGoesOneAppAtATimeAndOnlyOneRunAtATime(t *testing.T) {
 
 	order := []string{}
 	release := make(chan struct{})
-	update := func(_ context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string) {
+	update := func(_ context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
 		order = append(order, id)
 		<-release
 		if id == "two" {
-			return codegen.ComposeAppUpdateRunAppStateFailed, "the registry said no"
+			return codegen.ComposeAppUpdateRunAppStateFailed, "the registry said no", nil
 		}
 
-		return codegen.ComposeAppUpdateRunAppStateUpdated, ""
+		return codegen.ComposeAppUpdateRunAppStateUpdated, "", nil
 	}
 
 	run, err := StartUpdateAll([]string{"one", "two", "three"}, update)

@@ -36,15 +36,15 @@ func nightBox(t *testing.T, answers map[string]codegen.ComposeAppUpdateRunAppSta
 	zero := 0
 	assert.NilError(t, writeAutoUpdate(autoUpdateState{Apps: []string{}, MinDays: &zero}))
 	updated := &[]string{}
-	autoUpdateOne = func(_ context.Context, app string) (codegen.ComposeAppUpdateRunAppState, string) {
+	autoUpdateOne = func(_ context.Context, app string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
 		*updated = append(*updated, app)
 		if state, ok := answers[app]; ok {
 			if state == codegen.ComposeAppUpdateRunAppStateFailed {
-				return state, "the app did not start: rolled back"
+				return state, "the app did not start: rolled back", nil
 			}
-			return state, ""
+			return state, "", nil
 		}
-		return codegen.ComposeAppUpdateRunAppStateCurrent, "no update"
+		return codegen.ComposeAppUpdateRunAppStateCurrent, "no update", nil
 	}
 	t.Cleanup(func() {
 		AutoUpdatePath, osUpgradeOpenForAutoUpdate, autoUpdateOne, installedApps, appRemoved, appBusy, autoUpdateCheck = wasPath, wasUpgrade, wasOne, wasInstalled, wasRemoved, wasBusy, wasCheck
@@ -188,11 +188,11 @@ func TestATickDuringANightDoesNotStartItAgain(t *testing.T) {
 	calls := 0
 	release := make(chan struct{})
 	started := make(chan struct{})
-	autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string) {
+	autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
 		calls++
 		close(started)
 		<-release
-		return codegen.ComposeAppUpdateRunAppStateUpdated, ""
+		return codegen.ComposeAppUpdateRunAppStateUpdated, "", nil
 	}
 
 	done := make(chan struct{})
@@ -246,12 +246,12 @@ func TestAnAppTurnedOffDuringTheNightIsLeftAlone(t *testing.T) {
 	assert.NilError(t, err)
 	_, err = SetAppAutoUpdate("jellyfin", true, afternoon)
 	assert.NilError(t, err)
-	autoUpdateOne = func(_ context.Context, app string) (codegen.ComposeAppUpdateRunAppState, string) {
+	autoUpdateOne = func(_ context.Context, app string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
 		*updated = append(*updated, app)
 		// the owner turns jellyfin off while immich updates
 		_, err := SetAppAutoUpdate("jellyfin", false, tonight)
 		assert.NilError(t, err)
-		return codegen.ComposeAppUpdateRunAppStateUpdated, ""
+		return codegen.ComposeAppUpdateRunAppStateUpdated, "", nil
 	}
 
 	RunDueAutoUpdates(context.Background(), tonight.Add(time.Minute))
@@ -292,11 +292,11 @@ func TestTheNightIsListedWhileItRuns(t *testing.T) {
 	_, err := SetAppAutoUpdate("jellyfin", true, afternoon)
 	assert.NilError(t, err)
 	listed := false
-	autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string) {
+	autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
 		for _, operation := range RunningOperations() {
 			listed = listed || operation.App == autoUpdateMark
 		}
-		return codegen.ComposeAppUpdateRunAppStateUpdated, ""
+		return codegen.ComposeAppUpdateRunAppStateUpdated, "", nil
 	}
 
 	RunDueAutoUpdates(context.Background(), tonight.Add(time.Minute))
@@ -324,12 +324,12 @@ func TestTheNightAndAnUpdateOfEveryAppExcludeEachOther(t *testing.T) {
 	updateAll.Unlock()
 
 	// the night runs: an update of every app is refused
-	autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string) {
-		_, err := StartUpdateAll([]string{"immich"}, func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string) {
-			return codegen.ComposeAppUpdateRunAppStateUpdated, ""
+	autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
+		_, err := StartUpdateAll([]string{"immich"}, func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
+			return codegen.ComposeAppUpdateRunAppStateUpdated, "", nil
 		})
 		assert.ErrorIs(t, err, ErrUpdateAllRunning)
-		return codegen.ComposeAppUpdateRunAppStateUpdated, ""
+		return codegen.ComposeAppUpdateRunAppStateUpdated, "", nil
 	}
 	RunDueAutoUpdates(context.Background(), tonight.Add(11*time.Minute))
 }

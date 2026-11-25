@@ -575,8 +575,8 @@ func TestAnIdBelowOneIsABadRequest(t *testing.T) {
 
 func TestTheUpdateRunNamesNoHiddenApp(t *testing.T) {
 	r := newReadsRig(t)
-	_, err := service.StartUpdateAll([]string{shownApp, hiddenApp}, func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string) {
-		return codegen.ComposeAppUpdateRunAppStateUpdated, "done"
+	_, err := service.StartUpdateAll([]string{shownApp, hiddenApp}, func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []service.BlockedImage) {
+		return codegen.ComposeAppUpdateRunAppStateUpdated, "done", nil
 	})
 	assert.NilError(t, err)
 	awaitUpdateRun(t)

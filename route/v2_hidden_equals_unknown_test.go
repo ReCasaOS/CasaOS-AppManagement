@@ -396,8 +396,8 @@ func TestVisibilityNameIsValidated(t *testing.T) {
 // An update run of hidden apps alone answers a user as no run at all.
 func TestAnUpdateRunOfHiddenAppsAloneIsNoRun(t *testing.T) {
 	r := newReadsRig(t)
-	_, err := service.StartUpdateAll([]string{hiddenApp}, func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string) {
-		return codegen.ComposeAppUpdateRunAppStateUpdated, "done"
+	_, err := service.StartUpdateAll([]string{hiddenApp}, func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []service.BlockedImage) {
+		return codegen.ComposeAppUpdateRunAppStateUpdated, "done", nil
 	})
 	assert.NilError(t, err)
 	awaitUpdateRun(t)

@@ -41,7 +41,7 @@ func TestTheNightSaysWhatItUpdatedAndWhatFailed(t *testing.T) {
 		{Id: "sonarr", State: codegen.ComposeAppUpdateRunAppStateFailed},
 		{Id: "radarr", State: codegen.ComposeAppUpdateRunAppStateFailed, Message: &left},
 		{Id: "immich", State: codegen.ComposeAppUpdateRunAppStateUpdated},
-	}})
+	}}, nil)
 
 	assert.Equal(t, len(*got), 1)
 	assert.Equal(t, (*got)[0].name, "auto-update:night-end")
@@ -54,7 +54,7 @@ func TestANightThatChangedNothingSaysNothing(t *testing.T) {
 	tellAutoUpdateNight(context.Background(), codegen.AutoUpdateRun{Apps: []codegen.ComposeAppUpdateRunApp{
 		{Id: "plex", State: codegen.ComposeAppUpdateRunAppStateCurrent},
 		{Id: "sonarr", State: codegen.ComposeAppUpdateRunAppStateQueued},
-	}})
+	}}, nil)
 	assert.Equal(t, len(*got), 0)
 }
 

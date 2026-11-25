@@ -66,7 +66,7 @@ func TestAnUpdateIsRefusedWhileTheAppIsBusy(t *testing.T) {
 	app := &ComposeApp{Name: "jarvis", ComposeFiles: []string{"/nonexistent/docker-compose.yml"}}
 	holding(t, "jarvis")
 
-	assertBusy(t, app.Update(context.Background()))
+	assertBusy(t, app.Update(context.Background(), false))
 	assertBusy(t, app.UpdateNow(context.Background()))
 }
 
