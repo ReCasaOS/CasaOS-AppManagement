@@ -151,10 +151,9 @@ func writeAutoUpdate(state autoUpdateState) error {
 }
 
 func autoUpdateOf(state autoUpdateState, now time.Time) *codegen.AutoUpdate {
-	_, err := os.Stat(filepath.Join(config.CommonInfo.RuntimePath, vulnScanURLFile))
 	view := &codegen.AutoUpdate{
 		Apps: append([]string{}, state.Apps...), MinDays: state.minDays(), Runs: []codegen.AutoUpdateRun{},
-		ScanBeforeUpdate: state.scanBeforeUpdate(), ScanAvailable: err == nil,
+		ScanBeforeUpdate: state.scanBeforeUpdate(), ScanAvailable: scanModulePresent(),
 	}
 	for i := len(state.Runs) - 1; i >= 0; i-- {
 		view.Runs = append(view.Runs, state.Runs[i])
@@ -554,12 +553,18 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 			continue
 		}
 
-		// blocked by the very image the registry publishes still: not tried, not told again
-		if kept, ok := current.Blocked[app]; ok && stillBlocked(ctx, app, kept.Images) {
-			entry.State, entry.Message = codegen.ComposeAppUpdateRunAppStateBlocked, &kept.Message
-			entry.Blocked = blockedView(kept.Images)
-			run.Apps = append(run.Apps, entry)
-			continue
+		// blocked by the very image the registry publishes still: not tried, not told again.
+		// A block stands on a check that can run: without the module, or with the check off,
+		// it is forgotten and the update runs.
+		if kept, ok := current.Blocked[app]; ok {
+			if !scanModulePresent() || !current.scanBeforeUpdate() {
+				unblocked[app] = true
+			} else if stillBlocked(ctx, app, kept.Images) {
+				entry.State, entry.Message = codegen.ComposeAppUpdateRunAppStateBlocked, &kept.Message
+				entry.Blocked = blockedView(kept.Images)
+				run.Apps = append(run.Apps, entry)
+				continue
+			}
 		}
 
 		var blocked []BlockedImage

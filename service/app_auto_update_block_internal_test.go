@@ -32,6 +32,8 @@ func nightWithABlock(t *testing.T) *blockedBox {
 	wasTarget := updateTargetImages
 	updateTargetImages = func(context.Context, string) (map[string]string, error) { return box.target, box.targetErr }
 	t.Cleanup(func() { updateTargetImages = wasTarget })
+	setRuntimePathForTest(t)
+	assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, vulnScanURLFile), []byte("http://127.0.0.1:1"), 0o600))
 	autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
 		box.asked++
 		return codegen.ComposeAppUpdateRunAppStateBlocked, "the new version has 2 more critical vulnerabilities than the one installed",
@@ -123,6 +125,43 @@ func TestNightRetriesWhenTheTargetCannotBeRead(t *testing.T) {
 	box.targetErr = errors.New("the catalogue cannot be read")
 	RunDueAutoUpdates(context.Background(), nightTwo)
 	assert.Equal(t, box.asked, 2)
+}
+
+// A block stands on a check that can run: with the module gone, or the check off, the night
+// tries the update and forgets the block.
+func TestNightForgetsBlocksWithoutTheModule(t *testing.T) {
+	for name, drop := range map[string]func(t *testing.T){
+		"module removed": func(t *testing.T) {
+			assert.NilError(t, os.Remove(filepath.Join(config.CommonInfo.RuntimePath, vulnScanURLFile)))
+		},
+		// written by hand: the switch itself forgets the blocks
+		"check off": func(t *testing.T) {
+			state, err := readAutoUpdate()
+			assert.NilError(t, err)
+			off := false
+			state.ScanBeforeUpdate = &off
+			assert.NilError(t, writeAutoUpdate(state))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			box := nightWithABlock(t)
+			RunDueAutoUpdates(context.Background(), nightOne)
+			state, err := readAutoUpdate()
+			assert.NilError(t, err)
+			assert.Equal(t, len(state.Blocked), 1)
+
+			drop(t)
+			autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
+				box.asked++
+				return codegen.ComposeAppUpdateRunAppStateCurrent, "no update", nil
+			}
+			RunDueAutoUpdates(context.Background(), nightTwo)
+			assert.Equal(t, box.asked, 2)
+			state, err = readAutoUpdate()
+			assert.NilError(t, err)
+			assert.Equal(t, len(state.Blocked), 0)
+		})
+	}
 }
 
 // What an update would write, service by service: the catalogue's image where the update

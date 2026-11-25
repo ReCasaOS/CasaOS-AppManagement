@@ -118,11 +118,17 @@ var compareImages = func(ctx context.Context, current, candidate string) (string
 	return d.Verdict, d.CurrentCritical, d.CandidateCritical, d.Added, nil
 }
 
+// scanModulePresent says the scan module is installed: it writes its address on this box.
+func scanModulePresent() bool {
+	_, err := os.Stat(filepath.Join(config.CommonInfo.RuntimePath, vulnScanURLFile))
+	return err == nil
+}
+
 // checkCandidates compares, service by service, the image the app runs with the one the
 // update pulled. It returns nil or *UpdateBlockedError, nothing else. A variable so a test
 // can replace it.
 var checkCandidates = func(ctx context.Context, cli imageTagger, running *ComposeApp, next *ComposeApp) error {
-	if _, err := os.Stat(filepath.Join(config.CommonInfo.RuntimePath, vulnScanURLFile)); err != nil {
+	if !scanModulePresent() {
 		return nil
 	}
 
