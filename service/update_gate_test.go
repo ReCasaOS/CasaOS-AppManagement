@@ -167,22 +167,38 @@ func TestGateWritesUncheckedToTheAppJournal(t *testing.T) {
 		assert.NilError(t, err)
 		return events
 	}
-	run := func(answer func(context.Context, string, string) (string, int, int, []codegen.BlockedFinding, error), module bool) {
+	theClient := compareImages
+	// moduleURL, when set, is where the module answers instead of nowhere
+	run := func(answer func(context.Context, string, string) (string, int, int, []codegen.BlockedFinding, error), module bool, moduleURL string) {
 		theGate(t, module, answer)
+		if moduleURL != "" {
+			assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, external.InternalSecretFilename), []byte("s3cret-value"), 0o600))
+			assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, "vuln-scan.url"), []byte(moduleURL), 0o600))
+		}
 		d := gateDaemon(map[string]string{"app:2": "sha256:new", "db:2": "sha256:newdb"},
 			aContainer("web", "app", "sha256:old"), aContainer("web", "db", "sha256:olddb"))
 		assert.NilError(t, checkCandidates(context.Background(), d,
 			gateApp(map[string]string{"app": "app:1", "db": "db:1"}), gateApp(map[string]string{"app": "app:2", "db": "db:2"})))
 	}
 
-	run(nil, false)
-	run(nil, true)
+	run(nil, false, "")
+	run(nil, true, "")
+	assert.Equal(t, len(unchecked()), 0)
+
+	// a module that cannot be reached, or answers anything but 200 (an older one says 400),
+	// lets the update through without a line
+	run(func(context.Context, string, string) (string, int, int, []codegen.BlockedFinding, error) {
+		return "", 0, 0, nil, errors.New("connection refused")
+	}, true, "")
+	older := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
+	defer older.Close()
+	run(theClient, true, older.URL)
 	assert.Equal(t, len(unchecked()), 0)
 
 	// two services, both unknown: one line, with the first reason
 	run(func(context.Context, string, string) (string, int, int, []codegen.BlockedFinding, error) {
 		return "unknown", 0, 0, nil, errors.New("boom")
-	}, true)
+	}, true, "")
 	events := unchecked()
 	assert.Equal(t, len(events), 1)
 	assert.Equal(t, events[0].Detail, "boom")
@@ -193,7 +209,7 @@ func TestGateWritesUncheckedToTheAppJournal(t *testing.T) {
 	run(func(ctx context.Context, _, _ string) (string, int, int, []codegen.BlockedFinding, error) {
 		<-ctx.Done()
 		return "", 0, 0, nil, ctx.Err()
-	}, true)
+	}, true, "")
 	assert.Equal(t, len(unchecked()), 2)
 }
 

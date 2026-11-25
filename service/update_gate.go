@@ -62,7 +62,8 @@ const (
 )
 
 // compareImages asks the module. A variable so a test can replace it. Any answer but a 200
-// is an error (an old module says 404); an "unknown" verdict comes with its reason as the error.
+// is an error (an older module, without the route, answers 400 from its request
+// validation); an "unknown" verdict comes with its reason as the error.
 var compareImages = func(ctx context.Context, current, candidate string) (string, int, int, []codegen.BlockedFinding, error) {
 	base, err := os.ReadFile(filepath.Join(config.CommonInfo.RuntimePath, vulnScanURLFile))
 	if err != nil {
@@ -194,7 +195,11 @@ var checkCandidates = func(ctx context.Context, cli imageTagger, running *Compos
 				reason = err.Error()
 			}
 			logger.Info("an image could not be compared before the update", zap.String("app", running.Name), zap.String("service", name), zap.String("reason", reason))
-			unchecked(reason)
+			// only the module's own "unknown" goes to the app's journal: one that cannot be
+			// reached or is too old would write a line on every update
+			if verdict == verdictUnknown {
+				unchecked(reason)
+			}
 		}
 	}
 
