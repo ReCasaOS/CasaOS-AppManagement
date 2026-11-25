@@ -423,8 +423,9 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 	tellAutoUpdateNight(ctx, run)
 }
 
-// publishEvent is how the night, the newer versions, the cleanup and an app's update tell
-// the alerts: a variable so a test hears them.
+// publishEvent is how the night, the newer versions, the cleanup and an app's update and
+// apply tell the bus: a variable so a test hears them, and leaves no goroutine behind that
+// reads MyService.
 var publishEvent = PublishEventWrapper
 
 // tellAutoUpdateNight says what the night did, for the alerts: the apps it updated and the

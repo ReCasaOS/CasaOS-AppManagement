@@ -628,18 +628,18 @@ func (a *ComposeApp) Pull(ctx context.Context) error {
 	for i, name := range serviceNames {
 		app := a.Services[name]
 		if err := func() error {
-			go PublishEventWrapper(ctx, common.EventTypeImagePullBegin, map[string]string{
+			go publishEvent(ctx, common.EventTypeImagePullBegin, map[string]string{
 				common.PropertyTypeImageName.Name: app.Image,
 			})
 
-			defer PublishEventWrapper(ctx, common.EventTypeImagePullEnd, map[string]string{
+			defer publishEvent(ctx, common.EventTypeImagePullEnd, map[string]string{
 				common.PropertyTypeImageName.Name: app.Image,
 			})
 
 			if err := docker.PullImage(ctx, app.Image, func(out io.ReadCloser) {
 				pullImageProgress(ctx, out, app.Image, serviceNum, i+1)
 			}); err != nil {
-				go PublishEventWrapper(ctx, common.EventTypeImagePullError, map[string]string{
+				go publishEvent(ctx, common.EventTypeImagePullError, map[string]string{
 					common.PropertyTypeImageName.Name: app.Image,
 					common.PropertyTypeMessage.Name:   err.Error(),
 				})
@@ -910,14 +910,14 @@ func (a *ComposeApp) UpWithCheckRequire(ctx context.Context, service api.Compose
 // service they no longer name is what a switch or a rollback left of the version it replaced.
 func (a *ComposeApp) upWithCheckRequire(ctx context.Context, service composeCreateStarter, removeOrphans bool) error {
 	if err := a.prepareSources(); err != nil {
-		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
+		go publishEvent(ctx, common.EventTypeContainerStartError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
 		})
 		return err
 	}
 
 	if err := a.up(ctx, service, removeOrphans); err != nil {
-		go PublishEventWrapper(ctx, common.EventTypeContainerStartError, map[string]string{
+		go publishEvent(ctx, common.EventTypeContainerStartError, map[string]string{
 			common.PropertyTypeMessage.Name: err.Error(),
 		})
 		return err
@@ -1110,10 +1110,10 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 		}
 	}
 
-	go PublishEventWrapper(ctx, common.EventTypeContainerStartBegin, nil)
+	go publishEvent(ctx, common.EventTypeContainerStartBegin, nil)
 	PublishInstallStep(ctx, InstallStepStart)
 
-	defer PublishEventWrapper(ctx, common.EventTypeContainerStartEnd, nil)
+	defer publishEvent(ctx, common.EventTypeContainerStartEnd, nil)
 
 	// an app that fails to start counts as a failed apply: the files are put back and the
 	// previous app started from them, so disk and running state never diverge
@@ -1420,12 +1420,12 @@ func (a *ComposeApp) apply(ctx context.Context, newComposeYAML []byte, newEnv *[
 	go func(ctx context.Context) {
 		defer end()
 
-		go PublishEventWrapper(ctx, common.EventTypeAppApplyChangesBegin, nil)
+		go publishEvent(ctx, common.EventTypeAppApplyChangesBegin, nil)
 
-		defer PublishEventWrapper(ctx, common.EventTypeAppApplyChangesEnd, nil)
+		defer publishEvent(ctx, common.EventTypeAppApplyChangesEnd, nil)
 
 		if err := a.pullAndApply(ctx, newComposeYAML, newEnv, false); err != nil {
-			go PublishEventWrapper(ctx, common.EventTypeAppApplyChangesError, map[string]string{
+			go publishEvent(ctx, common.EventTypeAppApplyChangesError, map[string]string{
 				common.PropertyTypeMessage.Name: err.Error(),
 			})
 

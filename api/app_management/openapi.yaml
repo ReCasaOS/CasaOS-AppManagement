@@ -6330,7 +6330,8 @@ components:
             - blocked
         message:
           description: |-
-            The reason, when the app stayed current for one, or the error. In a night,
+            The reason, when the app stayed current for one, the error, or why the update
+            was blocked. In a night,
             `queued` is an update that waits to be old enough, and says until when.
           type: string
         blocked:

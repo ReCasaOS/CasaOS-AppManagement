@@ -93,6 +93,10 @@ func newGateRig(t *testing.T, verdict error) *gateRig {
 	setRuntimePathForTest(t)
 	// the pull reaches no daemon: it fails, which is published, not returned
 	t.Setenv("DOCKER_HOST", "unix:///nonexistent/docker.sock")
+	// nothing published reaches the bus, or MyService, which another test may be setting
+	wasPublish := publishEvent
+	t.Cleanup(func() { publishEvent = wasPublish })
+	publishEvent = func(context.Context, message_bus.EventType, map[string]string) {}
 
 	dir := t.TempDir()
 	composeFile := filepath.Join(dir, common.ComposeYAMLFileName)
@@ -251,6 +255,7 @@ func TestBlockedUpdatePutsEverythingBack(t *testing.T) {
 func TestFailedUpdateStillRestartsTheOldApp(t *testing.T) {
 	r := newGateRig(t, nil)
 	r.compose.failNext = errors.New("manifest for app:latest not found")
+	heard := hearUpdate(t)
 
 	err := r.app.pullAndApply(context.Background(), []byte(gatedNext), nil, true)
 	assert.ErrorContains(t, err, "manifest")
@@ -267,6 +272,11 @@ func TestFailedUpdateStillRestartsTheOldApp(t *testing.T) {
 	assert.Assert(t, !next, "the old definition was not brought back")
 	assert.Equal(t, r.compose.started, 1)
 	assert.Equal(t, len(r.daemon.removed), 0)
+
+	// every event of the apply goes through publishEvent: none is left in a goroutine that
+	// reads MyService after the test
+	heard("docker:image:pull-begin", "docker:image:pull-error", "docker:image:pull-end",
+		"docker:container:start-begin", "app:install-progress", "docker:container:start-error", "docker:container:start-end")
 }
 
 // A blocked update is not an error: the owner is told it was blocked, and the update ends.
