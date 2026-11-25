@@ -482,7 +482,10 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 			run.Apps = append(run.Apps, entry)
 			// nothing to wait for any more
 			seen[app] = time.Time{}
-			unblocked[app] = true
+			// only a real "no update" lifts a block: a failed check says nothing of the image
+			if result == codegen.ComposeAppUpdateRunAppStateCurrent {
+				unblocked[app] = true
+			}
 			continue
 		}
 		// The wait counts from the night that first found the update: the box cannot
@@ -600,8 +603,11 @@ func finishAutoUpdateNight(slot time.Time, run *codegen.AutoUpdateRun, removed [
 	for app := range unblocked {
 		delete(state.Blocked, app)
 	}
+	// not for an app turned off, nor once the check is, while the night ran
 	for app, block := range blocks {
-		state.Blocked[app] = block
+		if slices.Contains(state.Apps, app) && state.scanBeforeUpdate() {
+			state.Blocked[app] = block
+		}
 	}
 	for _, app := range removed {
 		delete(state.Failures, app)

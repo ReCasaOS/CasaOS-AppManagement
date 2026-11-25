@@ -181,3 +181,53 @@ func TestSwitchOffSkipsTheGate(t *testing.T) {
 	assert.Equal(t, r.checks(), 0)
 	heard("docker:container:start-begin")
 }
+
+// A check that failed says nothing of the image: the block stays, and the night that finds
+// the same block again does not tell it again.
+func TestFailedCheckKeepsTheBlock(t *testing.T) {
+	box := nightWithABlock(t)
+	got := hear(t)
+	RunDueAutoUpdates(context.Background(), nightOne)
+
+	autoUpdateCheck = func(context.Context, string) (bool, codegen.ComposeAppUpdateRunAppState, string) {
+		return false, codegen.ComposeAppUpdateRunAppStateFailed, "the apps cannot be listed"
+	}
+	RunDueAutoUpdates(context.Background(), nightTwo)
+	state, err := readAutoUpdate()
+	assert.NilError(t, err)
+	assert.Equal(t, len(state.Blocked["jellyfin"].Images), 1)
+
+	autoUpdateCheck = func(context.Context, string) (bool, codegen.ComposeAppUpdateRunAppState, string) { return true, "", "" }
+	box.err = errors.New("registry unreachable")
+	RunDueAutoUpdates(context.Background(), nightTwo.AddDate(0, 0, 1))
+	assert.Equal(t, box.asked, 2)
+	told := 0
+	for _, e := range *got {
+		if e.properties["auto-update:blocked"] != "" {
+			told++
+		}
+	}
+	assert.Equal(t, told, 1)
+}
+
+// What the owner dropped while the night ran is not written back by it.
+func TestNightDoesNotKeepABlockTheOwnerJustDropped(t *testing.T) {
+	for name, drop := range map[string]func(){
+		"check off": func() { _, _ = SetScanBeforeUpdate(false, nightOne) },
+		"app off":   func() { _, _ = SetAppAutoUpdate("jellyfin", false, nightOne) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			nightWithABlock(t)
+			blockedOne := autoUpdateOne
+			autoUpdateOne = func(ctx context.Context, app string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
+				drop()
+				return blockedOne(ctx, app)
+			}
+			RunDueAutoUpdates(context.Background(), nightOne)
+
+			state, err := readAutoUpdate()
+			assert.NilError(t, err)
+			assert.Equal(t, len(state.Blocked), 0)
+		})
+	}
+}
