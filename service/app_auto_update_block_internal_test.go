@@ -15,17 +15,23 @@ import (
 )
 
 // blockedBox is a night whose update is blocked by the scan. The registry says `digest`, or
-// fails with err, and the update records how often it was asked.
+// fails with err, the update would write `target` (or cannot tell, targetErr), and the
+// update records how often it was asked.
 type blockedBox struct {
-	asked  int
-	digest string
-	err    error
+	asked     int
+	digest    string
+	err       error
+	target    map[string]string
+	targetErr error
 }
 
 func nightWithABlock(t *testing.T) *blockedBox {
 	t.Helper()
 	nightBox(t, nil)
-	box := &blockedBox{digest: "sha256:aa"}
+	box := &blockedBox{digest: "sha256:aa", target: map[string]string{"app": "img:1"}}
+	wasTarget := updateTargetImages
+	updateTargetImages = func(context.Context, string) (map[string]string, error) { return box.target, box.targetErr }
+	t.Cleanup(func() { updateTargetImages = wasTarget })
 	autoUpdateOne = func(context.Context, string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
 		box.asked++
 		return codegen.ComposeAppUpdateRunAppStateBlocked, "the new version has 2 more critical vulnerabilities than the one installed",
@@ -97,6 +103,40 @@ func TestNightRetriesWhenRegistryMoved(t *testing.T) {
 	box.digest = "sha256:bb"
 	RunDueAutoUpdates(context.Background(), nightTwo)
 	assert.Equal(t, box.asked, 2)
+}
+
+// The catalogue moved the app to another tag: the blocked one is still published as it was,
+// but tonight's update would pull the new one, which nobody has scanned.
+func TestNightRetriesWhenTheTargetTagMoved(t *testing.T) {
+	box := nightWithABlock(t)
+	RunDueAutoUpdates(context.Background(), nightOne)
+
+	box.target = map[string]string{"app": "img:2"}
+	RunDueAutoUpdates(context.Background(), nightTwo)
+	assert.Equal(t, box.asked, 2)
+}
+
+func TestNightRetriesWhenTheTargetCannotBeRead(t *testing.T) {
+	box := nightWithABlock(t)
+	RunDueAutoUpdates(context.Background(), nightOne)
+
+	box.targetErr = errors.New("the catalogue cannot be read")
+	RunDueAutoUpdates(context.Background(), nightTwo)
+	assert.Equal(t, box.asked, 2)
+}
+
+// What an update would write, service by service: the catalogue's image where the update
+// writes it, the app's own everywhere else.
+func TestTargetImages(t *testing.T) {
+	running := gateApp(map[string]string{"app": "app:1.1", "db": "db@sha256:aa", "cache": "cache:latest", "vpn": "vpn:3"})
+	store := gateApp(map[string]string{"app": "app:1.2", "db": "db@sha256:bb", "cache": "cache:7"})
+
+	assert.DeepEqual(t, targetImages(running, store), map[string]string{
+		"app": "app:1.2", "db": "db@sha256:bb", "cache": "cache:latest", "vpn": "vpn:3",
+	})
+	assert.DeepEqual(t, targetImages(running, nil), map[string]string{
+		"app": "app:1.1", "db": "db@sha256:aa", "cache": "cache:latest", "vpn": "vpn:3",
+	})
 }
 
 // A registry that does not answer cannot say the image is the same: the night tries, and a

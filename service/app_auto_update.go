@@ -4,6 +4,7 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"errors"
+	"fmt"
 	"github.com/ReCasaOS/CasaOS-AppManagement/common"
 	"os"
 	"path/filepath"
@@ -296,14 +297,65 @@ var autoUpdateCheck = UpdateAvailableForRun
 // asks no registry.
 var registryDigestOf = docker.RegistryDigest
 
-// stillBlocked says the registry publishes, for every image that blocked an update, the
-// very image that blocked it: trying again would be refused again. Any doubt, a registry
-// that does not answer included, says no, so that the night tries.
-func stillBlocked(images []BlockedImage) bool {
+// updateTargetImages is the image each service of an app would be given by an update run
+// now, read from the catalogue without writing anything. A variable so a test asks no
+// catalogue.
+var updateTargetImages = func(ctx context.Context, app string) (map[string]string, error) {
+	apps, err := MyService.Compose().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	running, ok := apps[app]
+	if !ok {
+		return nil, fmt.Errorf("%s is not installed", app)
+	}
+	// a git app's update writes back its own file: its images stay
+	if _, err := loadGitApp(app); err == nil {
+		return targetImages(running, nil), nil
+	}
+	store, err := running.storeComposeAppForUpdate()
+	if err != nil {
+		return nil, err
+	}
+
+	return targetImages(running, store), nil
+}
+
+// targetImages is what updatedComposeYAML writes, service by service: the catalogue's image
+// where the update writes it, the app's own everywhere else. A nil store keeps every image.
+// shortcut: an override file beside the main one that sets an image is not read; the ref
+// then differs from the one blocked, and the night tries rather than wrongly skips.
+func targetImages(running, store *ComposeApp) map[string]string {
+	images := map[string]string{}
+	for name, service := range running.Services {
+		images[name] = service.Image
+		if store == nil {
+			continue
+		}
+		if fromStore, ok := store.Services[name]; ok && updateWritesStoreImage(service.Image, fromStore.Image) {
+			images[name] = fromStore.Image
+		}
+	}
+
+	return images
+}
+
+// stillBlocked says tonight's update would pull, for every service that blocked it, the
+// very reference that was blocked, and the registry still publishes the very image that
+// blocked it: trying again would be refused again. Any doubt, a registry that does not
+// answer or a target that cannot be read included, says no, so that the night tries.
+func stillBlocked(ctx context.Context, app string, images []BlockedImage) bool {
 	if len(images) == 0 {
 		return false
 	}
+	target, err := updateTargetImages(ctx, app)
+	if err != nil {
+		return false
+	}
 	for _, image := range images {
+		if target[image.Service] != image.Image {
+			return false
+		}
 		digest, err := registryDigestOf(image.Image)
 		if err != nil || !docker.ContainsDigest(image.RepoDigests, digest) {
 			return false
@@ -503,7 +555,7 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 		}
 
 		// blocked by the very image the registry publishes still: not tried, not told again
-		if kept, ok := current.Blocked[app]; ok && stillBlocked(kept.Images) {
+		if kept, ok := current.Blocked[app]; ok && stillBlocked(ctx, app, kept.Images) {
 			entry.State, entry.Message = codegen.ComposeAppUpdateRunAppStateBlocked, &kept.Message
 			entry.Blocked = blockedView(kept.Images)
 			run.Apps = append(run.Apps, entry)

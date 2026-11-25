@@ -302,18 +302,9 @@ func (a *ComposeApp) prepareUpdate(ctx context.Context) ([]byte, context.Context
 	// an app whose images really had moved and which the check had just said so about.
 	// The grid offers that button on every compose app, so the refusal was reachable
 	// from the menu of any of them.
-	storeInfo, err := a.StoreInfo(true)
-	if err != nil && !errors.Is(err, ErrComposeExtensionNameXCasaOSNotFound) {
+	storeComposeApp, err := a.storeComposeAppForUpdate()
+	if err != nil {
 		return nil, ctx, err
-	}
-
-	// nil means no catalogue entry, which is an answer rather than a failure
-	var storeComposeApp *ComposeApp
-
-	if storeInfo != nil && storeInfo.StoreAppID != nil && *storeInfo.StoreAppID != "" {
-		if storeComposeApp, err = MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID); err != nil {
-			return nil, ctx, err
-		}
 	}
 
 	newComposeYAML, err := a.composeYAMLForUpdate(storeComposeApp)
@@ -331,6 +322,20 @@ func (a *ComposeApp) prepareUpdate(ctx context.Context) ([]byte, context.Context
 	common.SetProperties(ctx, eventProperties)
 
 	return newComposeYAML, ctx, nil
+}
+
+// storeComposeAppForUpdate is the catalogue's version of the app an update takes its images
+// from; nil means no catalogue entry, which is an answer rather than a failure.
+func (a *ComposeApp) storeComposeAppForUpdate() (*ComposeApp, error) {
+	storeInfo, err := a.StoreInfo(true)
+	if err != nil && !errors.Is(err, ErrComposeExtensionNameXCasaOSNotFound) {
+		return nil, err
+	}
+	if storeInfo == nil || storeInfo.StoreAppID == nil || *storeInfo.StoreAppID == "" {
+		return nil, nil
+	}
+
+	return MyService.AppStoreManagement().ComposeApp(*storeInfo.StoreAppID)
 }
 
 // applyUpdate replaces the app with the compose file given and says so on the
