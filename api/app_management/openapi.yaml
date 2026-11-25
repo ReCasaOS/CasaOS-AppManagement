@@ -6320,6 +6320,11 @@ components:
             The reason, when the app stayed current for one, or the error. In a night,
             `queued` is an update that waits to be old enough, and says until when.
           type: string
+        blocked:
+          description: The images a blocked update stopped on, with the new critical vulnerabilities.
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockedImage"
 
     ImageUpdateCheckResult:
       description: What one check pass found.
@@ -7186,6 +7191,44 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/StatsAlert"
+
+    BlockedFinding:
+      type: object
+      required: [id, package, fixed, title, url]
+      properties:
+        id:
+          type: string
+        package:
+          type: string
+        fixed:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+
+    BlockedImage:
+      type: object
+      required: [service, image, id, current, candidate, added]
+      properties:
+        service:
+          type: string
+        image:
+          type: string
+        repo_digests:
+          type: array
+          items:
+            type: string
+        id:
+          type: string
+        current:
+          type: integer
+        candidate:
+          type: integer
+        added:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockedFinding"
 
     LogLine:
       type: object

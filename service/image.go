@@ -128,6 +128,7 @@ const (
 	InstallStepExtract = "extract"
 	InstallStepCreate  = "create"
 	InstallStepStart   = "start"
+	InstallStepCheck   = "check"
 )
 
 // downloadShare is how much of a layer its download is, the rest being its unpacking. A

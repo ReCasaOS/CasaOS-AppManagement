@@ -19,6 +19,7 @@ type fakeTagger struct {
 	tags       map[string]string
 	containers []container.Summary
 	tagged     []client.ImageTagOptions
+	digests    map[string][]string // RepoDigests an inspect gives back, by reference
 }
 
 func (d *fakeTagger) ContainerList(_ context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
@@ -56,7 +57,7 @@ func (d *fakeTagger) ImageInspect(_ context.Context, ref string, _ ...client.Ima
 		return client.ImageInspectResult{}, errors.New("No such image: " + ref)
 	}
 
-	return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: id}}, nil
+	return client.ImageInspectResult{InspectResponse: image.InspectResponse{ID: id, RepoDigests: d.digests[ref]}}, nil
 }
 
 func (d *fakeTagger) ImageTag(_ context.Context, options client.ImageTagOptions) (client.ImageTagResult, error) {
