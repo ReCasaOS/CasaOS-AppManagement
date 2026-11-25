@@ -430,8 +430,13 @@ paths:
       description: |
         A night applies an update only once it has been known for this many days,
         counted from the night that first found it: an image published broken is
-        usually replaced within a day or two. From 0 to 30; 3 when never set. The
-        owner's only.
+        usually replaced within a day or two. From 0 to 30; 3 when never set.
+
+        `scan_before_update` turns on or off the check that undoes an update whose new
+        image carries more critical vulnerabilities than the one running; it applies to
+        the update button, the update of every app and the night. On when never set.
+
+        Either field, or both; neither is a 400. The owner's only.
       operationId: setAutoUpdate
       tags:
         - Compose methods
@@ -441,12 +446,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [min_days]
               properties:
                 min_days:
                   type: integer
                   minimum: 0
                   maximum: 30
+                scan_before_update:
+                  type: boolean
       responses:
         "200":
           $ref: "#/components/responses/AutoUpdateOK"
@@ -6254,7 +6260,7 @@ components:
 
     AutoUpdate:
       description: The apps that update by themselves, and the last nights.
-      required: [apps, min_days, runs]
+      required: [apps, min_days, scan_before_update, scan_available, runs]
       properties:
         apps:
           description: The apps turned on.
@@ -6264,6 +6270,12 @@ components:
         min_days:
           description: Days an update must have been known before a night applies it.
           type: integer
+        scan_before_update:
+          description: Whether an update whose new image is worse than the running one is undone.
+          type: boolean
+        scan_available:
+          description: Whether the scan module is installed, so that the check can run at all.
+          type: boolean
         next:
           description: When the next night is due. Absent when no app is turned on.
           type: string

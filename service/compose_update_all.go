@@ -192,20 +192,27 @@ func setUpdateAllState(run *codegen.ComposeAppUpdateRun, i int, state codegen.Co
 		run.Apps[i].Message = &message
 	}
 	run.Apps[i].Blocked = nil
-	if len(blocked) > 0 {
-		images := make([]codegen.BlockedImage, 0, len(blocked))
-		for _, b := range blocked {
-			image := codegen.BlockedImage{
-				Service: b.Service, Image: b.Image, Id: b.ID,
-				Current: b.Current, Candidate: b.Candidate, Added: b.Added,
-			}
-			if len(b.RepoDigests) > 0 {
-				image.RepoDigests = &b.RepoDigests
-			}
-			images = append(images, image)
-		}
-		run.Apps[i].Blocked = &images
+	run.Apps[i].Blocked = blockedView(blocked)
+}
+
+// blockedView is the images a block stopped on, as the API says them; nil when none.
+func blockedView(blocked []BlockedImage) *[]codegen.BlockedImage {
+	if len(blocked) == 0 {
+		return nil
 	}
+	images := make([]codegen.BlockedImage, 0, len(blocked))
+	for _, b := range blocked {
+		image := codegen.BlockedImage{
+			Service: b.Service, Image: b.Image, Id: b.ID,
+			Current: b.Current, Candidate: b.Candidate, Added: b.Added,
+		}
+		if len(b.RepoDigests) > 0 {
+			image.RepoDigests = &b.RepoDigests
+		}
+		images = append(images, image)
+	}
+
+	return &images
 }
 
 // UpdateOneForRun is what the run does to one app: what the update button does,

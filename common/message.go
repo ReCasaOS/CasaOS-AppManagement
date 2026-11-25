@@ -165,6 +165,10 @@ var (
 		Name:        "auto-update:failed",
 		Description: utils.Ptr("the apps whose update failed that night, by name, comma-separated; each runs the version it had"),
 	}
+	PropertyTypeAutoUpdateBlocked = message_bus.PropertyType{
+		Name:        "auto-update:blocked",
+		Description: utils.Ptr("the apps whose update the night undid because its new image carries more critical vulnerabilities, by name, comma-separated; each runs the version it had"),
+	}
 	PropertyTypeNewerTags = message_bus.PropertyType{
 		Name:        "newer-tags:found",
 		Description: utils.Ptr("the newer versions found since the last time they were told, as JSON [{app, image, current, tag, level}]"),
@@ -181,7 +185,7 @@ var (
 	EventTypeAutoUpdateNightEnd = message_bus.EventType{
 		SourceID:         AppManagementServiceName,
 		Name:             "auto-update:night-end",
-		PropertyTypeList: []message_bus.PropertyType{PropertyTypeAutoUpdateUpdated, PropertyTypeAutoUpdateFailed},
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeAutoUpdateUpdated, PropertyTypeAutoUpdateFailed, PropertyTypeAutoUpdateBlocked},
 	}
 	EventTypeNewerTagsFound = message_bus.EventType{
 		SourceID:         AppManagementServiceName,

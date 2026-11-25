@@ -1103,7 +1103,7 @@ func (a *ComposeApp) pullAndApply(ctx context.Context, newComposeYAML []byte, ne
 	}
 
 	// nil or *UpdateBlockedError: nothing has been recreated yet, the defer undoes the rest
-	if gate {
+	if gate && ScanBeforeUpdate() {
 		if err := checkCandidates(ctx, dockerClient, a, newComposeApp); err != nil {
 			errors.As(err, &blocked)
 			return err

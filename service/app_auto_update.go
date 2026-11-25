@@ -15,6 +15,7 @@ import (
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/codegen"
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/config"
+	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/docker"
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
 )
@@ -58,6 +59,13 @@ const autoUpdateMinDaysMax = 30
 // own update waits for it.
 const autoUpdateMark = "auto-update"
 
+// blockedUpdate is what stopped an app's update: the images the scan refused, and the words
+// the night says of it. The app waits for the registry to publish another image.
+type blockedUpdate struct {
+	Images  []BlockedImage `json:"images"`
+	Message string         `json:"message"`
+}
+
 type autoUpdateState struct {
 	Apps []string `json:"apps"`
 	// the night last run or skipped, or the one current when the first app was turned on
@@ -67,9 +75,15 @@ type autoUpdateState struct {
 	// when the night first found each app had an update, which the wait counts from
 	Seen map[string]time.Time `json:"seen,omitempty"`
 	// days an update must have been known before a night applies it; nil is the default
-	MinDays *int                    `json:"min_days,omitempty"`
-	Runs    []codegen.AutoUpdateRun `json:"runs"`
+	MinDays *int `json:"min_days,omitempty"`
+	// the apps whose update the scan stopped, and on what; the owner was told when it was written
+	Blocked map[string]blockedUpdate `json:"blocked,omitempty"`
+	// whether an update is checked by the scan module before it is applied; nil is yes
+	ScanBeforeUpdate *bool                   `json:"scan_before_update,omitempty"`
+	Runs             []codegen.AutoUpdateRun `json:"runs"`
 }
+
+func (s autoUpdateState) scanBeforeUpdate() bool { return s.ScanBeforeUpdate == nil || *s.ScanBeforeUpdate }
 
 // minDays is the wait the owner chose, or the default.
 func (s autoUpdateState) minDays() int {
@@ -88,7 +102,7 @@ var autoUpdateLock sync.Mutex
 var autoUpdateNight sync.Mutex
 
 func readAutoUpdate() (autoUpdateState, error) {
-	state := autoUpdateState{Apps: []string{}, Runs: []codegen.AutoUpdateRun{}, Failures: map[string]int{}, Seen: map[string]time.Time{}}
+	state := autoUpdateState{Apps: []string{}, Runs: []codegen.AutoUpdateRun{}, Failures: map[string]int{}, Seen: map[string]time.Time{}, Blocked: map[string]blockedUpdate{}}
 	content, err := os.ReadFile(AutoUpdatePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return state, nil
@@ -110,6 +124,9 @@ func readAutoUpdate() (autoUpdateState, error) {
 	}
 	if state.Seen == nil {
 		state.Seen = map[string]time.Time{}
+	}
+	if state.Blocked == nil {
+		state.Blocked = map[string]blockedUpdate{}
 	}
 
 	return state, nil
@@ -133,7 +150,11 @@ func writeAutoUpdate(state autoUpdateState) error {
 }
 
 func autoUpdateOf(state autoUpdateState, now time.Time) *codegen.AutoUpdate {
-	view := &codegen.AutoUpdate{Apps: append([]string{}, state.Apps...), MinDays: state.minDays(), Runs: []codegen.AutoUpdateRun{}}
+	_, err := os.Stat(filepath.Join(config.CommonInfo.RuntimePath, vulnScanURLFile))
+	view := &codegen.AutoUpdate{
+		Apps: append([]string{}, state.Apps...), MinDays: state.minDays(), Runs: []codegen.AutoUpdateRun{},
+		ScanBeforeUpdate: state.scanBeforeUpdate(), ScanAvailable: err == nil,
+	}
 	for i := len(state.Runs) - 1; i >= 0; i-- {
 		view.Runs = append(view.Runs, state.Runs[i])
 	}
@@ -193,6 +214,7 @@ func SetAppAutoUpdate(app string, on bool, now time.Time) (*codegen.AutoUpdate, 
 		state.Apps = slices.DeleteFunc(state.Apps, func(name string) bool { return name == app })
 		delete(state.Failures, app)
 		delete(state.Seen, app)
+		delete(state.Blocked, app)
 	default:
 		// nothing changes: nothing is written
 		return autoUpdateOf(state, now), nil
@@ -226,6 +248,39 @@ func SetAutoUpdateMinDays(days int, now time.Time) (*codegen.AutoUpdate, error) 
 	return autoUpdateOf(state, now), nil
 }
 
+// ScanBeforeUpdate says whether an update asks the scan module first. On unless the owner
+// turned it off: a file that cannot be read does not turn the check off.
+func ScanBeforeUpdate() bool {
+	autoUpdateLock.Lock()
+	defer autoUpdateLock.Unlock()
+
+	state, err := readAutoUpdate()
+
+	return err != nil || state.scanBeforeUpdate()
+}
+
+// SetScanBeforeUpdate turns the check on or off for every update: the button, the update
+// of every app and the night. Turning it off forgets the blocks, which the night would
+// otherwise keep honouring for an image the owner now accepts.
+func SetScanBeforeUpdate(on bool, now time.Time) (*codegen.AutoUpdate, error) {
+	autoUpdateLock.Lock()
+	defer autoUpdateLock.Unlock()
+
+	state, err := readAutoUpdate()
+	if err != nil {
+		return nil, err
+	}
+	state.ScanBeforeUpdate = &on
+	if !on {
+		state.Blocked = map[string]blockedUpdate{}
+	}
+	if err := writeAutoUpdate(state); err != nil {
+		return nil, err
+	}
+
+	return autoUpdateOf(state, now), nil
+}
+
 // ErrAutoUpdateMinDays is a wait out of bounds.
 var ErrAutoUpdateMinDays = errors.New("min_days: from 0 to 30 days")
 
@@ -236,6 +291,41 @@ var osUpgradeOpenForAutoUpdate = osUpgradeOpen
 // autoUpdateCheck says whether an app has an update, asking the registries again. A
 // variable so a test asks none.
 var autoUpdateCheck = UpdateAvailableForRun
+
+// registryDigestOf is what the registry publishes for an image now. A variable so a test
+// asks no registry.
+var registryDigestOf = docker.RegistryDigest
+
+// stillBlocked says the registry publishes, for every image that blocked an update, the
+// very image that blocked it: trying again would be refused again. Any doubt, a registry
+// that does not answer included, says no, so that the night tries.
+func stillBlocked(images []BlockedImage) bool {
+	if len(images) == 0 {
+		return false
+	}
+	for _, image := range images {
+		digest, err := registryDigestOf(image.Image)
+		if err != nil || !docker.ContainsDigest(image.RepoDigests, digest) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// sameBlock says a block is on the very images another was: told already.
+func sameBlock(a, b []BlockedImage) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Service != b[i].Service || a[i].ID != b[i].ID {
+			return false
+		}
+	}
+
+	return true
+}
 
 // autoUpdateOne updates one app as the run of every app does. A variable so a test runs
 // no update.
@@ -298,7 +388,7 @@ func RunDueAutoUpdates(ctx context.Context, now time.Time) {
 	// Past its window, a night is skipped rather than run in the day.
 	if !now.Before(slot.Add(autoUpdateWindow)) {
 		logger.Info("automatic updates: the night was missed, the box was off or busy", zap.Time("night", slot))
-		finishAutoUpdateNight(slot, nil, nil, nil, nil)
+		finishAutoUpdateNight(slot, nil, nil, nil, nil, nil, nil)
 		return
 	}
 	// The night waits, slot undone, for what must not be crossed: an upgrade of the
@@ -345,6 +435,11 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 	run := codegen.AutoUpdateRun{At: now, Apps: []codegen.ComposeAppUpdateRunApp{}}
 	removed := []string{}
 	failures := map[string]int{}
+	// the apps blocked tonight; newlyBlocked is the ones whose block is new: the owner is told those
+	blocks := map[string]blockedUpdate{}
+	newlyBlocked := []string{}
+	// the apps whose earlier block is lifted
+	unblocked := map[string]bool{}
 	// when each app's update was first found; a zero time forgets it
 	seen := map[string]time.Time{}
 	wait := time.Duration(state.minDays()) * 24 * time.Hour
@@ -387,6 +482,7 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 			run.Apps = append(run.Apps, entry)
 			// nothing to wait for any more
 			seen[app] = time.Time{}
+			unblocked[app] = true
 			continue
 		}
 		// The wait counts from the night that first found the update: the box cannot
@@ -403,24 +499,45 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 			continue
 		}
 
-		result, message, _ = autoUpdateOne(ctx, app)
+		// blocked by the very image the registry publishes still: not tried, not told again
+		if kept, ok := current.Blocked[app]; ok && stillBlocked(kept.Images) {
+			entry.State, entry.Message = codegen.ComposeAppUpdateRunAppStateBlocked, &kept.Message
+			entry.Blocked = blockedView(kept.Images)
+			run.Apps = append(run.Apps, entry)
+			continue
+		}
+
+		var blocked []BlockedImage
+		result, message, blocked = autoUpdateOne(ctx, app)
 		entry.State = result
 		if message != "" {
 			entry.Message = &message
 		}
+		if result == codegen.ComposeAppUpdateRunAppStateBlocked {
+			entry.Blocked = blockedView(blocked)
+		}
 		run.Apps = append(run.Apps, entry)
-		if result == codegen.ComposeAppUpdateRunAppStateFailed {
+		switch result {
+		case codegen.ComposeAppUpdateRunAppStateBlocked:
+			// not a failure, and the wait is not restarted: Failures and Seen stay as they are
+			blocks[app] = blockedUpdate{Images: blocked, Message: message}
+			if kept, ok := current.Blocked[app]; !ok || !sameBlock(kept.Images, blocked) {
+				newlyBlocked = append(newlyBlocked, app)
+			}
+		case codegen.ComposeAppUpdateRunAppStateFailed:
 			failures[app] = current.Failures[app] + 1
-		} else {
+			unblocked[app] = true
+		default:
 			failures[app] = 0
+			unblocked[app] = true
 			// updated, or up to date by the time it ran: the next update waits afresh
 			seen[app] = time.Time{}
 		}
 		logger.Info("automatic update", zap.String("app", app), zap.String("state", string(result)), zap.String("message", message))
 	}
 
-	finishAutoUpdateNight(slot, &run, removed, failures, seen)
-	tellAutoUpdateNight(ctx, run)
+	finishAutoUpdateNight(slot, &run, removed, failures, seen, blocks, unblocked)
+	tellAutoUpdateNight(ctx, run, newlyBlocked)
 }
 
 // publishEvent is how the night, the newer versions, the cleanup and an app's update and
@@ -430,7 +547,7 @@ var publishEvent = PublishEventWrapper
 
 // tellAutoUpdateNight says what the night did, for the alerts: the apps it updated and the
 // ones whose update failed. A night that changed nothing says nothing.
-func tellAutoUpdateNight(ctx context.Context, run codegen.AutoUpdateRun) {
+func tellAutoUpdateNight(ctx context.Context, run codegen.AutoUpdateRun, blocked []string) {
 	var updated, failed []string
 	for _, app := range run.Apps {
 		switch app.State {
@@ -443,18 +560,19 @@ func tellAutoUpdateNight(ctx context.Context, run codegen.AutoUpdateRun) {
 			}
 		}
 	}
-	if len(updated) == 0 && len(failed) == 0 {
+	if len(updated) == 0 && len(failed) == 0 && len(blocked) == 0 {
 		return
 	}
 	publishEvent(ctx, common.EventTypeAutoUpdateNightEnd, map[string]string{
 		common.PropertyTypeAutoUpdateUpdated.Name: strings.Join(updated, ","),
 		common.PropertyTypeAutoUpdateFailed.Name:  strings.Join(failed, ","),
+		common.PropertyTypeAutoUpdateBlocked.Name: strings.Join(blocked, ","),
 	})
 }
 
 // finishAutoUpdateNight writes that the night is done, with its run when there was one,
 // the apps that are gone forgotten, and the count of failures of each app updated.
-func finishAutoUpdateNight(slot time.Time, run *codegen.AutoUpdateRun, removed []string, failures map[string]int, seen map[string]time.Time) {
+func finishAutoUpdateNight(slot time.Time, run *codegen.AutoUpdateRun, removed []string, failures map[string]int, seen map[string]time.Time, blocks map[string]blockedUpdate, unblocked map[string]bool) {
 	autoUpdateLock.Lock()
 	defer autoUpdateLock.Unlock()
 
@@ -479,9 +597,16 @@ func finishAutoUpdateNight(slot time.Time, run *codegen.AutoUpdateRun, removed [
 			state.Seen[app] = at
 		}
 	}
+	for app := range unblocked {
+		delete(state.Blocked, app)
+	}
+	for app, block := range blocks {
+		state.Blocked[app] = block
+	}
 	for _, app := range removed {
 		delete(state.Failures, app)
 		delete(state.Seen, app)
+		delete(state.Blocked, app)
 	}
 	if run != nil {
 		state.Runs = append(state.Runs, *run)
