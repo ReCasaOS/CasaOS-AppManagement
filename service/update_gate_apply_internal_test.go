@@ -91,6 +91,10 @@ func newGateRig(t *testing.T, verdict error) *gateRig {
 	t.Helper()
 	logger.LogInitConsoleOnly()
 	setRuntimePathForTest(t)
+	// ScanBeforeUpdate reads the switch here, never the machine's own file
+	wasAutoUpdatePath := AutoUpdatePath
+	AutoUpdatePath = filepath.Join(t.TempDir(), "auto-update.json")
+	t.Cleanup(func() { AutoUpdatePath = wasAutoUpdatePath })
 	// the pull reaches no daemon: it fails, which is published, not returned
 	t.Setenv("DOCKER_HOST", "unix:///nonexistent/docker.sock")
 	// nothing published reaches the bus, or MyService, which another test may be setting

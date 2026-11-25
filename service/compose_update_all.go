@@ -191,7 +191,6 @@ func setUpdateAllState(run *codegen.ComposeAppUpdateRun, i int, state codegen.Co
 	} else {
 		run.Apps[i].Message = &message
 	}
-	run.Apps[i].Blocked = nil
 	run.Apps[i].Blocked = blockedView(blocked)
 }
 

@@ -247,9 +247,6 @@ func TestScanBeforeUpdateDefaultsOn(t *testing.T) {
 // With the switch off, an update asks the scan nothing, whoever starts it.
 func TestSwitchOffSkipsTheGate(t *testing.T) {
 	r := newGateRig(t, blockedByTheScan())
-	was := AutoUpdatePath
-	AutoUpdatePath = filepath.Join(t.TempDir(), "auto-update.json")
-	t.Cleanup(func() { AutoUpdatePath = was })
 	_, err := SetScanBeforeUpdate(false, afternoon)
 	assert.NilError(t, err)
 	heard := hearUpdate(t)

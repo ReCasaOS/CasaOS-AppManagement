@@ -47,7 +47,12 @@ func (e *UpdateBlockedError) Error() string {
 		more += i.Candidate - i.Current
 	}
 
-	return fmt.Sprintf("the new version has %d more critical vulnerabilities than the one installed", more)
+	noun := "vulnerabilities"
+	if more == 1 {
+		noun = "vulnerability"
+	}
+
+	return fmt.Sprintf("the new version has %d more critical %s than the one installed", more, noun)
 }
 
 // gateTimeout covers the whole app, all its services together.

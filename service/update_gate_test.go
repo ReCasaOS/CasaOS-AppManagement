@@ -89,6 +89,9 @@ func TestGateBlocksOnWorse(t *testing.T) {
 		Current: 1, Candidate: 3, Added: []codegen.BlockedFinding{{Id: "CVE-1"}},
 	})
 	assert.Equal(t, err.Error(), "the new version has 2 more critical vulnerabilities than the one installed")
+
+	one := &UpdateBlockedError{Images: []BlockedImage{{Current: 1, Candidate: 2}}}
+	assert.Equal(t, one.Error(), "the new version has 1 more critical vulnerability than the one installed")
 }
 
 func TestGatePassesOnUnknownNotWorseAndErrors(t *testing.T) {
