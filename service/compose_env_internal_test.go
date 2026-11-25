@@ -39,7 +39,7 @@ func TestPullAndApplyRestoresDotEnvOnFailure(t *testing.T) {
 	newEnv := []byte("NEW=1\n")
 
 	assert.NilError(t, os.WriteFile(a.EnvFile(), []byte("OLD=1\n"), 0o600))
-	assert.ErrorContains(t, a.pullAndApply(context.Background(), broken, &newEnv), "cpu_count")
+	assert.ErrorContains(t, a.pullAndApply(context.Background(), broken, &newEnv, false), "cpu_count")
 	env, err := os.ReadFile(a.EnvFile())
 	assert.NilError(t, err)
 	assert.Equal(t, string(env), "OLD=1\n")
@@ -49,7 +49,7 @@ func TestPullAndApplyRestoresDotEnvOnFailure(t *testing.T) {
 
 	// no .env before: none after
 	assert.NilError(t, os.Remove(a.EnvFile()))
-	assert.ErrorContains(t, a.pullAndApply(context.Background(), broken, &newEnv), "cpu_count")
+	assert.ErrorContains(t, a.pullAndApply(context.Background(), broken, &newEnv, false), "cpu_count")
 	_, err = os.Stat(a.EnvFile())
 	assert.Assert(t, os.IsNotExist(err))
 
@@ -66,7 +66,7 @@ func TestPullAndApplyRestoresDotEnvOnFailure(t *testing.T) {
 	})
 	unstartable := []byte("name: casaos-env-test\nservices:\n  a:\n    image: alpine:3.20\n    cap_add:\n      - NOT_A_CAP\n")
 	assert.NilError(t, os.WriteFile(a.EnvFile(), []byte("OLD=1\n"), 0o600))
-	err = a.pullAndApply(context.Background(), unstartable, &newEnv)
+	err = a.pullAndApply(context.Background(), unstartable, &newEnv, false)
 	assert.Assert(t, err != nil, "an app the daemon refuses to create must fail the apply")
 	assert.Assert(t, strings.Contains(strings.ToLower(err.Error()), "cap"), err.Error())
 	env, err = os.ReadFile(a.EnvFile())

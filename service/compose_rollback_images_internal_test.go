@@ -14,12 +14,16 @@ import (
 )
 
 // fakeTagger is a daemon whose tags point at images and whose containers run images,
-// and that records the tags it moved.
+// and that records the tags it moved and the images it was asked to remove. Any other
+// call of the client panics.
 type fakeTagger struct {
+	client.APIClient
 	tags       map[string]string
 	containers []container.Summary
 	tagged     []client.ImageTagOptions
 	digests    map[string][]string // RepoDigests an inspect gives back, by reference
+	removed    []client.ImageRemoveOptions
+	calls      []string // "tag <target> <source>" and "remove <id>", in order
 }
 
 func (d *fakeTagger) ContainerList(_ context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
@@ -62,10 +66,20 @@ func (d *fakeTagger) ImageInspect(_ context.Context, ref string, _ ...client.Ima
 
 func (d *fakeTagger) ImageTag(_ context.Context, options client.ImageTagOptions) (client.ImageTagResult, error) {
 	d.tagged = append(d.tagged, options)
+	d.calls = append(d.calls, "tag "+options.Target+" "+options.Source)
 	d.tags[options.Target] = options.Source
 
 	return client.ImageTagResult{}, nil
 }
+
+func (d *fakeTagger) ImageRemove(_ context.Context, id string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
+	d.removed = append(d.removed, options)
+	d.calls = append(d.calls, "remove "+id)
+
+	return client.ImageRemoveResult{}, errors.New("image is being used by a stopped container") // the outcome is ignored
+}
+
+func (d *fakeTagger) Close() error { return nil }
 
 func aContainer(project, service, imageID string) container.Summary {
 	return container.Summary{ImageID: imageID, Labels: map[string]string{api.ProjectLabel: project, api.ServiceLabel: service}}

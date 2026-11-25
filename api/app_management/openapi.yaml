@@ -732,9 +732,12 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ComposeAppID"
         - $ref: "#/components/parameters/Force"
+        - $ref: "#/components/parameters/SkipScan"
       responses:
         "200":
           $ref: "#/components/responses/ComposeAppUpdateOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
         "404":
           $ref: "#/components/responses/ResponseNotFound"
         "409":
@@ -3276,6 +3279,15 @@ components:
 
     Force:
       name: force
+      in: query
+      schema:
+        type: boolean
+        default: false
+
+    SkipScan:
+      name: skip_scan
+      description: |
+        Update without asking the scan module whether the new images are worse. The owner's only.
       in: query
       schema:
         type: boolean
@@ -6315,6 +6327,7 @@ components:
             - updated
             - current
             - failed
+            - blocked
         message:
           description: |-
             The reason, when the app stayed current for one, or the error. In a night,

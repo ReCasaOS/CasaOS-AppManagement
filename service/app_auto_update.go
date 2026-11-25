@@ -403,7 +403,7 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 			continue
 		}
 
-		result, message = autoUpdateOne(ctx, app)
+		result, message, _ = autoUpdateOne(ctx, app)
 		entry.State = result
 		if message != "" {
 			entry.Message = &message
@@ -423,8 +423,8 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 	tellAutoUpdateNight(ctx, run)
 }
 
-// publishEvent is how the night, the newer versions and the cleanup tell the alerts: a
-// variable so a test hears them.
+// publishEvent is how the night, the newer versions, the cleanup and an app's update tell
+// the alerts: a variable so a test hears them.
 var publishEvent = PublishEventWrapper
 
 // tellAutoUpdateNight says what the night did, for the alerts: the apps it updated and the

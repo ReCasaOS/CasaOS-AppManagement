@@ -24,6 +24,7 @@ type imageTagger interface {
 	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
 	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ImageTag(ctx context.Context, options client.ImageTagOptions) (client.ImageTagResult, error)
+	ImageRemove(ctx context.Context, imageID string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 }
 
 // imagesRunBy is, for each tag the app names, the image its containers run: not where the

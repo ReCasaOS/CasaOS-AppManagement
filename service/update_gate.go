@@ -119,8 +119,9 @@ var compareImages = func(ctx context.Context, current, candidate string) (string
 }
 
 // checkCandidates compares, service by service, the image the app runs with the one the
-// update pulled. It returns nil or *UpdateBlockedError, nothing else.
-func checkCandidates(ctx context.Context, cli imageTagger, running *ComposeApp, next *ComposeApp) error {
+// update pulled. It returns nil or *UpdateBlockedError, nothing else. A variable so a test
+// can replace it.
+var checkCandidates = func(ctx context.Context, cli imageTagger, running *ComposeApp, next *ComposeApp) error {
 	if _, err := os.Stat(filepath.Join(config.CommonInfo.RuntimePath, vulnScanURLFile)); err != nil {
 		return nil
 	}

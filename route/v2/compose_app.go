@@ -544,6 +544,13 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 		})
 	}
 
+	// updating past the scan module's verdict is the owner's call alone
+	skipScan := params.SkipScan != nil && *params.SkipScan
+	if skipScan && !isOwner(ctx) {
+		message := "only the owner can update without the vulnerability check"
+		return ctx.JSON(http.StatusForbidden, codegen.ResponseForbidden{Message: &message})
+	}
+
 	composeApps, err := service.MyService.Compose().List(ctx.Request().Context())
 	if err != nil {
 		message := err.Error()
@@ -596,7 +603,7 @@ func (a *AppManagement) UpdateComposeApp(ctx echo.Context, id codegen.ComposeApp
 
 	backgroundCtx := common.WithProperties(context.Background(), PropertiesFromQueryParams(ctx))
 
-	if err := composeApp.Update(backgroundCtx); err != nil {
+	if err := composeApp.Update(backgroundCtx, skipScan); err != nil {
 		logger.Error("failed to update compose app", zap.Error(err), zap.String("appID", id))
 		return conflictOrServerError(ctx, err)
 	}
