@@ -203,7 +203,7 @@ func TestCompareImagesAsksTheModule(t *testing.T) {
 	status := http.StatusOK
 	module := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, r.URL.Path, "/v2/vuln_scan/compare")
-		assert.Equal(t, r.Header.Get("Authorization"), external.InternalAuthorization(config.CommonInfo.RuntimePath))
+		assert.Equal(t, r.Header.Get("Authorization"), "Internal s3cret-value")
 		assert.NilError(t, json.NewDecoder(r.Body).Decode(&got))
 		w.WriteHeader(status)
 		if status == http.StatusOK {
@@ -212,6 +212,7 @@ func TestCompareImagesAsksTheModule(t *testing.T) {
 	}))
 	defer module.Close()
 	setRuntimePathForTest(t)
+	assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, external.InternalSecretFilename), []byte("s3cret-value"), 0o600))
 	assert.NilError(t, os.WriteFile(filepath.Join(config.CommonInfo.RuntimePath, "vuln-scan.url"), []byte(module.URL+"\n"), 0o600))
 
 	verdict, cur, cand, added, err := compareImages(context.Background(), "sha256:a", "sha256:b")
