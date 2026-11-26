@@ -49,6 +49,7 @@ const (
 	healBudget = 3
 
 	healRestartTimeout = 2 * time.Minute
+	healStopSeconds    = 60 // well within healRestartTimeout
 )
 
 // AutoHealEnabled is whether the owner lets the watch restart an unhealthy container.
@@ -217,23 +218,40 @@ func (w *dockerWatch) restarted(name string, now time.Time) {
 }
 
 // healNow restarts with restart what heal decides at now, and returns what that publishes.
-// A restart that failed counts in the budget, but neither the alert nor the journal says it
+// Each restart holds its app, as an operation would: an app something started on since
+// heal decided -- held tells, Begin refuses -- is left alone, and nothing is said of it. A
+// restart that failed counts in the budget, but neither the alert nor the journal says it
 // was done: the service log does.
 func (w *dockerWatch) healNow(now time.Time, enabled bool, held func(app string) bool, restart func(name string) error) []published {
 	names, out := w.heal(now, enabled, held)
-	failed := map[string]bool{}
+	untold := map[string]bool{}
 	for _, name := range names {
-		if err := restart(name); err != nil {
+		app := w.containers[name].app
+		if held(app) {
+			untold[name] = true
+
+			continue
+		}
+		end, err := Begin(app, "auto-restart")
+		if err != nil {
+			logger.Info("an unhealthy container was not restarted: its app is busy", zap.Error(err), zap.String("container", name))
+			untold[name] = true
+
+			continue
+		}
+		err = restart(name)
+		end()
+		if err != nil {
 			logger.Error("an unhealthy container could not be restarted", zap.Error(err), zap.String("container", name))
-			failed[name] = true
+			untold[name] = true
 		} else {
-			RecordAppEvent(w.containers[name].app, "auto-restarted", "", "", name)
+			RecordAppEvent(app, "auto-restarted", "", "", name)
 		}
 		w.restarted(name, now)
 	}
 
 	return slices.DeleteFunc(out, func(p published) bool {
-		return p.eventType.Name == common.EventTypeAppContainerAutoRestarted.Name && failed[p.properties[common.PropertyTypeContainerName.Name]]
+		return p.eventType.Name == common.EventTypeAppContainerAutoRestarted.Name && untold[p.properties[common.PropertyTypeContainerName.Name]]
 	})
 }
 
@@ -273,10 +291,11 @@ func (w *dockerWatch) tick(now time.Time) []published {
 }
 
 // resume takes the watch up again at now, after a break in the event stream, from the
-// containers that run: by name, whether each is unhealthy. Nobody watched meanwhile: a
-// container may have stopped, started or recovered, and one that runs has run well
-// since now at best.
-func (w *dockerWatch) resume(now time.Time, running map[string]bool) {
+// containers that run: by name, whether each is unhealthy, and its app. Nobody watched
+// meanwhile: a container may have stopped, started or recovered, and one that runs has
+// run well since now at best. One the watch did not know is known from now, an unhealthy
+// one as unhealthy since now: Docker said so before, and will not again.
+func (w *dockerWatch) resume(now time.Time, running map[string]bool, apps map[string]string) {
 	for name, c := range w.containers {
 		unhealthy, runs := running[name]
 		c.running, c.unhealthy, c.fineSince = runs, unhealthy, now
@@ -285,6 +304,16 @@ func (w *dockerWatch) resume(now time.Time, running map[string]bool) {
 		} else if c.unhealthySince.IsZero() {
 			c.unhealthySince = now
 		}
+	}
+	for name, unhealthy := range running {
+		if w.containers[name] != nil || apps[name] == "" {
+			continue
+		}
+		c := &watchedContainer{app: apps[name], last: now, running: true, unhealthy: unhealthy, fineSince: now, troubled: unhealthy}
+		if unhealthy {
+			c.unhealthySince = now
+		}
+		w.containers[name] = c
 	}
 }
 
@@ -361,14 +390,18 @@ func (w *dockerWatch) follow(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	running := map[string]bool{}
+	running, apps := map[string]bool{}, map[string]string{}
 	for _, c := range list {
 		for _, name := range c.Names {
+			name = strings.TrimPrefix(name, "/")
 			// Docker's status of an unhealthy container: "Up 2 hours (unhealthy)"
-			running[strings.TrimPrefix(name, "/")] = strings.Contains(c.Status, "(unhealthy)")
+			running[name] = strings.Contains(c.Status, "(unhealthy)")
+			if c.Labels[api.OneoffLabel] != "True" {
+				apps[name] = c.Labels[api.ProjectLabel]
+			}
 		}
 	}
-	w.resume(time.Now(), running)
+	w.resume(time.Now(), running, apps)
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -385,7 +418,10 @@ func (w *dockerWatch) follow(ctx context.Context) error {
 				ctx, cancel := context.WithTimeout(ctx, healRestartTimeout)
 				defer cancel()
 
-				return cli.ContainerRestart(ctx, name, container.StopOptions{})
+				// within the context's time, whatever stop grace period the app asks for
+				stop := healStopSeconds
+
+				return cli.ContainerRestart(ctx, name, container.StopOptions{Timeout: &stop})
 			})...)
 		case m := <-messages:
 			if f := onDockerEvent.Load(); f != nil {

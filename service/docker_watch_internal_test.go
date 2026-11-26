@@ -216,7 +216,7 @@ func TestTheDockerWatchDecisions(t *testing.T) {
 					if s.action != notListed {
 						running[container] = s.action == listedUnhealthy
 					}
-					watch.resume(at, running)
+					watch.resume(at, running, nil)
 				default:
 					out = watch.observe(containerEvent{at: at, app: "jarvis", container: container, action: s.action, exitCode: s.exit}, s.held)
 				}
@@ -455,4 +455,102 @@ func TestHealNotWhileABackupRuns(t *testing.T) {
 	out = w.healNow(first.Add(time.Hour), true, busy, func(string) error { tried++; return nil })
 	assert.Equal(t, tried, 1)
 	assert.Equal(t, eventNames(out), autoRestarted)
+}
+
+// sickOne makes container of app start and turn unhealthy at at.
+func sickOne(w *dockerWatch, app, container string, at time.Time) {
+	w.observe(containerEvent{at: at, app: app, container: container, action: "start"}, false)
+	w.observe(containerEvent{at: at, app: app, container: container, action: "health_status: unhealthy"}, false)
+}
+
+// The restart holds its app: an update asked for meanwhile is refused.
+func TestHealHoldsTheAppWhileItRestarts(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	w := newDockerWatch()
+	sick(w, first)
+
+	out := w.healNow(first.Add(healAfter), true, busy, func(string) error {
+		end, err := Begin("jarvis", "update")
+		if err == nil {
+			end() // never left held for the tests after
+		}
+		assert.ErrorContains(t, err, "auto-restart in progress")
+		return nil
+	})
+	assert.Equal(t, eventNames(out), autoRestarted)
+
+	end, err := Begin("jarvis", "update") // and let go after
+	assert.NilError(t, err)
+	end()
+}
+
+// Something that starts on an app while another container restarts: that app is left
+// alone, and nothing is said of it. A backup marks it, which busy tells; an update holds
+// it, which Begin refuses even when held did not see it.
+func TestHealSkipsWhatTurnedBusy(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name  string
+		held  func(string) bool
+		start func() (end func())
+	}{
+		{"a backup", busy, func() func() { return markInProgress("jarvis", "backup") }},
+		{"an update", notHeld, func() func() {
+			end, err := Begin("jarvis", "update")
+			assert.NilError(t, err)
+			return end
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newDockerWatch()
+			sickOne(w, "alfred", "alfred-web-1", first)
+			sickOne(w, "jarvis", "jarvis-web-1", first)
+
+			var restarted []string
+			var end func()
+			out := w.healNow(first.Add(healAfter), true, c.held, func(name string) error {
+				restarted = append(restarted, name)
+				if end == nil {
+					end = c.start()
+				}
+				return nil
+			})
+			end()
+			assert.DeepEqual(t, restarted, []string{"alfred-web-1"})
+			assert.Equal(t, eventNames(out), autoRestarted)
+			assert.Equal(t, out[0].properties[common.PropertyTypeContainerName.Name], "alfred-web-1")
+			assert.Equal(t, len(w.restarts["jarvis"]), 0)
+		})
+	}
+}
+
+// Two containers of one app unhealthy at the same tick share the app's budget.
+func TestHealTwoContainersShareTheBudget(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	w := newDockerWatch()
+	sickOne(w, "jarvis", "jarvis-db-1", first)
+	sickOne(w, "jarvis", "jarvis-web-1", first)
+
+	out := w.healNow(first.Add(healAfter), true, notHeld, func(string) error { return nil })
+	assert.Equal(t, eventNames(out), autoRestarted+autoRestarted)
+	assert.Equal(t, out[0].properties[common.PropertyTypeAutoRestartCount.Name], "1")
+	assert.Equal(t, out[1].properties[common.PropertyTypeAutoRestartCount.Name], "2")
+
+	sickOne(w, "jarvis", "jarvis-db-1", first.Add(time.Hour))
+	sickOne(w, "jarvis", "jarvis-web-1", first.Add(time.Hour))
+	out = w.healNow(first.Add(time.Hour+healAfter), true, notHeld, func(string) error { return nil })
+	assert.Equal(t, eventNames(out), autoRestarted+autoRestartStopped)
+	assert.Equal(t, out[0].properties[common.PropertyTypeAutoRestartCount.Name], "3")
+}
+
+// A container already unhealthy when the watch starts is healed healAfter later.
+func TestHealWhatWasUnhealthyBeforeTheWatch(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	w := newDockerWatch()
+	w.resume(first, map[string]bool{"jarvis-web-1": true, "jarvis-db-1": false, "stray": true},
+		map[string]string{"jarvis-web-1": "jarvis", "jarvis-db-1": "jarvis"})
+
+	restart, _ := w.heal(first.Add(healAfter-time.Second), true, notHeld)
+	assert.Equal(t, len(restart), 0)
+	heals(t, w, first.Add(healAfter), "1")
 }
