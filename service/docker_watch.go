@@ -52,9 +52,6 @@ const (
 	healStopSeconds    = 60 // well within healRestartTimeout
 )
 
-// AutoHealEnabled is whether the owner lets the watch restart an unhealthy container.
-var AutoHealEnabled = func() bool { return true }
-
 const (
 	// watchWindow is how recent the starts of a restart loop are, and how long a
 	// container runs well before it is healthy again.
