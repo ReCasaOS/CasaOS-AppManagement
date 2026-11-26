@@ -416,3 +416,29 @@ func TestTheWaitIsThreeDaysUntilChosenAndBounded(t *testing.T) {
 	assert.NilError(t, err)
 	assert.Equal(t, view.MinDays, 0)
 }
+
+// An app the automatic restart holds when its update starts is not a failure, and keeps
+// the night its update was first found.
+func TestAnAppTakenWhenItsUpdateStartsIsNoFailure(t *testing.T) {
+	updated := nightBox(t, map[string]codegen.ComposeAppUpdateRunAppState{"jellyfin": codegen.ComposeAppUpdateRunAppStateFailed})
+	_, err := SetAppAutoUpdate("jellyfin", true, afternoon)
+	assert.NilError(t, err)
+	RunDueAutoUpdates(context.Background(), tonight.Add(time.Minute))
+	state, err := readAutoUpdate()
+	assert.NilError(t, err)
+	assert.Equal(t, state.Failures["jellyfin"], 1)
+	seen := tonight.Add(-time.Hour)
+	state.Seen = map[string]time.Time{"jellyfin": seen}
+	assert.NilError(t, writeAutoUpdate(state))
+
+	autoUpdateOne = func(_ context.Context, app string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
+		*updated = append(*updated, app)
+		return updateOutcome(ErrAppBusy{App: app, Running: "auto-restart"})
+	}
+	RunDueAutoUpdates(context.Background(), tonight.AddDate(0, 0, 1).Add(time.Minute))
+	assert.Equal(t, len(*updated), 2)
+	state, err = readAutoUpdate()
+	assert.NilError(t, err)
+	assert.Equal(t, state.Failures["jellyfin"], 1)
+	assert.Assert(t, state.Seen["jellyfin"].Equal(seen), "%v", state.Seen["jellyfin"])
+}

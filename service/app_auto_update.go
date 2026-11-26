@@ -604,6 +604,8 @@ func runAutoUpdates(ctx context.Context, slot, now time.Time) {
 			if kept, ok := current.Blocked[app]; !ok || !sameBlock(kept.Images, blocked) {
 				newlyBlocked = append(newlyBlocked, app)
 			}
+		case codegen.ComposeAppUpdateRunAppStateQueued:
+			// taken by something else between appBusy and the update: as busy, nothing changes
 		case codegen.ComposeAppUpdateRunAppStateFailed:
 			failures[app] = current.Failures[app] + 1
 			unblocked[app] = true

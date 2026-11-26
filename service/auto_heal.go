@@ -2,8 +2,10 @@ package service
 
 import (
 	stdjson "encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
@@ -13,13 +15,25 @@ import (
 // A variable so a test can put it somewhere of its own.
 var AutoHealPath = "/var/lib/casaos/auto-heal.json"
 
+// lastSwitchError is the last unreadable or malformed switch logged: said once until it changes.
+var lastSwitchError atomic.Pointer[string]
+
+func logSwitchError(message string, err error) {
+	said := message + ": " + fmt.Sprint(err)
+	if previous := lastSwitchError.Swap(&said); previous == nil || *previous != said {
+		logger.Info(message, zap.Error(err))
+	}
+}
+
 // AutoHealEnabled is on unless the owner turned it off: a file that is absent, unreadable or
 // malformed reads as on, and a read never rewrites it.
 func AutoHealEnabled() bool {
 	content, err := os.ReadFile(AutoHealPath)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			logger.Info("auto heal: its switch cannot be read, taken as on", zap.Error(err))
+		if os.IsNotExist(err) {
+			lastSwitchError.Store(nil)
+		} else {
+			logSwitchError("auto heal: its switch cannot be read, taken as on", err)
 		}
 
 		return true
@@ -28,10 +42,12 @@ func AutoHealEnabled() bool {
 		Enabled *bool `json:"enabled"`
 	}
 	if err := stdjson.Unmarshal(content, &state); err != nil || state.Enabled == nil {
-		logger.Info("auto heal: its switch is malformed, taken as on", zap.Error(err))
+		logSwitchError("auto heal: its switch is malformed, taken as on", err)
 
 		return true
 	}
+
+	lastSwitchError.Store(nil)
 
 	return *state.Enabled
 }

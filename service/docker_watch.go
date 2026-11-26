@@ -135,6 +135,7 @@ func (w *dockerWatch) observe(e containerEvent, held bool) []published {
 		}
 	case "start":
 		c.running, c.unhealthy, c.fineSince, c.unhealthySince = true, false, e.at, time.Time{}
+		c.killedAt = time.Time{} // the restart asked for is over: a die after it is the container's own
 		if asked || held {
 			break
 		}
@@ -166,13 +167,13 @@ func (w *dockerWatch) observe(e containerEvent, held bool) []published {
 	return nil
 }
 
-// heal returns the containers to restart at now, and what that publishes: enabled is
-// whether the owner lets it, held whether an operation holds an app.
+// heal returns the container to restart at now, one at most -- the others wait for the next
+// tick, so that many apps unhealthy at once do not hold the watch for minutes -- and what
+// that publishes: enabled is whether the owner lets it, held whether an operation holds an app.
 func (w *dockerWatch) heal(now time.Time, enabled bool, held func(app string) bool) (restart []string, out []published) {
 	if !enabled {
 		return nil, nil
 	}
-	picked := map[string]int{} // by app, restarts decided in this call
 	for _, name := range slices.Sorted(maps.Keys(w.containers)) {
 		c := w.containers[name]
 		if !c.running || !c.unhealthy || c.unhealthySince.IsZero() || now.Sub(c.unhealthySince) < healAfter || held(c.app) {
@@ -181,7 +182,7 @@ func (w *dockerWatch) heal(now time.Time, enabled bool, held func(app string) bo
 		w.restarts[c.app] = slices.DeleteFunc(w.restarts[c.app], func(at time.Time) bool {
 			return now.Sub(at) >= healWindow
 		})
-		n := len(w.restarts[c.app]) + picked[c.app]
+		n := len(w.restarts[c.app])
 		if n >= healBudget {
 			if !w.stopped[c.app] {
 				w.stopped[c.app] = true
@@ -190,7 +191,9 @@ func (w *dockerWatch) heal(now time.Time, enabled bool, held func(app string) bo
 
 			continue
 		}
-		picked[c.app]++
+		if len(restart) > 0 {
+			continue
+		}
 		restart = append(restart, name)
 		p := containerPublished(common.EventTypeAppContainerAutoRestarted, c.app, name)
 		p.properties[common.PropertyTypeAutoRestartCount.Name] = strconv.Itoa(n + 1)
@@ -217,8 +220,8 @@ func (w *dockerWatch) restarted(name string, now time.Time) {
 // healNow restarts with restart what heal decides at now, and returns what that publishes.
 // Each restart holds its app, as an operation would: an app something started on since
 // heal decided -- held tells, Begin refuses -- is left alone, and nothing is said of it. A
-// restart that failed counts in the budget, but neither the alert nor the journal says it
-// was done: the service log does.
+// restart that failed counts in the budget, but neither the alert nor the journal -- which
+// records what is published -- says it was done: the service log does.
 func (w *dockerWatch) healNow(now time.Time, enabled bool, held func(app string) bool, restart func(name string) error) []published {
 	names, out := w.heal(now, enabled, held)
 	untold := map[string]bool{}
@@ -241,8 +244,6 @@ func (w *dockerWatch) healNow(now time.Time, enabled bool, held func(app string)
 		if err != nil {
 			logger.Error("an unhealthy container could not be restarted", zap.Error(err), zap.String("container", name))
 			untold[name] = true
-		} else {
-			RecordAppEvent(app, "auto-restarted", "", "", name)
 		}
 		w.restarted(name, now)
 	}
@@ -298,7 +299,11 @@ func (w *dockerWatch) resume(now time.Time, running map[string]bool, apps map[st
 		c.running, c.unhealthy, c.fineSince = runs, unhealthy, now
 		if !unhealthy || !runs {
 			c.unhealthySince = time.Time{}
-		} else if c.unhealthySince.IsZero() {
+			continue
+		}
+		// troubled, or tick forgets it before heal restarts it
+		c.troubled, c.last = true, now
+		if c.unhealthySince.IsZero() {
 			c.unhealthySince = now
 		}
 	}

@@ -484,9 +484,9 @@ func TestHealHoldsTheAppWhileItRestarts(t *testing.T) {
 	end()
 }
 
-// Something that starts on an app while another container restarts: that app is left
-// alone, and nothing is said of it. A backup marks it, which busy tells; an update holds
-// it, which Begin refuses even when held did not see it.
+// Something that starts on the app between heal's decision and the restart: the app is
+// left alone, and nothing is said of it. A backup marks it, which busy tells; an update
+// holds it, which Begin refuses even when held did not see it.
 func TestHealSkipsWhatTurnedBusy(t *testing.T) {
 	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
 	for _, c := range []struct {
@@ -494,7 +494,7 @@ func TestHealSkipsWhatTurnedBusy(t *testing.T) {
 		held  func(string) bool
 		start func() (end func())
 	}{
-		{"a backup", busy, func() func() { return markInProgress("jarvis", "backup") }},
+		{"a backup", nil, func() func() { return markInProgress("jarvis", "backup") }},
 		{"an update", notHeld, func() func() {
 			end, err := Begin("jarvis", "update")
 			assert.NilError(t, err)
@@ -503,44 +503,111 @@ func TestHealSkipsWhatTurnedBusy(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newDockerWatch()
-			sickOne(w, "alfred", "alfred-web-1", first)
-			sickOne(w, "jarvis", "jarvis-web-1", first)
+			sick(w, first)
 
-			var restarted []string
+			// heal asks held first, and decides; what started meanwhile is seen after
 			var end func()
-			out := w.healNow(first.Add(healAfter), true, c.held, func(name string) error {
-				restarted = append(restarted, name)
-				if end == nil {
-					end = c.start()
+			held := c.held
+			if held == nil {
+				held = func(app string) bool {
+					if end == nil {
+						end = c.start()
+						return false
+					}
+					return busy(app)
 				}
-				return nil
-			})
+			} else {
+				end = c.start()
+			}
+			tried := 0
+			out := w.healNow(first.Add(healAfter), true, held, func(string) error { tried++; return nil })
 			end()
-			assert.DeepEqual(t, restarted, []string{"alfred-web-1"})
-			assert.Equal(t, eventNames(out), autoRestarted)
-			assert.Equal(t, out[0].properties[common.PropertyTypeContainerName.Name], "alfred-web-1")
+			assert.Equal(t, tried, 0)
+			assert.Equal(t, eventNames(out), "")
 			assert.Equal(t, len(w.restarts["jarvis"]), 0)
+
+			// free again: restarted at the next tick
+			out = w.healNow(first.Add(healAfter+time.Minute), true, notHeld, func(string) error { tried++; return nil })
+			assert.Equal(t, tried, 1)
+			assert.Equal(t, eventNames(out), autoRestarted)
 		})
 	}
 }
 
-// Two containers of one app unhealthy at the same tick share the app's budget.
+// One restart a tick at most, whichever the app: the others wait for the next minute, and
+// the budget counts each restart once.
+func TestHealOneRestartATick(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	w := newDockerWatch()
+	sickOne(w, "alfred", "alfred-web-1", first)
+	sickOne(w, "jarvis", "jarvis-db-1", first)
+	sickOne(w, "jarvis", "jarvis-web-1", first)
+
+	var restarted []string
+	restart := func(name string) error { restarted = append(restarted, name); return nil }
+	for m := range 3 {
+		out := w.healNow(first.Add(healAfter+time.Duration(m)*time.Minute), true, notHeld, restart)
+		assert.Equal(t, eventNames(out), autoRestarted, "tick %d", m)
+	}
+	assert.DeepEqual(t, restarted, []string{"alfred-web-1", "jarvis-db-1", "jarvis-web-1"})
+	assert.Equal(t, len(w.restarts["alfred"]), 1)
+	assert.Equal(t, len(w.restarts["jarvis"]), 2)
+	out := w.healNow(first.Add(healAfter+3*time.Minute), true, notHeld, restart)
+	assert.Equal(t, eventNames(out), "")
+}
+
+// Two containers of one app unhealthy at once share the app's budget, a tick apart.
 func TestHealTwoContainersShareTheBudget(t *testing.T) {
 	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
 	w := newDockerWatch()
 	sickOne(w, "jarvis", "jarvis-db-1", first)
 	sickOne(w, "jarvis", "jarvis-web-1", first)
+	ok := func(string) error { return nil }
 
-	out := w.healNow(first.Add(healAfter), true, notHeld, func(string) error { return nil })
+	out := w.healNow(first.Add(healAfter), true, notHeld, ok)
+	out = append(out, w.healNow(first.Add(healAfter+time.Minute), true, notHeld, ok)...)
 	assert.Equal(t, eventNames(out), autoRestarted+autoRestarted)
 	assert.Equal(t, out[0].properties[common.PropertyTypeAutoRestartCount.Name], "1")
 	assert.Equal(t, out[1].properties[common.PropertyTypeAutoRestartCount.Name], "2")
 
 	sickOne(w, "jarvis", "jarvis-db-1", first.Add(time.Hour))
 	sickOne(w, "jarvis", "jarvis-web-1", first.Add(time.Hour))
-	out = w.healNow(first.Add(time.Hour+healAfter), true, notHeld, func(string) error { return nil })
+	out = w.healNow(first.Add(time.Hour+healAfter), true, notHeld, ok)
+	out = append(out, w.healNow(first.Add(time.Hour+healAfter+time.Minute), true, notHeld, ok)...)
 	assert.Equal(t, eventNames(out), autoRestarted+autoRestartStopped)
 	assert.Equal(t, out[0].properties[common.PropertyTypeAutoRestartCount.Name], "3")
+}
+
+// A container the watch knew, found unhealthy after a break in the event stream, is
+// troubled: tick keeps it until heal restarts it.
+func TestAResumedUnhealthyContainerIsNotForgotten(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	w := newDockerWatch()
+	w.observe(containerEvent{at: first, app: "jarvis", container: "jarvis-web-1", action: "start"}, false)
+
+	at := first.Add(time.Hour)
+	w.resume(at, map[string]bool{"jarvis-web-1": true}, map[string]string{"jarvis-web-1": "jarvis"})
+	for m := 1; m < 5; m++ {
+		w.tick(at.Add(time.Duration(m) * time.Minute))
+	}
+	heals(t, w, at.Add(healAfter), "1")
+}
+
+// The start after the box's own restart uses its kill up: a crash soon after is a death.
+func TestACrashAfterTheOwnRestartIsADeath(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	w := newDockerWatch()
+	sick(w, first)
+	at := first.Add(healAfter)
+	heals(t, w, at, "1")
+
+	out := w.observe(containerEvent{at: at.Add(time.Second), app: "jarvis", container: "jarvis-web-1", action: "kill"}, false)
+	out = append(out, w.observe(containerEvent{at: at.Add(2 * time.Second), app: "jarvis", container: "jarvis-web-1", action: "die", exitCode: "137"}, false)...)
+	out = append(out, w.observe(containerEvent{at: at.Add(3 * time.Second), app: "jarvis", container: "jarvis-web-1", action: "start"}, false)...)
+	assert.Equal(t, eventNames(out), "")
+
+	out = w.observe(containerEvent{at: at.Add(23 * time.Second), app: "jarvis", container: "jarvis-web-1", action: "die", exitCode: "1"}, false)
+	assert.Equal(t, eventNames(out), died)
 }
 
 // A container already unhealthy when the watch starts is healed healAfter later.
