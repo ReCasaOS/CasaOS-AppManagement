@@ -15,8 +15,6 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-      id-token: write
-      attestations: write
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -46,7 +44,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate SBOM
+  # Apart from the build, so that it can be run again alone: it reads the
+  # archives the release already holds, checks them against checksums.txt, and
+  # never builds or uploads an archive.
+  provenance:
+    name: Attest the published archives
+    needs: release
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # the SBOM is uploaded to the release
+      id-token: write
+      attestations: write
+    steps:
+      # the SBOM describes the source of the tag
+      - name: Checkout the tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Download the published archives
+        run: |
+          set -euo pipefail
+          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --pattern '*.tar.gz' --pattern checksums.txt --dir dist
+          cd dist && sha256sum -c checksums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate the SBOM
         uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           path: .
@@ -55,8 +79,8 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
-      - name: Publish SBOM
-        run: gh release upload "${{ github.ref_name }}" "CasaOS-AppManagement-${{ github.ref_name }}.spdx.json" --clobber
+      - name: Publish the SBOM with the release
+        run: gh release upload "$GITHUB_REF_NAME" "CasaOS-AppManagement-$GITHUB_REF_NAME.spdx.json" -R "$GITHUB_REPOSITORY" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -67,7 +91,7 @@ jobs:
             dist/*.tar.gz
             dist/checksums.txt
 
-      - name: Attest SBOM
+      - name: Attest the SBOM
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: |
