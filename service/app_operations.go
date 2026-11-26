@@ -236,6 +236,17 @@ func held(app string) bool {
 	return ok
 }
 
+// busy reports whether anything runs on app, held or only marked -- a backup that copies
+// it live included: what RunningOperations would list for it.
+func busy(app string) bool {
+	appOperations.Lock()
+	defer appOperations.Unlock()
+
+	_, ok := appOperations.running[app]
+
+	return ok || len(appOperations.marked[app]) > 0
+}
+
 // handOver renames what holds app when an operation passes its hold to one it starts, so
 // that a refusal names what really runs.
 func handOver(app, kind string) {

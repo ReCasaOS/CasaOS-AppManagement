@@ -39,7 +39,7 @@ import (
 //     the core's alert is the app's, not a container's.
 //
 // heal, pure too, decides which containers the watch restarts: one running and unhealthy
-// for healAfter, unless the owner turned it off or an operation holds the app, at most
+// for healAfter, unless the owner turned it off or anything runs on the app, at most
 // healBudget times an app within healWindow. Past that it says so once an episode, and
 // leaves the app alone. Its own restarts are asked for: no death, no step towards a loop.
 
@@ -47,6 +47,8 @@ const (
 	healAfter  = 5 * time.Minute
 	healWindow = 6 * time.Hour
 	healBudget = 3
+
+	healRestartTimeout = 2 * time.Minute
 )
 
 // AutoHealEnabled is whether the owner lets the watch restart an unhealthy container.
@@ -214,6 +216,27 @@ func (w *dockerWatch) restarted(name string, now time.Time) {
 	}
 }
 
+// healNow restarts with restart what heal decides at now, and returns what that publishes.
+// A restart that failed counts in the budget, but neither the alert nor the journal says it
+// was done: the service log does.
+func (w *dockerWatch) healNow(now time.Time, enabled bool, held func(app string) bool, restart func(name string) error) []published {
+	names, out := w.heal(now, enabled, held)
+	failed := map[string]bool{}
+	for _, name := range names {
+		if err := restart(name); err != nil {
+			logger.Error("an unhealthy container could not be restarted", zap.Error(err), zap.String("container", name))
+			failed[name] = true
+		} else {
+			RecordAppEvent(w.containers[name].app, "auto-restarted", "", "", name)
+		}
+		w.restarted(name, now)
+	}
+
+	return slices.DeleteFunc(out, func(p published) bool {
+		return p.eventType.Name == common.EventTypeAppContainerAutoRestarted.Name && failed[p.properties[common.PropertyTypeContainerName.Name]]
+	})
+}
+
 // tick returns what the time passing publishes at now: 4, for an app whose troubled
 // containers have all run well for watchWindow. A container nothing happened to for as
 // long, and that owes nothing, is forgotten.
@@ -357,17 +380,13 @@ func (w *dockerWatch) follow(ctx context.Context) error {
 		case err := <-errs:
 			return err
 		case now := <-ticker.C:
-			out = w.tick(now)
-			restart, healed := w.heal(now, AutoHealEnabled(), held)
-			out = append(out, healed...)
-			for _, name := range restart {
-				// Docker's own stop timeout; the loop waits, the events queue meanwhile
-				if err := cli.ContainerRestart(ctx, name, container.StopOptions{}); err != nil {
-					logger.Error("an unhealthy container could not be restarted", zap.Error(err), zap.String("container", name))
-				}
-				w.restarted(name, now)
-				RecordAppEvent(w.containers[name].app, "auto-restarted", "", "", name)
-			}
+			out = append(w.tick(now), w.healNow(now, AutoHealEnabled(), busy, func(name string) error {
+				// the loop waits meanwhile, the events queue
+				ctx, cancel := context.WithTimeout(ctx, healRestartTimeout)
+				defer cancel()
+
+				return cli.ContainerRestart(ctx, name, container.StopOptions{})
+			})...)
 		case m := <-messages:
 			if f := onDockerEvent.Load(); f != nil {
 				(*f)(m)

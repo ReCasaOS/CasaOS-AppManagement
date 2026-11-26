@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -416,4 +417,42 @@ func TestStoppedResetsWhenHealthyAgain(t *testing.T) {
 	restart, out := w.heal(first.Add(60*time.Minute), true, notHeld)
 	assert.Equal(t, len(restart), 0)
 	assert.Equal(t, eventNames(out), autoRestartStopped)
+}
+
+// A restart that failed counts in the budget and waits healAfter again, but says nothing.
+func TestHealFailedRestartCountsButSaysNothing(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	w := newDockerWatch()
+	sick(w, first)
+
+	tried := 0
+	out := w.healNow(first.Add(healAfter), true, notHeld, func(string) error { tried++; return errors.New("no such container") })
+	assert.Equal(t, tried, 1)
+	assert.Equal(t, eventNames(out), "")
+	assert.Equal(t, len(w.restarts["jarvis"]), 1)
+
+	restart, _ := w.heal(first.Add(healAfter+4*time.Minute), true, notHeld)
+	assert.Equal(t, len(restart), 0)
+
+	out = w.healNow(first.Add(2*healAfter), true, notHeld, func(string) error { return nil })
+	assert.Equal(t, eventNames(out), autoRestarted)
+	assert.Equal(t, out[0].properties[common.PropertyTypeAutoRestartCount.Name], "2")
+}
+
+// A backup that copies the app live only marks it: still, nothing is restarted under it.
+func TestHealNotWhileABackupRuns(t *testing.T) {
+	first := time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC)
+	w := newDockerWatch()
+	sick(w, first)
+
+	done := markInProgress("jarvis", "backup")
+	tried := 0
+	out := w.healNow(first.Add(time.Hour), true, busy, func(string) error { tried++; return nil })
+	done()
+	assert.Equal(t, tried, 0)
+	assert.Equal(t, eventNames(out), "")
+
+	out = w.healNow(first.Add(time.Hour), true, busy, func(string) error { tried++; return nil })
+	assert.Equal(t, tried, 1)
+	assert.Equal(t, eventNames(out), autoRestarted)
 }
