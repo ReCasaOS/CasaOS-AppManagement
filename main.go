@@ -35,12 +35,6 @@ var (
 	commit = "private build"
 	date   = "private build"
 
-	//go:embed api/index.html
-	_docHTML string
-
-	//go:embed api/index_v1.html
-	_docHTMLV1 string
-
 	//go:embed api/app_management/openapi.yaml
 	_docYAML string
 
@@ -317,8 +311,8 @@ func main() {
 
 	v1Router := route.InitV1Router()
 	v2Router := route.InitV2Router()
-	v1DocRouter := route.InitV1DocRouter(_docHTMLV1, _docYAMLV1)
-	v2DocRouter := route.InitV2DocRouter(_docHTML, _docYAML)
+	v1DocRouter := route.InitV1DocRouter(_docYAMLV1)
+	v2DocRouter := route.InitV2DocRouter(_docYAML)
 
 	mux := &util_http.HandlerMultiplexer{
 		HandlerMap: map[string]http.Handler{
