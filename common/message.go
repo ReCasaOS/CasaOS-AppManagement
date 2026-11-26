@@ -77,6 +77,12 @@ var (
 		Description: utils.Ptr("exit code of the container's main process, as Docker reports it"),
 		Example:     utils.Ptr("1"),
 	}
+
+	PropertyTypeAutoRestartCount = message_bus.PropertyType{
+		Name:        "auto-restart:count",
+		Description: utils.Ptr("which of the app's automatic restarts within six hours this is: 1, 2 or 3"),
+		Example:     utils.Ptr("1"),
+	}
 )
 
 // image properties
@@ -220,6 +226,7 @@ var EventTypes = []message_bus.EventType{
 	EventTypeAppGitBuildBegin, EventTypeAppGitBuildProgress, EventTypeAppGitBuildEnd, EventTypeAppGitBuildError,
 	EventTypeAppGitDeployEnd, EventTypeAppGitDeployError,
 	EventTypeAppContainerDied, EventTypeAppContainerUnhealthy, EventTypeAppContainerRestarting, EventTypeAppContainerHealthy,
+	EventTypeAppContainerAutoRestarted, EventTypeAppContainerAutoRestartStopped,
 	EventTypeAutoUpdateNightEnd, EventTypeNewerTagsFound, EventTypeCleanupEnd, EventTypeCleanupError,
 
 	// resources
@@ -601,6 +608,28 @@ var (
 	EventTypeAppContainerHealthy = message_bus.EventType{
 		SourceID: AppManagementServiceName,
 		Name:     "app:container-healthy",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeContainerName,
+		},
+	}
+
+	// a container unhealthy for five minutes that the watch restarted
+	EventTypeAppContainerAutoRestarted = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:container-auto-restarted",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeContainerName,
+			PropertyTypeAutoRestartCount,
+		},
+	}
+
+	// a container unhealthy for five minutes that the watch leaves alone: the app was
+	// restarted three times within six hours already
+	EventTypeAppContainerAutoRestartStopped = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:container-auto-restart-stopped",
 		PropertyTypeList: []message_bus.PropertyType{
 			PropertyTypeAppName,
 			PropertyTypeContainerName,
