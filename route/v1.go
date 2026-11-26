@@ -87,19 +87,6 @@ func InitV1Router() http.Handler {
 	return e
 }
 
-func InitV1DocRouter(docHTML string, docYAML string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == V1DocPath {
-			if _, err := w.Write([]byte(docHTML)); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-			}
-			return
-		}
-
-		if r.URL.Path == V1DocPath+"/openapi_v1.yaml" {
-			if _, err := w.Write([]byte(docYAML)); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-			}
-		}
-	})
+func InitV1DocRouter(docYAML string) http.Handler {
+	return docHandler(V1DocPath, V1DocPath+"/openapi_v1.yaml", docYAML)
 }
