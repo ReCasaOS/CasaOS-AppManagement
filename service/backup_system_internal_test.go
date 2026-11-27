@@ -4,7 +4,9 @@ import (
 	"context"
 	stdjson "encoding/json"
 	"errors"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -74,6 +76,116 @@ func TestSystemBackupHoldsTheAPIWidgets(t *testing.T) {
 	}
 }
 
+// chmodRestoredUnder points the mode a restore gives a secret file at a folder of
+// the test's, so nothing under /root is touched; with no folder it does nothing,
+// for the restorers that write no file at all.
+func chmodRestoredUnder(t *testing.T, root string) {
+	t.Helper()
+
+	was := chmodRestored
+	chmodRestored = func(name string, mode os.FileMode) error {
+		if root == "" {
+			return nil
+		}
+
+		return os.Chmod(filepath.Join(root, name), mode)
+	}
+	t.Cleanup(func() { chmodRestored = was })
+}
+
+// writingRestorer puts each file back the way a destination that keeps no modes
+// does: readable by everyone.
+type writingRestorer struct {
+	fakeRestorer
+	root string
+}
+
+func (w *writingRestorer) RestoreFile(ctx context.Context, destination, remotePath, hostPath string) error {
+	local := filepath.Join(w.root, hostPath)
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(local, []byte("{}"), 0o644); err != nil {
+		return err
+	}
+	// whatever the umask of the test is
+	if err := os.Chmod(local, 0o644); err != nil {
+		return err
+	}
+
+	return w.fakeRestorer.RestoreFile(ctx, destination, remotePath, hostPath)
+}
+
+// a backup of the box in which every part is a file
+func boxBackupOfFiles(t *testing.T) map[string][]byte {
+	t.Helper()
+
+	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(func(string) bool { return true }), nil)
+	for i := range manifest.Operations {
+		manifest.Operations[i].Directory = false
+	}
+	raw, err := stdjson.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return map[string][]byte{path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw}
+}
+
+// The files that hold keys come back readable by root only, whatever mode the
+// destination wrote them with; the others keep the mode they came back with.
+func TestSystemBackupRestoreLeavesTheSecretFilesToRootOnly(t *testing.T) {
+	logInTempDir(t)
+	root := t.TempDir()
+	chmodRestoredUnder(t, root)
+
+	restorer := &writingRestorer{fakeRestorer: fakeRestorer{files: boxBackupOfFiles(t)}, root: root}
+	if _, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, want := range map[string]os.FileMode{
+		"/root/.config/rclone/rclone.conf": 0o600,
+		"/var/lib/casaos/api_widgets.json": 0o600,
+		"/etc/samba/smb.casa.conf":         0o644,
+	} {
+		info, err := os.Stat(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("%s came back %o, want %o", name, info.Mode().Perm(), want)
+		}
+	}
+}
+
+// A secret file whose mode could not be set is not reported as restored: the
+// restore says so.
+func TestSystemBackupRestoreSaysWhenASecretFileStaysReadable(t *testing.T) {
+	logInTempDir(t)
+
+	was := chmodRestored
+	chmodRestored = func(name string, _ os.FileMode) error {
+		if name == "/var/lib/casaos/api_widgets.json" {
+			return errors.New("read-only file system")
+		}
+
+		return nil
+	}
+	t.Cleanup(func() { chmodRestored = was })
+
+	restorer := &fakeRestorer{files: boxBackupOfFiles(t)}
+	report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
+	if err == nil || !strings.Contains(err.Error(), "/var/lib/casaos/api_widgets.json") || !strings.Contains(err.Error(), "read-only file system") {
+		t.Fatalf("want the failure, with the file and the reason, got %v", err)
+	}
+	for _, op := range report.Restored {
+		if op.Source == "/var/lib/casaos/api_widgets.json" {
+			t.Fatalf("reported as restored all the same: %+v", op)
+		}
+	}
+}
+
 // The services holding the files are stopped for the copy, in order, and
 // started again in reverse -- and started again when the copy fails, too.
 func TestTheServicesAreStoppedForTheCopyAndStartedAfter(t *testing.T) {
@@ -124,6 +236,7 @@ func TestAServiceThatWillNotStopMeansNoCopyAndTheOthersComeBack(t *testing.T) {
 // services for it, and restarts rclone last when its configuration came back.
 func TestABoxRestoreUsesThisBoxesPathsAndRestartsRcloneLast(t *testing.T) {
 	logInTempDir(t)
+	chmodRestoredUnder(t, "")
 
 	// a manifest as another box wrote it, with its own idea of where things were
 	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(func(string) bool { return true }), nil)
@@ -179,6 +292,7 @@ func TestABackupOfAnAppIsNotPouredIntoTheBox(t *testing.T) {
 // to its own path, whatever number the copy landed under.
 func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *testing.T) {
 	logInTempDir(t)
+	chmodRestoredUnder(t, "")
 
 	// taken on a box with no Samba config: eight parts, numbered 1..8
 	present := func(p string) bool { return p != "/etc/samba/smb.casa.conf" }
