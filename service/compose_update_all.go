@@ -268,9 +268,13 @@ func UpdateOneForRun(ctx context.Context, id string) (codegen.ComposeAppUpdateRu
 	return updateOutcome(app.UpdateNow(common.WithProperties(ctx, map[string]string{})))
 }
 
-// updateOutcome is what the run says of an update that ended with err. A blocked update is
-// not a failure: the app runs what it ran before, and the run names the images it stopped on.
+// updateOutcome is what the run says of an update that ended with err. A busy app and a blocked update are
+// not failures: the app runs what it ran before, and the run names the images it stopped on.
 func updateOutcome(err error) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
+	// held by something else -- an automatic restart, a backup: not tried, so not a failure
+	if errors.As(err, new(ErrAppBusy)) {
+		return codegen.ComposeAppUpdateRunAppStateQueued, "busy: tried again at the next run", nil
+	}
 	var blocked *UpdateBlockedError
 	if errors.As(err, &blocked) {
 		return codegen.ComposeAppUpdateRunAppStateBlocked, blocked.Error(), blocked.Images

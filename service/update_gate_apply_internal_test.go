@@ -385,3 +385,11 @@ func TestUpdateAllReportsBlocked(t *testing.T) {
 	assert.Equal(t, run.Apps[1].State, codegen.ComposeAppUpdateRunAppStateUpdated)
 	assert.Assert(t, run.Apps[1].Blocked == nil)
 }
+
+// An app held by something else -- the automatic restart -- is not tried: no failure.
+func TestUpdateOfABusyAppIsNoFailure(t *testing.T) {
+	state, message, images := updateOutcome(ErrAppBusy{App: "jarvis", Running: "auto-restart"})
+	assert.Equal(t, state, codegen.ComposeAppUpdateRunAppStateQueued)
+	assert.Equal(t, message, "busy: tried again at the next run")
+	assert.Assert(t, images == nil)
+}

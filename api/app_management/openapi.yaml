@@ -463,6 +463,45 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /auto-heal:
+    get:
+      summary: Whether an unhealthy app is restarted by itself
+      description: |
+        On by default. The Docker watch restarts a container that stays unhealthy,
+        within a small budget, and writes it to the journal as `auto-restarted`.
+        The owner's only.
+      operationId: autoHeal
+      tags:
+        - Compose methods
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoHealOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+    put:
+      summary: Turn the automatic restart of an unhealthy app on or off
+      description: The owner's only.
+      operationId: setAutoHeal
+      tags:
+        - Compose methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AutoHeal"
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoHealOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /compose/{id}/auto-update:
     put:
       summary: Turn the nightly update of one app on or off
@@ -4409,6 +4448,17 @@ components:
                   data:
                     $ref: "#/components/schemas/CleanupResult"
 
+    AutoHealOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/AutoHeal"
+
     AutoUpdateOK:
       description: OK
       content:
@@ -6257,6 +6307,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ComposeAppUpdateRunApp"
+
+    AutoHeal:
+      description: Whether an unhealthy app is restarted by itself.
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
 
     AutoUpdate:
       description: The apps that update by themselves, and the last nights.

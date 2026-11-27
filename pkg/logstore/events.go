@@ -27,7 +27,7 @@ type Event struct {
 	Detail    string    `json:"detail,omitempty"`
 }
 
-var Kinds = []string{"created", "started", "stopped", "died", "oom-killed", "restarting", "unhealthy", "healthy", "installed", "uninstalled", "updated", "image-pulled"}
+var Kinds = []string{"created", "started", "stopped", "died", "oom-killed", "restarting", "unhealthy", "healthy", "installed", "uninstalled", "updated", "image-pulled", "auto-restarted"}
 
 type EventQuery struct {
 	Apps    []string

@@ -23,6 +23,8 @@ func TestTheCleanupIsTheOwnersOnly(t *testing.T) {
 		{http.MethodGet, "/auto-update", ""},
 		{http.MethodPut, "/auto-update", `{"min_days":1}`},
 		{http.MethodPut, "/compose/jarvis/auto-update", `{"enabled":true}`},
+		{http.MethodGet, "/auto-heal", ""},
+		{http.MethodPut, "/auto-heal", `{"enabled":false}`},
 	} {
 		got := r.do(r.v2, c.method, "/v2/app_management"+c.path, r.user, c.body)
 		assert.Equal(t, got.Code, http.StatusForbidden, "%s %s: %s", c.method, c.path, bodyOf(got))
