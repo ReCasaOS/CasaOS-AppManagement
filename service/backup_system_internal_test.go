@@ -5,6 +5,7 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -35,8 +36,8 @@ func TestTheBoxIsAFixedListAndAbsentPartsAreSkippedWithAReason(t *testing.T) {
 	if len(manifest.Operations) != 3 {
 		t.Fatalf("three present: %+v", manifest.Operations)
 	}
-	if len(manifest.Skipped) != 5 || !strings.Contains(manifest.Skipped[0].Skip, "not present") {
-		t.Fatalf("five absent, with the reason: %+v", manifest.Skipped)
+	if len(manifest.Skipped) != 6 || !strings.Contains(manifest.Skipped[0].Skip, "not present") {
+		t.Fatalf("six absent, with the reason: %+v", manifest.Skipped)
 	}
 	if last := manifest.Skipped[len(manifest.Skipped)-1]; last.Path != VerificationSchedulePath {
 		t.Fatalf("the verification schedule is part of the box: %+v", manifest.Skipped)
@@ -44,6 +45,31 @@ func TestTheBoxIsAFixedListAndAbsentPartsAreSkippedWithAReason(t *testing.T) {
 	for _, op := range manifest.Operations {
 		if op.Kind != BackupKindBind || !strings.HasPrefix(op.Destination, "binds/") {
 			t.Fatalf("planned like a bind mount: %+v", op)
+		}
+	}
+}
+
+// The dashboard's API widgets, with the keys they call their APIs with, are part
+// of the box; a box that has none has no such file, and that is a skip. The
+// verification schedule stays last, which the tests around this one count on.
+func TestSystemBackupHoldsTheAPIWidgets(t *testing.T) {
+	const widgets = "/var/lib/casaos/api_widgets.json"
+
+	paths := systemBackupPaths()
+	if !slices.Contains(paths, widgets) {
+		t.Fatalf("the API widgets are part of the box: %v", paths)
+	}
+	if paths[len(paths)-1] != VerificationSchedulePath {
+		t.Fatalf("the verification schedule stays last: %v", paths)
+	}
+
+	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(func(p string) bool { return p != widgets }), nil)
+	if len(manifest.Skipped) != 1 || manifest.Skipped[0].Path != widgets || !strings.Contains(manifest.Skipped[0].Skip, "not present") {
+		t.Fatalf("a box with no widget skips the file and says so: %+v", manifest.Skipped)
+	}
+	for _, op := range manifest.Operations {
+		if op.Source == widgets {
+			t.Fatalf("nothing is planned for a file that is not there: %+v", op)
 		}
 	}
 }
@@ -154,7 +180,7 @@ func TestABackupOfAnAppIsNotPouredIntoTheBox(t *testing.T) {
 func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *testing.T) {
 	logInTempDir(t)
 
-	// taken on a box with no Samba config: seven parts, numbered 1..7
+	// taken on a box with no Samba config: eight parts, numbered 1..8
 	present := func(p string) bool { return p != "/etc/samba/smb.casa.conf" }
 	manifest := PlanBackup(SystemBackupName, SystemBackupInventory(present), nil)
 	for i := range manifest.Operations {
@@ -169,8 +195,8 @@ func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *test
 		t.Fatal(err)
 	}
 
-	if len(report.Restored) != 7 || len(report.Missing) != 0 {
-		t.Fatalf("seven parts back, nothing missing: %+v", report)
+	if len(report.Restored) != 8 || len(report.Missing) != 0 {
+		t.Fatalf("eight parts back, nothing missing: %+v", report)
 	}
 	for _, call := range restorer.restored {
 		// binds/2 in this backup is the database folder, and it must land there

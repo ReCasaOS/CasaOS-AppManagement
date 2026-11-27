@@ -33,6 +33,8 @@ var systemPaths = []string{
 	"/var/lib/casaos/db",
 	"/var/lib/casaos/conf",
 	"/root/.config/rclone/rclone.conf",
+	// the dashboard's API widgets, with the keys they call their APIs with
+	"/var/lib/casaos/api_widgets.json",
 }
 
 // systemUnits are the services that hold the files above open. Stopped for the
