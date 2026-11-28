@@ -32,6 +32,10 @@ tags:
     description: |-
       methods for managing container app images
 
+  - name: Cleanup methods
+    description: |-
+      methods for freeing the disk of what apps left behind
+
   - name: Git methods
     description: |-
       methods for apps deployed from their git repository
@@ -405,6 +409,139 @@ paths:
         "404":
           $ref: "#/components/responses/ResponseNotFound"
 
+  /auto-update:
+    get:
+      summary: The apps that update by themselves, and the last nights
+      description: |
+        The apps whose owner turned on the nightly update, when the next night is,
+        and what became of each app the last nights, newest first. The owner's only.
+      operationId: autoUpdate
+      tags:
+        - Compose methods
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoUpdateOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+    put:
+      summary: How long an update waits before a night applies it
+      description: |
+        A night applies an update only once it has been known for this many days,
+        counted from the night that first found it: an image published broken is
+        usually replaced within a day or two. From 0 to 30; 3 when never set.
+
+        `scan_before_update` turns on or off the check that undoes an update whose new
+        image carries more critical vulnerabilities than the one running; it applies to
+        the update button, the update of every app and the night. On when never set.
+
+        Either field, or both; neither is a 400. The owner's only.
+      operationId: setAutoUpdate
+      tags:
+        - Compose methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                min_days:
+                  type: integer
+                  minimum: 0
+                  maximum: 30
+                scan_before_update:
+                  type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoUpdateOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /auto-heal:
+    get:
+      summary: Whether an unhealthy app is restarted by itself
+      description: |
+        On by default. The Docker watch restarts a container that stays unhealthy,
+        within a small budget, and writes it to the journal as `auto-restarted`.
+        The owner's only.
+      operationId: autoHeal
+      tags:
+        - Compose methods
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoHealOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+    put:
+      summary: Turn the automatic restart of an unhealthy app on or off
+      description: The owner's only.
+      operationId: setAutoHeal
+      tags:
+        - Compose methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AutoHeal"
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoHealOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /compose/{id}/auto-update:
+    put:
+      summary: Turn the nightly update of one app on or off
+      description: |
+        Every night at two, on the box's clock, an app turned on is updated when it
+        has an update, one app after another, with the update button's own update: an
+        app that does not start again is put back on the files and the images it ran,
+        and the failure raises an alert. The first app turned on waits for the next
+        night. A night waits while something runs on an app or an upgrade of the
+        system is open, and is skipped when it cannot start within two hours. An app
+        that failed two nights in a row is left alone until its switch is turned off
+        and on again. Apps built from a repository deploy by themselves already and
+        are refused. The owner's only.
+      operationId: setAppAutoUpdate
+      tags:
+        - Compose methods
+      parameters:
+        - $ref: "#/components/parameters/ComposeAppID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/AutoUpdateOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /image-updates:
     post:
       summary: Check every installed app for a newer image
@@ -640,9 +777,12 @@ paths:
       parameters:
         - $ref: "#/components/parameters/ComposeAppID"
         - $ref: "#/components/parameters/Force"
+        - $ref: "#/components/parameters/SkipScan"
       responses:
         "200":
           $ref: "#/components/responses/ComposeAppUpdateOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
         "404":
           $ref: "#/components/responses/ResponseNotFound"
         "409":
@@ -1643,6 +1783,30 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /compose/{id}/containers/{containerId}/health:
+    get:
+      summary: The health check of one container of a compose app, and its last runs
+      description: |
+        What the Health chip of a container stands for: the command Docker runs, how
+        often, and what its last runs answered. Docker keeps the last five.
+
+        The container must belong to the app named in the path. The command and what it
+        printed are emptied for an account that is not the owner: compose fills a
+        command from `.env`, and a command prints what it likes.
+      operationId: composeAppContainerHealth
+      tags:
+        - Compose methods
+      parameters:
+        - $ref: "#/components/parameters/ComposeAppID"
+        - $ref: "#/components/parameters/ComposeContainerID"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerHealthOK"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /compose/{id}/logs:
     get:
       summary: Get the logs of a compose app
@@ -1768,6 +1932,246 @@ paths:
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
+  /container/{id}/files:
+    get:
+      summary: What a folder of a running container holds
+      description: |
+        Read from the host, in the container's own filesystem, image layers and volumes as
+        the container sees them: it works for images without a shell. A symlink resolves
+        inside the container. Folders first, then by name, at most 5000 entries.
+        The owner of the box only. Errors: 400 on a path that does not start with `/` or is
+        not a folder, a device, a socket or a file of /proc or /sys, 403 for another account
+        or a path the box itself may not read, 404 on a container or a path that is not there,
+        409 while the container is not running, 501 on a kernel older than 5.6.
+      operationId: containerFiles
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerFilesOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    delete:
+      summary: Delete a file, a link or a folder with all it holds, in a running container
+      description: |
+        A link goes itself, never what it names. A folder that is a volume's mount point,
+        or holds one, is refused before anything goes. Refused while an operation runs on
+        the app. The owner of the box only. Errors: 400 on `/`, a mount, a file of /proc or
+        /sys, or a read-only container; 403, 404, 409 (stopped, or busy) as for reading.
+      operationId: deleteContainerFile
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
+  /container/{id}/files/content:
+    get:
+      summary: A text file of a running container, up to 1 MB
+      description: |
+        As `GET /container/{id}/files`. Errors as there, and 413 on a file over 1 MB, 415 on
+        a file that is not text.
+      operationId: containerFileContent
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerFileContentOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "413":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "415":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+    put:
+      summary: Write a text file of a running container
+      description: |
+        Creates the file, or replaces it when `replace` is set, keeping its mode and owner;
+        a new file is 0644 and belongs to the owner of its folder. Written aside, then moved
+        in place. A link or a folder is refused. Refused while an operation runs on the app.
+        Errors as for `DELETE /container/{id}/files`, and 409 on a name already taken
+        without `replace`.
+      operationId: writeContainerFileContent
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContainerFileWrite"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
+  /container/{id}/files/download:
+    get:
+      summary: Download a file of a running container
+      description: |
+        As `GET /container/{id}/files`, for one regular file, sent as it is. The token may
+        come in the `token` query parameter: the browser downloads it to the disk itself.
+      operationId: containerFileDownload
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/ContainerFileDownloadOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /container/{id}/files/folder:
+    post:
+      summary: Make a folder in a running container
+      description: |
+        Owned as its parent folder. Errors as for `DELETE /container/{id}/files`, and 409
+        on a name already taken.
+      operationId: makeContainerFolder
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContainerFolderMake"
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /container/{id}/files/upload:
+    post:
+      summary: Send a file into a running container
+      description: |
+        The body is multipart, one part named `file`, streamed to the disk. `path` is the
+        file's full path. As `PUT /container/{id}/files/content` otherwise.
+      operationId: uploadContainerFile
+      tags:
+        - Container methods
+      parameters:
+        - $ref: "#/components/parameters/ContainerID"
+        - $ref: "#/components/parameters/ContainerPath"
+        - name: replace
+          in: query
+          required: false
+          description: Replace a file already there
+          schema:
+            type: boolean
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          $ref: "#/components/responses/ResponseOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "404":
+          $ref: "#/components/responses/ResponseNotFound"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "501":
+          $ref: "#/components/responses/ResponseInternalServerError"
+        "507":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
   /container/{id}/healthcheck:
     get:
       deprecated: true
@@ -1840,12 +2244,188 @@ paths:
         garbage, and a wider prune would delete its image and leave it unable to start
         again without a re-pull; the restriction is in the path so no parameter can
         widen it.
+
+        An image an installed app names by its digest is left alone, tag or no tag.
+        Refused with 409 while an operation runs on an app, or while what an app claims
+        cannot be read.
       operationId: pruneDanglingImages
       tags:
         - Image methods
       responses:
         "200":
           $ref: "#/components/responses/DanglingImagesOK"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup:
+    get:
+      summary: Report what apps left behind on the disk
+      description: |
+        The build cache, and the images and volumes that no container holds and no
+        installed app claims. Read-only. Dangling images are reported by
+        `/images/dangling`.
+
+        An installed app is one Docker Compose knows or one with a folder among the
+        apps, whether or not a container of it exists: a stopped app, or one between
+        the two halves of an update, keeps its images and its data. When this cannot be
+        told (an operation runs on an app, or a compose file does not load), `held`
+        says why and no image or volume is listed.
+
+        The owner's only.
+      operationId: dockerCleanup
+      tags:
+        - Cleanup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/DockerCleanupOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup/build-cache:
+    delete:
+      summary: Delete the build cache
+      description: |
+        Deletes what builds left to go faster next time. No app's data is in it; the
+        next build of an app from a repository is slower. The owner's only.
+      operationId: pruneBuildCache
+      tags:
+        - Cleanup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupResultOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup/images:
+    post:
+      summary: Delete leftover images
+      description: |
+        Deletes the images listed that are still leftovers when the request runs: the
+        list is decided again, and an image that is in use or claimed by then is
+        refused, with the reason. The body can only narrow what `get /cleanup` lists.
+        Nothing is forced. The owner's only.
+      operationId: removeLeftoverImages
+      tags:
+        - Cleanup methods
+      requestBody:
+        $ref: "#/components/requestBodies/CleanupSelection"
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupResultOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup/orphans:
+    post:
+      summary: Move aside the folders of apps that are gone
+      description: |
+        A folder among the apps that no container goes with: an install that failed
+        leaves one, and so does an app whose containers were removed by hand. The app is
+        not on the dashboard, and its folder still claims its images and its volumes.
+
+        Moves the folders listed that are still without a container when the request
+        runs to `apps-removed`, beside the folder of the apps. Moved, not deleted: the
+        folder holds the compose file of the app. The owner's only.
+      operationId: removeOrphanFolders
+      tags:
+        - Cleanup methods
+      requestBody:
+        $ref: "#/components/requestBodies/CleanupSelection"
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupResultOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup/schedule:
+    get:
+      summary: The weekly cleanup, and what the last cleanups freed
+      description: |
+        Whether the box cleans up by itself once a week, when the next run is due, and
+        the last runs, newest first: the weekly ones and what was freed by hand.
+
+        The weekly cleanup only ever takes the old app versions and the build cache,
+        which hold the data of no app. The owner's only.
+      operationId: cleanupSchedule
+      tags:
+        - Cleanup methods
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupScheduleOK"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+    put:
+      summary: Turn the weekly cleanup on or off
+      description: |
+        Turned on, the first run is the next Sunday at four in the morning, on the
+        box's clock; the slot that just passed is not caught up. A run waits while
+        something runs on an app. The owner's only.
+      operationId: setCleanupSchedule
+      tags:
+        - Cleanup methods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [weekly]
+              properties:
+                weekly:
+                  type: boolean
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupScheduleOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "500":
+          $ref: "#/components/responses/ResponseInternalServerError"
+
+  /cleanup/volumes:
+    post:
+      summary: Delete leftover volumes
+      description: |
+        Deletes the volumes listed that are still leftovers when the request runs,
+        decided again like the images. A volume holds data and this cannot be undone.
+        Nothing is forced. The owner's only.
+      operationId: removeLeftoverVolumes
+      tags:
+        - Cleanup methods
+      requestBody:
+        $ref: "#/components/requestBodies/CleanupSelection"
+      responses:
+        "200":
+          $ref: "#/components/responses/CleanupResultOK"
+        "400":
+          $ref: "#/components/responses/ResponseBadRequest"
+        "403":
+          $ref: "#/components/responses/ResponseForbidden"
+        "409":
+          $ref: "#/components/responses/ResponseConflict"
         "500":
           $ref: "#/components/responses/ResponseInternalServerError"
 
@@ -2717,6 +3297,15 @@ components:
         type: string
       example: 09e70f4a7dd3fc43de6a1bc40d45c79f857544e13679e5b1a47409034a7ce621
 
+    ContainerPath:
+      name: path
+      description: An absolute path inside the container
+      in: query
+      required: true
+      schema:
+        type: string
+      example: /config
+
     DeleteConfigFolder:
       name: delete_config_folder
       description: Delete the config folder of the app, and with it its named Docker volumes. Left false, both stay, and the next install of the app finds its data.
@@ -2735,6 +3324,15 @@ components:
 
     Force:
       name: force
+      in: query
+      schema:
+        type: boolean
+        default: false
+
+    SkipScan:
+      name: skip_scan
+      description: |
+        Update without asking the scan module whether the new images are worse. The owner's only.
       in: query
       schema:
         type: boolean
@@ -2905,6 +3503,20 @@ components:
         format: date-time
 
   requestBodies:
+    CleanupSelection:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [names]
+            properties:
+              names:
+                description: Image ids, volume names or folder names, as `get /cleanup` lists them.
+                type: array
+                items:
+                  type: string
+
     RequestGitAppCreate:
       required: true
       content:
@@ -3465,6 +4077,41 @@ components:
                   data:
                     $ref: "#/components/schemas/ComposeAppContainers"
 
+    ContainerFilesOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ContainerFiles"
+
+    ContainerFileContentOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ContainerFileContent"
+
+    ContainerFileDownloadOK:
+      description: OK
+      headers:
+        Content-Disposition:
+          description: "`attachment; filename*=UTF-8''<name, percent-encoded>`"
+          schema:
+            type: string
+      content:
+        application/octet-stream:
+          schema:
+            type: string
+            format: binary
+
     ContainerDetailOK:
       description: OK
       content:
@@ -3475,6 +4122,17 @@ components:
               - properties:
                   data:
                     $ref: "#/components/schemas/ContainerDetail"
+
+    ContainerHealthOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/ContainerHealth"
 
     ContainerRemovedOK:
       description: OK
@@ -3756,6 +4414,61 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/BaseResponse"
+
+    DockerCleanupOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/DockerCleanup"
+
+    CleanupScheduleOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/CleanupSchedule"
+
+    CleanupResultOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/CleanupResult"
+
+    AutoHealOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/AutoHeal"
+
+    AutoUpdateOK:
+      description: OK
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/BaseResponse"
+              - properties:
+                  data:
+                    $ref: "#/components/schemas/AutoUpdate"
 
     DanglingImagesOK:
       description: OK
@@ -4361,6 +5074,13 @@ components:
           type: string
           readOnly: true
           example: running
+        health:
+          type: string
+          readOnly: true
+          description: |-
+            The worst health check among the running containers: unhealthy, starting or
+            healthy. Absent when none of them has a check. Filled in the lists of apps only.
+          example: healthy
         update_available:
           readOnly: true
           type: boolean
@@ -4480,6 +5200,148 @@ components:
             $ref: "#/components/schemas/DeviceStoreInfo"
           x-oapi-codegen-extra-tags:
             yaml: ",omitempty"
+
+    ContainerHealth:
+      description: The health check of one container and its last runs.
+      properties:
+        status:
+          type: string
+          description: healthy, unhealthy or starting. Empty when the container has no check.
+          example: unhealthy
+        failing_streak:
+          type: integer
+          description: How many runs in a row failed.
+        command:
+          type: string
+          description: The command Docker runs. Empty for an account that is not the owner.
+          example: pg_isready -U postgres
+        interval:
+          type: integer
+          description: Seconds between two runs.
+        timeout:
+          type: integer
+          description: Seconds after which a run counts as failed.
+        retries:
+          type: integer
+          description: Failed runs in a row before the container is unhealthy.
+        start_period:
+          type: integer
+          description: Seconds after the start during which a failed run does not count.
+        checks:
+          type: array
+          description: The last runs, newest first.
+          items:
+            $ref: "#/components/schemas/ContainerHealthRun"
+
+    ContainerHealthRun:
+      description: One run of a container's health check.
+      properties:
+        started_at:
+          type: string
+          format: date-time
+        exit_code:
+          type: integer
+          description: 0 passed, anything else failed.
+        output:
+          type: string
+          description: What the command printed. Empty for an account that is not the owner.
+
+    ContainerFileWrite:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+          example: /config/settings.yml
+        content:
+          type: string
+        replace:
+          type: boolean
+          description: Replace a file already there
+
+    ContainerFolderMake:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          example: /config/backups
+
+    ContainerFiles:
+      type: object
+      required: [path, entries, truncated, volumes]
+      properties:
+        path:
+          type: string
+          description: The folder, cleaned
+          example: /config
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContainerFileEntry"
+        truncated:
+          type: boolean
+          description: More than 5000 entries; the rest are left out
+        in_volume:
+          type: string
+          description: The mount point of the volume or bind mount this folder is in, absent when it is in the container's own layer, lost when the container is recreated
+        volumes:
+          type: array
+          description: Every mount point of the container
+          items:
+            type: string
+
+    ContainerFileEntry:
+      type: object
+      required: [name, type, size, mode, uid, gid, modified]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [dir, file, symlink, other]
+        link:
+          type: string
+          description: Where a symlink points, as written
+        size:
+          type: integer
+          format: int64
+        mode:
+          type: string
+          description: The permissions, as `ls -l` writes them without the type
+          example: rwxr-xr-x
+        octal:
+          type: string
+          example: "755"
+        uid:
+          type: integer
+          format: uint32
+        gid:
+          type: integer
+          format: uint32
+        user:
+          type: string
+          description: The name of uid in the container's /etc/passwd, absent when it has none
+        group:
+          type: string
+        modified:
+          type: string
+          format: date-time
+        volume:
+          type: boolean
+          description: This folder is a mount point of the container
+
+    ContainerFileContent:
+      type: object
+      required: [path, content, size]
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+        size:
+          type: integer
+          format: int64
 
     ContainerDetail:
       description: What one container is, for somebody who did not create it.
@@ -5210,6 +6072,134 @@ components:
         - AuthorTypeCommunity
         - AuthorTypeUnknown
 
+    DockerCleanup:
+      description: What a cleanup could free.
+      required: [build_cache, images, volumes, orphans, held]
+      properties:
+        build_cache:
+          description: Bytes of build cache no build uses.
+          type: integer
+          format: int64
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupImage"
+        volumes:
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupVolume"
+        orphans:
+          description: |-
+            Folders among the apps that no container goes with. Listed when an app
+            cannot be read too, and not while something runs on an app.
+          type: array
+          items:
+            type: string
+        held:
+          description: |-
+            Why no image and no volume is listed: `busy` while an operation runs on an
+            app, `unreadable` when what an app claims cannot be read. Empty otherwise.
+          type: string
+        detail:
+          description: With `unreadable`, what could not be read, naming the app.
+          type: string
+
+    CleanupImage:
+      description: An image no container holds and no installed app names.
+      required: [id, tags, size, created]
+      properties:
+        id:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+          example: ["nginx:1.26"]
+        size:
+          description: Bytes it does not share with another image.
+          type: integer
+          format: int64
+        created:
+          description: When the image was built, in seconds since 1970.
+          type: integer
+          format: int64
+
+    CleanupVolume:
+      description: A volume no container holds and no installed app owns.
+      required: [name, size]
+      properties:
+        name:
+          type: string
+        size:
+          description: Bytes, or -1 when its driver cannot measure it.
+          type: integer
+          format: int64
+        app:
+          description: The compose project that made it, when Docker kept its name.
+          type: string
+        created:
+          type: string
+          format: date-time
+
+    CleanupSchedule:
+      description: The weekly cleanup and the last runs.
+      required: [weekly, runs]
+      properties:
+        weekly:
+          description: Whether the box cleans up by itself once a week.
+          type: boolean
+        next:
+          description: When the next weekly run is due. Absent when the switch is off.
+          type: string
+          format: date-time
+        runs:
+          description: The last runs, newest first.
+          type: array
+          items:
+            $ref: "#/components/schemas/CleanupRun"
+
+    CleanupRun:
+      description: One cleanup, and what it freed.
+      required: [at, what, scheduled, count, size]
+      properties:
+        at:
+          type: string
+          format: date-time
+        what:
+          description: weekly, old_versions, build_cache, images or volumes.
+          type: string
+        scheduled:
+          description: True for a run the box made by itself.
+          type: boolean
+        count:
+          description: How many images or volumes went.
+          type: integer
+        size:
+          description: Bytes freed.
+          type: integer
+          format: int64
+        error:
+          description: Why the run failed, when it did.
+          type: string
+
+    CleanupResult:
+      description: What a cleanup did.
+      required: [removed, refused, size]
+      properties:
+        removed:
+          type: array
+          items:
+            type: string
+        refused:
+          description: What was asked for and kept, with the reason.
+          type: object
+          additionalProperties:
+            type: string
+        size:
+          description: Bytes freed.
+          type: integer
+          format: int64
+
     DanglingImages:
       description: |
         Images no tag points at any more -- either what a prune would free, or what one
@@ -5318,6 +6308,78 @@ components:
           items:
             $ref: "#/components/schemas/ComposeAppUpdateRunApp"
 
+    AutoHeal:
+      description: Whether an unhealthy app is restarted by itself.
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+
+    AutoUpdate:
+      description: The apps that update by themselves, and the last nights.
+      required: [apps, min_days, scan_before_update, scan_available, runs]
+      properties:
+        apps:
+          description: The apps turned on.
+          type: array
+          items:
+            type: string
+        min_days:
+          description: Days an update must have been known before a night applies it.
+          type: integer
+        scan_before_update:
+          description: Whether an update whose new image is worse than the running one is undone.
+          type: boolean
+        scan_available:
+          description: Whether the scan module is installed, so that the check can run at all.
+          type: boolean
+        next:
+          description: When the next night is due. Absent when no app is turned on.
+          type: string
+          format: date-time
+        runs:
+          description: The last nights, newest first.
+          type: array
+          items:
+            $ref: "#/components/schemas/AutoUpdateRun"
+
+    AutoUpdateRun:
+      description: One night, and what became of each app turned on.
+      required: [at, apps]
+      properties:
+        at:
+          type: string
+          format: date-time
+        apps:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComposeAppUpdateRunApp"
+
+    NewerTag:
+      description: Newer versions of one image pinned to a version, of the same flavour.
+      required: [service, image, current]
+      properties:
+        service:
+          type: string
+        image:
+          type: string
+          example: postgres:16.2
+        current:
+          description: The tag the app runs.
+          type: string
+          example: "16.2"
+        patch:
+          description: The highest bug-fix version above it, when there is one.
+          type: string
+        minor:
+          description: The highest version of the same major above it, when there is one.
+          type: string
+          example: "16.4"
+        major:
+          description: The highest version of a higher major, when there is one.
+          type: string
+          example: "17.0"
+
     ComposeAppUpdateRunApp:
       required:
         - id
@@ -5334,9 +6396,18 @@ components:
             - updated
             - current
             - failed
+            - blocked
         message:
-          description: The reason, when the app stayed current for one, or the error.
+          description: |-
+            The reason, when the app stayed current for one, the error, or why the update
+            was blocked. In a night,
+            `queued` is an update that waits to be old enough, and says until when.
           type: string
+        blocked:
+          description: The images a blocked update stopped on, with the new critical vulnerabilities.
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockedImage"
 
     ImageUpdateCheckResult:
       description: What one check pass found.
@@ -5879,6 +6950,28 @@ components:
             this app has not been checked since the service started.
           type: boolean
           example: true
+        version:
+          description: |-
+            The version the app's main container runs: the image's
+            `org.opencontainers.image.version` label, else its tag unless that is `latest`.
+            Absent when neither says one, or no container of the main service exists.
+          type: string
+          example: 1.27.2
+        release_notes:
+          description: |-
+            Where the main image's project publishes its releases: the GitHub releases
+            page named by the image's `org.opencontainers.image.source` label. Absent for
+            any other source.
+          type: string
+          example: https://github.com/syncthing/syncthing/releases
+        newer_tags:
+          description: |-
+            The images of the app pinned to a version for which the registry holds a
+            newer one, from the last daily pass. Said only: nothing is applied. Absent
+            when there is none, or nothing has been asked yet.
+          type: array
+          items:
+            $ref: "#/components/schemas/NewerTag"
         hidden_on_dashboard:
           description: |
             The owner chose to leave this app's icon out of the dashboard, for every
@@ -5892,6 +6985,12 @@ components:
         status:
           type: string
           example: running
+        health:
+          type: string
+          description: |-
+            The worst health check among the running containers: unhealthy, starting or
+            healthy. Absent when none of them has a check. Filled in the lists of apps only.
+          example: healthy
         name:
           type: string
         title:
@@ -6175,6 +7274,44 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/StatsAlert"
+
+    BlockedFinding:
+      type: object
+      required: [id, package, fixed, title, url]
+      properties:
+        id:
+          type: string
+        package:
+          type: string
+        fixed:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+
+    BlockedImage:
+      type: object
+      required: [service, image, id, current, candidate, added]
+      properties:
+        service:
+          type: string
+        image:
+          type: string
+        repo_digests:
+          type: array
+          items:
+            type: string
+        id:
+          type: string
+        current:
+          type: integer
+        candidate:
+          type: integer
+        added:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockedFinding"
 
     LogLine:
       type: object

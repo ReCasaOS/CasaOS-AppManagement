@@ -272,15 +272,25 @@ func logsOnEvent(ctx context.Context, docker logsDocker, m events.Message) {
 	}
 }
 
-// logsOnPublished records the watch's restart-loop decision.
+// logsOnPublished records the watch's restart-loop decision, and the restarts it did itself:
+// only a restart that was done is published.
 func logsOnPublished(p published) {
 	store := Logs()
-	if store == nil || p.eventType.Name != common.EventTypeAppContainerRestarting.Name {
+	if store == nil {
+		return
+	}
+	var kind, by string
+	switch p.eventType.Name {
+	case common.EventTypeAppContainerRestarting.Name:
+		kind, by = "restarting", "docker"
+	case common.EventTypeAppContainerAutoRestarted.Name:
+		kind, by = "auto-restarted", "operation"
+	default:
 		return
 	}
 	app, name := p.properties[common.PropertyTypeAppName.Name], p.properties[common.PropertyTypeContainerName.Name]
 	// the watch knows the container by name: its id when it is followed, its name otherwise
-	e := logstore.Event{At: time.Now().UTC(), App: app, Container: name, Kind: "restarting", By: "docker"}
+	e := logstore.Event{At: time.Now().UTC(), App: app, Container: name, Kind: kind, By: by}
 	followMu.Lock()
 	for id, f := range followers {
 		if f.app == app && f.name == name {

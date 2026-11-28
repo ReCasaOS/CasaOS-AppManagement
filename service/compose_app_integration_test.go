@@ -100,7 +100,7 @@ func TestComposeAppLifecycle(t *testing.T) {
 	assertComposeServiceState(t, ctx, composeApp, "running")
 
 	updatedYAML := lifecycleComposeYAML(projectName, bindDir, port, "v2")
-	if err := composeApp.PullAndApply(ctx, updatedYAML); err != nil {
+	if err := composeApp.PullAndApply(ctx, updatedYAML, true); err != nil {
 		t.Fatal(err)
 	}
 	assertComposeContainerConfig(t, ctx, composeApp, "CASAOS_TEST=v2")

@@ -128,6 +128,7 @@ const (
 	InstallStepExtract = "extract"
 	InstallStepCreate  = "create"
 	InstallStepStart   = "start"
+	InstallStepCheck   = "check"
 )
 
 // downloadShare is how much of a layer its download is, the rest being its unpacking. A
@@ -255,7 +256,7 @@ func installStepProperties(step string) map[string]string {
 // line by a defer, and a step that lands after it opens the card again with nothing left
 // to close it.
 func PublishInstallStep(ctx context.Context, step string) {
-	PublishEventWrapper(ctx, common.EventTypeAppInstallProgress, installStepProperties(step))
+	publishEvent(ctx, common.EventTypeAppInstallProgress, installStepProperties(step))
 }
 
 type Throttler struct {

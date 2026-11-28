@@ -28,6 +28,9 @@ func (a *AppManagement) DanglingImages(ctx echo.Context) error {
 // context carries the cancellation, so navigating away stops it.
 func (a *AppManagement) PruneDanglingImages(ctx echo.Context) error {
 	result, err := service.PruneDanglingImages(ctx.Request().Context())
+	if held, refused := cleanupRefused(ctx, err); refused {
+		return held
+	}
 	if err != nil {
 		message := err.Error()
 		logger.Error("failed to prune dangling images", zap.Error(err))
@@ -35,6 +38,7 @@ func (a *AppManagement) PruneDanglingImages(ctx echo.Context) error {
 	}
 
 	logger.Info("pruned dangling images", zap.Int("count", result.Count), zap.Int64("bytes", result.Size))
+	service.RecordManualCleanup(service.CleanupRunOldVersions, result.Count, result.Size)
 
 	return ctx.JSON(http.StatusOK, codegen.DanglingImagesOK{Data: result})
 }

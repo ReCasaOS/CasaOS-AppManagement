@@ -37,10 +37,10 @@ func entryFor(entries []BackupEntry, p string) (BackupEntry, bool) {
 
 func TestAnUnknownFileOfTheBoxIsBackedUpAndAnExcludedOneSaysWhy(t *testing.T) {
 	fs := boxFS(map[string][]systemChild{
-		"/var/lib/casaos":         {{Name: "db"}, {Name: "conf"}, {Name: "apps"}, {Name: "fleet"}, {Name: "never-heard-of.json"}, {Name: "backups"}, {Name: "gateway"}, {Name: "files"}, {Name: "git_apps"}},
+		"/var/lib/casaos":          {{Name: "db"}, {Name: "conf"}, {Name: "apps"}, {Name: "fleet"}, {Name: "never-heard-of.json"}, {Name: "backups"}, {Name: "gateway"}, {Name: "files"}, {Name: "git_apps"}},
 		"/var/lib/casaos/git_apps": {{Name: "app.key"}, {Name: "work"}},
-		"/var/lib/casaos/backups": {{Name: "schedules.json"}, {Name: "restic"}, {Name: "sync.json"}},
-		"/var/lib/casaos/gateway": {{Name: "guard-state.json"}, {Name: "routes.json"}},
+		"/var/lib/casaos/backups":  {{Name: "schedules.json"}, {Name: "restic"}, {Name: "sync.json"}},
+		"/var/lib/casaos/gateway":  {{Name: "guard-state.json"}, {Name: "routes.json"}},
 	}, nil)
 
 	entries, err := SystemBackupInventory(fs)

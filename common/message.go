@@ -77,6 +77,12 @@ var (
 		Description: utils.Ptr("exit code of the container's main process, as Docker reports it"),
 		Example:     utils.Ptr("1"),
 	}
+
+	PropertyTypeAutoRestartCount = message_bus.PropertyType{
+		Name:        "auto-restart:count",
+		Description: utils.Ptr("which of the app's automatic restarts within six hours this is: 1, 2 or 3"),
+		Example:     utils.Ptr("1"),
+	}
 )
 
 // image properties
@@ -147,6 +153,61 @@ var (
 		Name:        "app:updated",
 		Description: utils.Ptr("true if the app now runs what the update installed"),
 	}
+
+	PropertyTypeAppUpdateBlockedImages = message_bus.PropertyType{
+		Name:        "app:update-blocked-images",
+		Description: utils.Ptr("the images a blocked update stopped on, as JSON [{service, image, repo_digests, id, current, candidate, added}]"),
+	}
+)
+
+// What the box did by itself, for the alerts (CasaOS#170): the night's automatic updates,
+// newer versions of images pinned to one, the weekly cleanup.
+var (
+	PropertyTypeAutoUpdateUpdated = message_bus.PropertyType{
+		Name:        "auto-update:updated",
+		Description: utils.Ptr("the apps the night updated, by name, comma-separated"),
+	}
+	PropertyTypeAutoUpdateFailed = message_bus.PropertyType{
+		Name:        "auto-update:failed",
+		Description: utils.Ptr("the apps whose update failed that night, by name, comma-separated; each runs the version it had"),
+	}
+	PropertyTypeAutoUpdateBlocked = message_bus.PropertyType{
+		Name:        "auto-update:blocked",
+		Description: utils.Ptr("the apps whose update the night undid because its new image carries more critical vulnerabilities, by name, comma-separated; each runs the version it had"),
+	}
+	PropertyTypeNewerTags = message_bus.PropertyType{
+		Name:        "newer-tags:found",
+		Description: utils.Ptr("the newer versions found since the last time they were told, as JSON [{app, image, current, tag, level}]"),
+	}
+	PropertyTypeCleanupCount = message_bus.PropertyType{
+		Name:        "cleanup:count",
+		Description: utils.Ptr("how many old versions of images the cleanup removed"),
+	}
+	PropertyTypeCleanupSize = message_bus.PropertyType{
+		Name:        "cleanup:size",
+		Description: utils.Ptr("the bytes the cleanup freed"),
+	}
+
+	EventTypeAutoUpdateNightEnd = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "auto-update:night-end",
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeAutoUpdateUpdated, PropertyTypeAutoUpdateFailed, PropertyTypeAutoUpdateBlocked},
+	}
+	EventTypeNewerTagsFound = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "newer-tags:found",
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeNewerTags},
+	}
+	EventTypeCleanupEnd = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "cleanup:end",
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeCleanupCount, PropertyTypeCleanupSize},
+	}
+	EventTypeCleanupError = message_bus.EventType{
+		SourceID:         AppManagementServiceName,
+		Name:             "cleanup:error",
+		PropertyTypeList: []message_bus.PropertyType{PropertyTypeMessage},
+	}
 )
 
 var EventTypes = []message_bus.EventType{
@@ -156,7 +217,7 @@ var EventTypes = []message_bus.EventType{
 	// app
 	EventTypeAppInstallBegin, EventTypeAppInstallProgress, EventTypeAppInstallEnd, EventTypeAppInstallError,
 	EventTypeAppUninstallBegin, EventTypeAppUninstallEnd, EventTypeAppUninstallError,
-	EventTypeAppUpdateBegin, EventTypeAppUpdateEnd, EventTypeAppUpdateError,
+	EventTypeAppUpdateBegin, EventTypeAppUpdateEnd, EventTypeAppUpdateError, EventTypeAppUpdateBlocked,
 	EventTypeBackupBegin, EventTypeBackupProgress, EventTypeBackupEnd, EventTypeBackupError, EventTypeBackupCheckError,
 	EventTypeAppApplyChangesBegin, EventTypeAppApplyChangesEnd, EventTypeAppApplyChangesError,
 	EventTypeAppStartBegin, EventTypeAppStartEnd, EventTypeAppStartError,
@@ -165,6 +226,8 @@ var EventTypes = []message_bus.EventType{
 	EventTypeAppGitBuildBegin, EventTypeAppGitBuildProgress, EventTypeAppGitBuildEnd, EventTypeAppGitBuildError,
 	EventTypeAppGitDeployEnd, EventTypeAppGitDeployError,
 	EventTypeAppContainerDied, EventTypeAppContainerUnhealthy, EventTypeAppContainerRestarting, EventTypeAppContainerHealthy,
+	EventTypeAppContainerAutoRestarted, EventTypeAppContainerAutoRestartStopped,
+	EventTypeAutoUpdateNightEnd, EventTypeNewerTagsFound, EventTypeCleanupEnd, EventTypeCleanupError,
 
 	// resources
 	EventTypeResourceAlertFiring, EventTypeResourceAlertResolved,
@@ -294,6 +357,16 @@ var (
 		Name:     "app:update-error",
 		PropertyTypeList: []message_bus.PropertyType{
 			PropertyTypeMessage,
+		},
+	}
+
+	// published instead of app:update-error when the new images were worse and the update
+	// was undone: the app runs what it ran before, which is not a failure
+	EventTypeAppUpdateBlocked = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:update-blocked",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeMessage, PropertyTypeAppUpdateBlockedImages,
 		},
 	}
 
@@ -535,6 +608,28 @@ var (
 	EventTypeAppContainerHealthy = message_bus.EventType{
 		SourceID: AppManagementServiceName,
 		Name:     "app:container-healthy",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeContainerName,
+		},
+	}
+
+	// a container unhealthy for five minutes that the watch restarted
+	EventTypeAppContainerAutoRestarted = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:container-auto-restarted",
+		PropertyTypeList: []message_bus.PropertyType{
+			PropertyTypeAppName,
+			PropertyTypeContainerName,
+			PropertyTypeAutoRestartCount,
+		},
+	}
+
+	// a container unhealthy for five minutes that the watch leaves alone: the app was
+	// restarted three times within six hours already
+	EventTypeAppContainerAutoRestartStopped = message_bus.EventType{
+		SourceID: AppManagementServiceName,
+		Name:     "app:container-auto-restart-stopped",
 		PropertyTypeList: []message_bus.PropertyType{
 			PropertyTypeAppName,
 			PropertyTypeContainerName,

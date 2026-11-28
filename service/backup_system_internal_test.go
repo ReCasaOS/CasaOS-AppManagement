@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -44,8 +45,8 @@ func TestAbsentPartsOfTheBoxAreSkippedWithAReason(t *testing.T) {
 	if len(manifest.Operations) != 3 {
 		t.Fatalf("three present: %+v", manifest.Operations)
 	}
-	if len(manifest.Skipped) != 5 || !strings.Contains(manifest.Skipped[0].Skip, "not present") {
-		t.Fatalf("five absent, with the reason: %+v", manifest.Skipped)
+	if len(manifest.Skipped) != 6 || !strings.Contains(manifest.Skipped[0].Skip, "not present") {
+		t.Fatalf("six absent, with the reason: %+v", manifest.Skipped)
 	}
 	if last := manifest.Skipped[len(manifest.Skipped)-1]; last.Path != VerificationSchedulePath {
 		t.Fatalf("the verification schedule is part of the box: %+v", manifest.Skipped)
@@ -54,6 +55,188 @@ func TestAbsentPartsOfTheBoxAreSkippedWithAReason(t *testing.T) {
 		if op.Kind != BackupKindBind || !strings.HasPrefix(op.Destination, "binds/") {
 			t.Fatalf("planned like a bind mount: %+v", op)
 		}
+	}
+}
+
+// The dashboard's API widgets, with the keys they call their APIs with, are part
+// of the box, and on the fixed list: the core keeps the file where it is wherever
+// the data folder goes. So it is one entry though it is a child of the data
+// folder too, never left out for its size, and a restore may put it back. A box
+// that has none has no such file, and that is a skip. The verification schedule
+// stays last, which the tests around this one count on.
+func TestSystemBackupHoldsTheAPIWidgets(t *testing.T) {
+	atTheDefaultDataRoot(t)
+
+	const widgets = "/var/lib/casaos/api_widgets.json"
+
+	paths := systemBackupPaths()
+	if !slices.Contains(paths, widgets) {
+		t.Fatalf("the API widgets are part of the box: %v", paths)
+	}
+	if paths[len(paths)-1] != VerificationSchedulePath {
+		t.Fatalf("the verification schedule stays last: %v", paths)
+	}
+	if !systemRestorable(widgets) {
+		t.Fatal("a restore may put the API widgets back")
+	}
+
+	fs := boxFS(map[string][]systemChild{systemDataRoot: {{Name: "api_widgets.json"}}}, map[string]int64{widgets: systemEntryCap + 1})
+	entries, err := SystemBackupInventory(fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, e := range entries {
+		if e.Path == widgets {
+			found++
+			if e.Skip != "" {
+				t.Fatalf("on the fixed list, so never left out for its size: %+v", e)
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatalf("one entry, not one for the list and one for the data folder: %d in %+v", found, entries)
+	}
+
+	fs = boxFS(map[string][]systemChild{systemDataRoot: {}}, nil)
+	fs.Exists = func(p string) bool { return p != widgets }
+	if entries, err = SystemBackupInventory(fs); err != nil {
+		t.Fatal(err)
+	}
+	manifest := PlanBackup(SystemBackupName, entries, nil)
+	if len(manifest.Skipped) != 1 || manifest.Skipped[0].Path != widgets || !strings.Contains(manifest.Skipped[0].Skip, "not present") {
+		t.Fatalf("a box with no widget skips the file and says so: %+v", manifest.Skipped)
+	}
+	for _, op := range manifest.Operations {
+		if op.Source == widgets {
+			t.Fatalf("nothing is planned for a file that is not there: %+v", op)
+		}
+	}
+}
+
+// the real one, kept before logInTempDir puts a restore's tightening out of the
+// host's way
+var tightenModes = tightenRestored
+
+// tightenRestoredUnder points the modes a restore takes off at a folder of the
+// test's, where writingRestorer writes, so nothing under /root is touched.
+func tightenRestoredUnder(t *testing.T, root string) {
+	t.Helper()
+
+	was := tightenRestored
+	tightenRestored = func(p string) error { return tightenModes(filepath.Join(root, p)) }
+	t.Cleanup(func() { tightenRestored = was })
+}
+
+// writingRestorer puts each file back the way a destination that keeps no modes
+// does: readable by everyone.
+type writingRestorer struct {
+	fakeRestorer
+	root string
+}
+
+func (w *writingRestorer) RestoreFile(ctx context.Context, destination, remotePath, hostPath string) error {
+	local := filepath.Join(w.root, hostPath)
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(local, []byte("{}"), 0o644); err != nil {
+		return err
+	}
+	// whatever the umask of the test is
+	if err := os.Chmod(local, 0o644); err != nil {
+		return err
+	}
+
+	return w.fakeRestorer.RestoreFile(ctx, destination, remotePath, hostPath)
+}
+
+// a backup of the box's fixed list in which every part is a file
+func boxBackupOfFiles(t *testing.T) map[string][]byte {
+	t.Helper()
+
+	manifest := PlanBackup(SystemBackupName, systemLegacyEntries(func(string) bool { return true }), nil)
+	for i := range manifest.Operations {
+		manifest.Operations[i].Directory = false
+	}
+	raw, err := stdjson.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return map[string][]byte{path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw}
+}
+
+// The files that hold keys come back readable by root only, whatever mode the
+// destination wrote them with and wherever the data folder is (the test's own
+// here, so neither file is under it); the others keep the mode they came back with.
+func TestSystemBackupRestoreLeavesTheSecretFilesToRootOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("modes do not apply")
+	}
+	logInTempDir(t)
+	root := t.TempDir()
+	tightenRestoredUnder(t, root)
+
+	restorer := &writingRestorer{fakeRestorer: fakeRestorer{files: boxBackupOfFiles(t)}, root: root}
+	if _, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, want := range map[string]os.FileMode{
+		"/root/.config/rclone/rclone.conf": 0o600,
+		"/var/lib/casaos/api_widgets.json": 0o600,
+		"/etc/samba/smb.casa.conf":         0o644,
+	} {
+		info, err := os.Stat(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("%s came back %o, want %o", name, info.Mode().Perm(), want)
+		}
+	}
+}
+
+// A secret file whose mode could not be set is not reported as restored: the
+// restore says so.
+func TestSystemBackupRestoreSaysWhenASecretFileStaysReadable(t *testing.T) {
+	logInTempDir(t)
+	// logInTempDir puts the real one back
+	tightenRestored = func(p string) error {
+		if p == "/var/lib/casaos/api_widgets.json" {
+			return errors.New("read-only file system")
+		}
+
+		return nil
+	}
+
+	restorer := &fakeRestorer{files: boxBackupOfFiles(t)}
+	report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
+	if err == nil || !strings.Contains(err.Error(), "/var/lib/casaos/api_widgets.json") || !strings.Contains(err.Error(), "read-only file system") {
+		t.Fatalf("want the failure, with the file and the reason, got %v", err)
+	}
+	for _, op := range report.Restored {
+		if op.Source == "/var/lib/casaos/api_widgets.json" {
+			t.Fatalf("reported as restored all the same: %+v", op)
+		}
+	}
+}
+
+// The data folder may sit on a disk that keeps no modes: what could not be
+// tightened there is written down, and the restore goes on.
+func TestARestoreGoesOnWhenATargetOfTheDataFolderCouldNotBeTightened(t *testing.T) {
+	logInTempDir(t)
+	atTheDefaultDataRoot(t)
+	// logInTempDir puts the real one back
+	tightenRestored = func(string) error { return errors.New("operation not permitted") }
+
+	raw := manifestOf("/var/lib/casaos/tls", "/var/lib/casaos/fleet")
+	restorer := &fakeRestorer{files: map[string][]byte{path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw}}
+
+	report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
+	if err != nil || len(report.Restored) != 2 {
+		t.Fatalf("both back, and no failure: %v %+v", err, report)
 	}
 }
 
@@ -163,7 +346,7 @@ func TestABackupOfAnAppIsNotPouredIntoTheBox(t *testing.T) {
 func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *testing.T) {
 	logInTempDir(t)
 
-	// taken on a box with no Samba config: seven parts, numbered 1..7
+	// taken on a box with no Samba config: eight parts, numbered 1..8
 	present := func(p string) bool { return p != "/etc/samba/smb.casa.conf" }
 	manifest := PlanBackup(SystemBackupName, systemLegacyEntries(present), nil)
 	for i := range manifest.Operations {
@@ -178,8 +361,8 @@ func TestEachPartOfTheBoxGoesBackToItsOwnPathWhateverNumberItLandedUnder(t *test
 		t.Fatal(err)
 	}
 
-	if len(report.Restored) != 7 || len(report.Missing) != 0 {
-		t.Fatalf("seven parts back, nothing missing: %+v", report)
+	if len(report.Restored) != 8 || len(report.Missing) != 0 {
+		t.Fatalf("eight parts back, nothing missing: %+v", report)
 	}
 	for _, call := range restorer.restored {
 		// binds/2 in this backup is the database folder, and it must land there
@@ -213,8 +396,8 @@ func TestARestoreRefusesWhatIsNotTheBox(t *testing.T) {
 		"/var/lib/casaos/backups/schedules.json": true, "/var/lib/casaos/backups/sync.json": true,
 		"/var/lib/casaos/gateway/routes.json": true, "/root/.config/rclone/rclone.conf": true,
 		"/var/lib/casaos/git_apps/app.key": true,
-		"/etc/samba/smb.casa.conf": true,
-		"/var/lib/casaos":          false, "/var/lib/casaos/backups": false, "/var/lib/casaos/gateway": false,
+		"/etc/samba/smb.casa.conf":         true,
+		"/var/lib/casaos":                  false, "/var/lib/casaos/backups": false, "/var/lib/casaos/gateway": false,
 		"/var/lib/casaos/gateway/guard-state.json": false, "/var/lib/casaos/apps": false, "/var/lib/casaos/apps/x": false,
 		"/var/lib/casaos/files": false, "/var/lib/casaos/files/x": false,
 		"/var/lib/casaos/git_apps": false, "/var/lib/casaos/git_apps/work": false, "/var/lib/casaos/git_apps/work/x": false,

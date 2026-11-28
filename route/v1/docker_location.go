@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/ReCasaOS/CasaOS-AppManagement/pkg/dockerlocation"
+	"github.com/ReCasaOS/CasaOS-AppManagement/service"
 	v2 "github.com/ReCasaOS/CasaOS-AppManagement/route/v2"
 	modelCommon "github.com/ReCasaOS/CasaOS-Common/model"
 	"github.com/ReCasaOS/CasaOS-Common/utils/common_err"
@@ -25,6 +26,11 @@ var (
 func dockerLocation() *dockerlocation.Mover {
 	dockerLocationOnce.Do(func() { dockerLocationMover = dockerlocation.New(dockerLocationStatePath) })
 	return dockerLocationMover
+}
+
+// A cleanup deletes nothing while Docker's data is being moved: see service.DockerMoveBusy.
+func init() {
+	service.DockerMoveBusy = func() bool { return dockerLocation().State().Busy() }
 }
 
 // RecoverDockerLocation finishes or undoes, in the background, a move of

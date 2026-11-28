@@ -72,6 +72,12 @@ func (a *AppManagement) GetAppGrid(ctx echo.Context) error {
 			}
 		}
 
+		if composeApp := (*service.ComposeApp)(app.Compose); composeApp != nil {
+			if main := composeApp.App(composeApp.MainServiceName()); main != nil {
+				item.Version, item.ReleaseNotes = appVersionOf(containersByApp[composeApp.Name][main.Name], main.Image)
+			}
+		}
+
 		if item.Name != nil && slices.Contains(dashboardHidden, *item.Name) {
 			item.HiddenOnDashboard = lo.ToPtr(true)
 		}
@@ -180,6 +186,8 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 		// The caller has already worked the status out from every container of every
 		// service; it only has to survive the trip.
 		Status: composeAppWithStoreInfo.Status,
+		// the worst health check among its running containers, absent when none has one
+		Health: composeAppWithStoreInfo.Health,
 
 		// Read from the cache a check pass filled, so this stays a map lookup. Nil
 		// until something has checked, which the dashboard renders as no badge
@@ -188,6 +196,9 @@ func WebAppGridItemAdapterV2(composeAppWithStoreInfo *codegen.ComposeAppWithStor
 
 		// from the git app's state file alone, absent for any other app
 		Git: service.GitAppGrid(composeApp.Name),
+
+		// from the last daily read of the registries' tags, absent when there is none
+		NewerTags: newerTagsOf(composeApp),
 	}
 
 	composeAppStoreInfo := composeAppWithStoreInfo.StoreInfo
@@ -321,4 +332,18 @@ func (c composeLoadErrorCache) of(project, configFiles string) *string {
 	c[project] = reason
 
 	return reason
+}
+
+// newerTagsOf is nil when the last pass found nothing for the app's images as they are
+// now, so the field is left out.
+func newerTagsOf(app *service.ComposeApp) *[]codegen.NewerTag {
+	images := map[string]string{}
+	for name, s := range app.Services {
+		images[name] = s.Image
+	}
+	if found := service.NewerTagsOf(app.Name, images); len(found) > 0 {
+		return &found
+	}
+
+	return nil
 }

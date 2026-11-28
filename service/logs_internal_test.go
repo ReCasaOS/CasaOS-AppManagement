@@ -428,3 +428,50 @@ func TestApplyLogsSettingsValidatesAndPersists(t *testing.T) {
 	assert.Assert(t, ApplyLogsSettings(20, 1024, false) != nil)
 	assert.Equal(t, GetLogsSettings(), got)
 }
+
+// The journal row of a restart the box did names the container: its id and service when it
+// is followed, its name otherwise. healNow writes none itself: a failed restart says nothing.
+func TestTheJournalNamesTheRestartedContainer(t *testing.T) {
+	s := openLogs(t)
+	done := make(chan struct{})
+	close(done)
+	followMu.Lock()
+	followers["0123456789ab"] = &follower{cancel: func() {}, done: done, app: "jarvis", service: "web", name: "jarvis-web-1"}
+	followMu.Unlock()
+	t.Cleanup(func() {
+		followMu.Lock()
+		delete(followers, "0123456789ab")
+		followMu.Unlock()
+	})
+
+	w := newDockerWatch()
+	sick(w, time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC))
+	sickOne(w, "alfred", "alfred-web-1", time.Date(2026, 11, 26, 3, 0, 0, 0, time.UTC))
+	at := time.Date(2026, 11, 26, 3, 5, 0, 0, time.UTC)
+	var out []published
+	out = append(out, w.healNow(at, true, notHeld, func(string) error { return nil })...)
+	out = append(out, w.healNow(at.Add(time.Minute), true, notHeld, func(string) error { return nil })...)
+	got, err := s.Events(logstore.EventQuery{})
+	assert.NilError(t, err)
+	assert.Equal(t, len(got), 0)
+
+	for _, p := range out {
+		logsOnPublished(p)
+	}
+	got, err = s.Events(logstore.EventQuery{})
+	assert.NilError(t, err)
+	assert.Equal(t, len(got), 2)
+	byApp := map[string]logstore.Event{}
+	for _, e := range got {
+		byApp[e.App] = e
+	}
+	j := byApp["jarvis"]
+	assert.Equal(t, j.Kind, "auto-restarted")
+	assert.Equal(t, j.Service, "web")
+	assert.Equal(t, j.Container, "0123456789ab")
+	assert.Equal(t, j.Detail, "")
+	a := byApp["alfred"]
+	assert.Equal(t, a.Kind, "auto-restarted")
+	assert.Equal(t, a.Service, "")
+	assert.Equal(t, a.Container, "alfred-web-1")
+}

@@ -3,6 +3,7 @@ package logstore
 import (
 	"os"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -102,4 +103,8 @@ func TestReadEventsSkipsADayFileGoneSinceTheListing(t *testing.T) {
 	got, err := ReadEvents(root, EventQuery{})
 	assert.NilError(t, err)
 	assert.Equal(t, len(got), 3)
+}
+
+func TestAutoRestartedIsAJournalKind(t *testing.T) {
+	assert.Assert(t, slices.Contains(Kinds, "auto-restarted"))
 }

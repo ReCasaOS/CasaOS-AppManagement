@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -105,6 +106,8 @@ func PlanUpdateAll(apps map[string]*ComposeApp, available func(*ComposeApp) bool
 var updateAll struct {
 	sync.Mutex
 	run *codegen.ComposeAppUpdateRun
+	// set while the nightly update of the apps runs (app_auto_update.go)
+	night bool
 }
 
 // ForgetFinishedUpdateAllRun forgets the last run once it is over, as a restart of this
@@ -143,12 +146,15 @@ func copyOfUpdateAllRun() *codegen.ComposeAppUpdateRun {
 
 // StartUpdateAll runs the apps named, in that order, one after another, and returns
 // the run as it starts. `update` does one app and says what became of it.
-func StartUpdateAll(ids []string, update func(ctx context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string)) (*codegen.ComposeAppUpdateRun, error) {
+func StartUpdateAll(ids []string, update func(ctx context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage)) (*codegen.ComposeAppUpdateRun, error) {
 	updateAll.Lock()
 	defer updateAll.Unlock()
 
 	if updateAll.run != nil && updateAll.run.FinishedAt == nil {
 		return nil, ErrUpdateAllRunning
+	}
+	if updateAll.night {
+		return nil, fmt.Errorf("%w: the nightly update of the apps is running", ErrUpdateAllRunning)
 	}
 
 	run := &codegen.ComposeAppUpdateRun{StartedAt: time.Now(), Apps: make([]codegen.ComposeAppUpdateRunApp, 0, len(ids))}
@@ -162,11 +168,11 @@ func StartUpdateAll(ids []string, update func(ctx context.Context, id string) (c
 	return copyOfUpdateAllRun(), nil
 }
 
-func runUpdateAll(run *codegen.ComposeAppUpdateRun, update func(ctx context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string)) {
+func runUpdateAll(run *codegen.ComposeAppUpdateRun, update func(ctx context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage)) {
 	for i := range run.Apps {
-		setUpdateAllState(run, i, codegen.ComposeAppUpdateRunAppStateUpdating, "")
-		state, message := update(context.Background(), run.Apps[i].Id)
-		setUpdateAllState(run, i, state, message)
+		setUpdateAllState(run, i, codegen.ComposeAppUpdateRunAppStateUpdating, "", nil)
+		state, message, blocked := update(context.Background(), run.Apps[i].Id)
+		setUpdateAllState(run, i, state, message, blocked)
 	}
 
 	updateAll.Lock()
@@ -175,7 +181,7 @@ func runUpdateAll(run *codegen.ComposeAppUpdateRun, update func(ctx context.Cont
 	run.FinishedAt = &now
 }
 
-func setUpdateAllState(run *codegen.ComposeAppUpdateRun, i int, state codegen.ComposeAppUpdateRunAppState, message string) {
+func setUpdateAllState(run *codegen.ComposeAppUpdateRun, i int, state codegen.ComposeAppUpdateRunAppState, message string, blocked []BlockedImage) {
 	updateAll.Lock()
 	defer updateAll.Unlock()
 
@@ -185,20 +191,67 @@ func setUpdateAllState(run *codegen.ComposeAppUpdateRun, i int, state codegen.Co
 	} else {
 		run.Apps[i].Message = &message
 	}
+	run.Apps[i].Blocked = blockedView(blocked)
+}
+
+// blockedView is the images a block stopped on, as the API says them; nil when none.
+func blockedView(blocked []BlockedImage) *[]codegen.BlockedImage {
+	if len(blocked) == 0 {
+		return nil
+	}
+	images := make([]codegen.BlockedImage, 0, len(blocked))
+	for _, b := range blocked {
+		image := codegen.BlockedImage{
+			Service: b.Service, Image: b.Image, Id: b.ID,
+			Current: b.Current, Candidate: b.Candidate, Added: b.Added,
+		}
+		if len(b.RepoDigests) > 0 {
+			image.RepoDigests = &b.RepoDigests
+		}
+		images = append(images, image)
+	}
+
+	return &images
 }
 
 // UpdateOneForRun is what the run does to one app: what the update button does,
 // the check its name promises included, waited for; and the reason, when nothing
 // happens.
-func UpdateOneForRun(ctx context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string) {
+// UpdateAvailableForRun is the check UpdateOneForRun starts with, alone: whether the app
+// has an update, from the registries asked again, and the reason when it has none or
+// the check failed.
+func UpdateAvailableForRun(ctx context.Context, id string) (bool, codegen.ComposeAppUpdateRunAppState, string) {
 	apps, err := MyService.Compose().List(ctx)
 	if err != nil {
-		return codegen.ComposeAppUpdateRunAppStateFailed, err.Error()
+		return false, codegen.ComposeAppUpdateRunAppStateFailed, err.Error()
 	}
 
 	app, ok := apps[id]
 	if !ok {
-		return codegen.ComposeAppUpdateRunAppStateFailed, "not installed"
+		return false, codegen.ComposeAppUpdateRunAppStateFailed, "not installed"
+	}
+
+	if err := CheckImageUpdatesForApp(ctx, app); err != nil {
+		logger.Info("could not check images", zap.Error(err), zap.String("appID", id))
+	}
+	MyService.AppStoreManagement().ForgetUpgradable(id)
+
+	if available, reason := MyService.AppStoreManagement().UpdateAvailability(app); !available {
+		return false, codegen.ComposeAppUpdateRunAppStateCurrent, reason
+	}
+
+	return true, "", ""
+}
+
+func UpdateOneForRun(ctx context.Context, id string) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
+	apps, err := MyService.Compose().List(ctx)
+	if err != nil {
+		return codegen.ComposeAppUpdateRunAppStateFailed, err.Error(), nil
+	}
+
+	app, ok := apps[id]
+	if !ok {
+		return codegen.ComposeAppUpdateRunAppStateFailed, "not installed", nil
 	}
 
 	if err := CheckImageUpdatesForApp(ctx, app); err != nil {
@@ -208,13 +261,27 @@ func UpdateOneForRun(ctx context.Context, id string) (codegen.ComposeAppUpdateRu
 	MyService.AppStoreManagement().ForgetUpgradable(id)
 
 	if available, reason := MyService.AppStoreManagement().UpdateAvailability(app); !available {
-		return codegen.ComposeAppUpdateRunAppStateCurrent, reason
+		return codegen.ComposeAppUpdateRunAppStateCurrent, reason, nil
 	}
 
 	// the events of this update name the app, as the update button's do
-	if err := app.UpdateNow(common.WithProperties(ctx, map[string]string{})); err != nil {
-		return codegen.ComposeAppUpdateRunAppStateFailed, err.Error()
+	return updateOutcome(app.UpdateNow(common.WithProperties(ctx, map[string]string{})))
+}
+
+// updateOutcome is what the run says of an update that ended with err. A busy app and a blocked update are
+// not failures: the app runs what it ran before, and the run names the images it stopped on.
+func updateOutcome(err error) (codegen.ComposeAppUpdateRunAppState, string, []BlockedImage) {
+	// held by something else -- an automatic restart, a backup: not tried, so not a failure
+	if errors.As(err, new(ErrAppBusy)) {
+		return codegen.ComposeAppUpdateRunAppStateQueued, "busy: tried again at the next run", nil
+	}
+	var blocked *UpdateBlockedError
+	if errors.As(err, &blocked) {
+		return codegen.ComposeAppUpdateRunAppStateBlocked, blocked.Error(), blocked.Images
+	}
+	if err != nil {
+		return codegen.ComposeAppUpdateRunAppStateFailed, err.Error(), nil
 	}
 
-	return codegen.ComposeAppUpdateRunAppStateUpdated, ""
+	return codegen.ComposeAppUpdateRunAppStateUpdated, "", nil
 }

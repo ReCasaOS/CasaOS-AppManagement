@@ -19,6 +19,12 @@ func logInTempDir(t *testing.T) {
 	wasRoot := systemDataRoot
 	systemDataRoot = t.TempDir()
 	t.Cleanup(func() { systemDataRoot = wasRoot })
+
+	// nor does a restore take modes off the host's files: a test that looks at
+	// them points this at its own folder (tightenRestoredUnder)
+	wasTighten := tightenRestored
+	tightenRestored = func(string) error { return nil }
+	t.Cleanup(func() { tightenRestored = wasTighten })
 }
 
 func run(app string, when time.Time, failure string) BackupRunRecord {
