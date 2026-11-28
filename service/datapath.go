@@ -16,6 +16,7 @@ func ApplyDataPath(root string) string {
 	if root == "" {
 		root = constants.DefaultDataPath
 	}
+	systemDataRoot = root
 	StatsDir = filepath.Join(root, "stats", "app_management")
 	gitAppsDir = filepath.Join(root, "git_apps")
 	BackupLogPath = filepath.Join(root, "backups", "runs.json")

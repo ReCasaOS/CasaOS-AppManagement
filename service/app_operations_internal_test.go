@@ -283,7 +283,6 @@ func TestABackupIsListedWhileItCopiesHeldStillOrNot(t *testing.T) {
 // the name the box's backups are filed under.
 func TestTheBoxsBackupAndRestoreAreListedWhileTheyCopy(t *testing.T) {
 	logInTempDir(t)
-	chmodRestoredUnder(t, "")
 
 	copier := &watchingCopier{}
 	_, err := RunSystemBackup(context.Background(), copier, &fakeUnits{}, SystemBackupOptions{
@@ -292,7 +291,7 @@ func TestTheBoxsBackupAndRestoreAreListedWhileTheyCopy(t *testing.T) {
 	assert.NilError(t, err)
 	listedThroughout(t, copier.seen, AppOperation{SystemBackupName, "backup"})
 
-	raw, err := stdjson.Marshal(PlanBackup(SystemBackupName, SystemBackupInventory(func(string) bool { return true }), nil))
+	raw, err := stdjson.Marshal(PlanBackup(SystemBackupName, systemLegacyEntries(func(string) bool { return true }), nil))
 	assert.NilError(t, err)
 	restorer := &watchingRestorer{fakeRestorer: fakeRestorer{files: map[string][]byte{
 		path.Join(RootFor(SystemBackupName, restoreStamp), ManifestFileName): raw,

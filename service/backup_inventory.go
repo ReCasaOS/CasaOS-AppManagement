@@ -47,6 +47,8 @@ type BackupEntry struct {
 	Volume string `json:"volume,omitempty"`
 	// Skip is why this is not going in the backup. Empty means it is.
 	Skip string `json:"skip,omitempty"`
+	// Class is what the box's own entries are for: "config", "identity" or "machine"
+	Class string `json:"class,omitempty"`
 }
 
 // IsIncluded reports whether this entry is part of the backup.

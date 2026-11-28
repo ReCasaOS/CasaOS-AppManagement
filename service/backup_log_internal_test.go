@@ -14,6 +14,17 @@ func logInTempDir(t *testing.T) {
 	was := BackupLogPath
 	BackupLogPath = filepath.Join(t.TempDir(), "runs.json")
 	t.Cleanup(func() { BackupLogPath = was })
+
+	// the box backup walks the data folder: an empty one of its own, not the host's
+	wasRoot := systemDataRoot
+	systemDataRoot = t.TempDir()
+	t.Cleanup(func() { systemDataRoot = wasRoot })
+
+	// nor does a restore take modes off the host's files: a test that looks at
+	// them points this at its own folder (tightenRestoredUnder)
+	wasTighten := tightenRestored
+	tightenRestored = func(string) error { return nil }
+	t.Cleanup(func() { tightenRestored = wasTighten })
 }
 
 func run(app string, when time.Time, failure string) BackupRunRecord {
