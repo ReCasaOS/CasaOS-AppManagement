@@ -138,9 +138,14 @@ func tightened(target string) bool {
 	return slices.Contains(systemSecretFiles, target) || strings.HasPrefix(target, path.Clean(systemDataRoot)+"/")
 }
 
-// tightenRestored takes the group and other permissions off p and all it holds,
-// links not followed. It goes on past a failure and returns the first.
+// tightenRestored takes the group and other permissions off p and all it holds.
+// p itself may be a link (root's rclone.conf kept elsewhere): the copy wrote
+// through it, so what it leads to is tightened. A link below p is not followed.
+// It goes on past a failure and returns the first.
 var tightenRestored = func(p string) error {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		p = resolved
+	}
 	var first error
 	_ = filepath.WalkDir(p, func(q string, d iofs.DirEntry, err error) error {
 		if err == nil && d.Type()&os.ModeSymlink == 0 {

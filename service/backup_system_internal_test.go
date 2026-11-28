@@ -199,27 +199,70 @@ func TestSystemBackupRestoreLeavesTheSecretFilesToRootOnly(t *testing.T) {
 }
 
 // A secret file whose mode could not be set is not reported as restored: the
-// restore says so.
+// restore says so. Also where the data folder is the default one and the file
+// lies under it: a secret file's rule comes before the data folder's.
 func TestSystemBackupRestoreSaysWhenASecretFileStaysReadable(t *testing.T) {
+	for name, place := range map[string]func(*testing.T){
+		"the data folder elsewhere":      func(*testing.T) {},
+		"the file under the data folder": atTheDefaultDataRoot,
+	} {
+		t.Run(name, func(t *testing.T) {
+			logInTempDir(t)
+			place(t)
+			// logInTempDir puts the real one back
+			tightenRestored = func(p string) error {
+				if p == "/var/lib/casaos/api_widgets.json" {
+					return errors.New("read-only file system")
+				}
+
+				return nil
+			}
+
+			restorer := &fakeRestorer{files: boxBackupOfFiles(t)}
+			report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
+			if err == nil || !strings.Contains(err.Error(), "/var/lib/casaos/api_widgets.json") || !strings.Contains(err.Error(), "read-only file system") {
+				t.Fatalf("want the failure, with the file and the reason, got %v", err)
+			}
+			for _, op := range report.Restored {
+				if op.Source == "/var/lib/casaos/api_widgets.json" {
+					t.Fatalf("reported as restored all the same: %+v", op)
+				}
+			}
+		})
+	}
+}
+
+// A copy that fails half-way may have left keys with default modes: what it was
+// writing is tightened all the same, and before any service starts again.
+func TestAHalfDoneCopyIsTightenedBeforeTheServicesStartAgain(t *testing.T) {
 	logInTempDir(t)
+	atTheDefaultDataRoot(t)
+	units := &fakeUnits{}
+	var tightened []string
 	// logInTempDir puts the real one back
 	tightenRestored = func(p string) error {
-		if p == "/var/lib/casaos/api_widgets.json" {
-			return errors.New("read-only file system")
+		if len(units.started) != 0 {
+			t.Errorf("%s was tightened after the services started again: %v", p, units.started)
 		}
+		tightened = append(tightened, p)
 
 		return nil
 	}
 
-	restorer := &fakeRestorer{files: boxBackupOfFiles(t)}
-	report, err := RestoreSystemBackup(context.Background(), restorer, &fakeUnits{}, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp})
-	if err == nil || !strings.Contains(err.Error(), "/var/lib/casaos/api_widgets.json") || !strings.Contains(err.Error(), "read-only file system") {
-		t.Fatalf("want the failure, with the file and the reason, got %v", err)
+	root := RootFor(SystemBackupName, restoreStamp)
+	restorer := &fakeRestorer{
+		files:  map[string][]byte{path.Join(root, ManifestFileName): manifestOf("/var/lib/casaos/fleet", "/var/lib/casaos/tls")},
+		failOn: path.Join(root, "binds/2"),
 	}
-	for _, op := range report.Restored {
-		if op.Source == "/var/lib/casaos/api_widgets.json" {
-			t.Fatalf("reported as restored all the same: %+v", op)
-		}
+
+	if _, err := RestoreSystemBackup(context.Background(), restorer, units, SystemRestoreOptions{Destination: "offsite", Stamp: restoreStamp}); err == nil {
+		t.Fatal("the copy failed and the restore says nothing")
+	}
+	if strings.Join(tightened, ",") != "/var/lib/casaos/fleet,/var/lib/casaos/tls" {
+		t.Fatalf("tightened %v: want the one that came back and the one that failed", tightened)
+	}
+	if len(units.started) != 3 {
+		t.Fatalf("the services start again all the same: %v", units.started)
 	}
 }
 
@@ -591,5 +634,38 @@ func TestTightenRestoredTakesGroupAndOtherOffFilesAndFoldersAndLeavesLinksAlone(
 		if info.Mode().Perm() != want {
 			t.Errorf("%s: %v, want %v", p, info.Mode().Perm(), want)
 		}
+	}
+}
+
+// Root's rclone.conf may be a link to a file kept elsewhere: the copy wrote
+// through it, so the file it leads to is the one kept to root.
+func TestTightenRestoredTightensWhatATargetThatIsALinkLeadsTo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("modes do not apply")
+	}
+	dir := t.TempDir()
+	kept := filepath.Join(dir, "kept-elsewhere.conf")
+	if err := os.WriteFile(kept, []byte("k"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// whatever the umask of the test is
+	if err := os.Chmod(kept, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "rclone.conf")
+	if err := os.Symlink(kept, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tightenModes(link); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("%v, want 600", info.Mode().Perm())
 	}
 }

@@ -11,7 +11,10 @@ import (
 func TestApplyDataPath(t *testing.T) {
 	prevStats, prevGit, prevLog, prevHold, prevSched, prevImg := StatsDir, gitAppsDir, BackupLogPath, BackupHoldPath, BackupSchedulePath, imageUpdateStatePath
 	prevKey, prevCache, prevChecks, prevExclusions, prevVisibility, prevHidden := restic.KeyDir, restic.CacheDir, ResticCheckPath, BackupExclusionsPath, VisibilityPath, DashboardHiddenPath
+	prevRoot := systemDataRoot
 	t.Cleanup(func() {
+		// the box backup's tests count on the data folder being where it was
+		systemDataRoot = prevRoot
 		StatsDir, gitAppsDir, BackupLogPath, BackupHoldPath, BackupSchedulePath, imageUpdateStatePath = prevStats, prevGit, prevLog, prevHold, prevSched, prevImg
 		restic.KeyDir, restic.CacheDir, ResticCheckPath, BackupExclusionsPath, VisibilityPath, DashboardHiddenPath = prevKey, prevCache, prevChecks, prevExclusions, prevVisibility, prevHidden
 	})
