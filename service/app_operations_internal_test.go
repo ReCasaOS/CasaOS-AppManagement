@@ -283,6 +283,7 @@ func TestABackupIsListedWhileItCopiesHeldStillOrNot(t *testing.T) {
 // the name the box's backups are filed under.
 func TestTheBoxsBackupAndRestoreAreListedWhileTheyCopy(t *testing.T) {
 	logInTempDir(t)
+	chmodRestoredUnder(t, "")
 
 	copier := &watchingCopier{}
 	_, err := RunSystemBackup(context.Background(), copier, &fakeUnits{}, SystemBackupOptions{

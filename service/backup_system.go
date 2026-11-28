@@ -32,8 +32,23 @@ var systemPaths = []string{
 	"/etc/samba/smb.casa.conf",
 	"/var/lib/casaos/db",
 	"/var/lib/casaos/conf",
-	"/root/.config/rclone/rclone.conf",
+	rcloneConfigPath,
+	// the dashboard's API widgets, with the keys they call their APIs with; the
+	// core names this file in pkg/apiwidgets (ConfigFile), and the two must agree
+	apiWidgetsPath,
 }
+
+const (
+	rcloneConfigPath = "/root/.config/rclone/rclone.conf"
+	apiWidgetsPath   = "/var/lib/casaos/api_widgets.json"
+)
+
+// systemSecretFiles hold keys. A destination does not always give a file back
+// with the mode it had, so a restore sets these two to root only, and no other.
+var systemSecretFiles = []string{rcloneConfigPath, apiWidgetsPath}
+
+// chmodRestored is a seam so a test does not touch /root.
+var chmodRestored = os.Chmod
 
 // systemUnits are the services that hold the files above open. Stopped for the
 // copy in both directions -- sqlite files copied under a running writer are the
@@ -267,7 +282,12 @@ func RestoreSystemBackup(ctx context.Context, restorer BackupRestorer, units uni
 			if err != nil {
 				return fmt.Errorf("restoring %s: %w", operation.Source, err)
 			}
-			if operation.Source == "/root/.config/rclone/rclone.conf" {
+			if !operation.Directory && slices.Contains(systemSecretFiles, operation.Source) {
+				if err := chmodRestored(operation.Source, 0o600); err != nil {
+					return fmt.Errorf("restoring %s: it came back, and could not be made readable by root only: %w", operation.Source, err)
+				}
+			}
+			if operation.Source == rcloneConfigPath {
 				rcloneTouched = true
 			}
 
