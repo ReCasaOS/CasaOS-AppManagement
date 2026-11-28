@@ -86,6 +86,26 @@ func TestAnUnknownFileOfTheBoxIsBackedUpAndAnExcludedOneSaysWhy(t *testing.T) {
 	assert.Equal(t, systemExcludedReason("db"), "")
 }
 
+// The folders of apps that are gone, the state of a move of Docker's data and the
+// installers of an update are not the box's own state: neither saved nor put back.
+func TestWhatBelongsToTheAppsTheDisksOrAnUpdateStaysOut(t *testing.T) {
+	fs := boxFS(map[string][]systemChild{
+		"/var/lib/casaos": {{Name: "apps-removed"}, {Name: "docker-location.json"}, {Name: "update"}, {Name: "update-channel"}},
+	}, nil)
+
+	entries, err := SystemBackupInventory(fs)
+	assert.NilError(t, err)
+
+	for _, p := range []string{"/var/lib/casaos/apps-removed", "/var/lib/casaos/docker-location.json", "/var/lib/casaos/update"} {
+		_, ok := entryFor(entries, p)
+		assert.Assert(t, !ok, "%s has no entry at all", p)
+		assert.Assert(t, !systemRestorable(p), "%s is not put back either", p)
+	}
+	// its neighbour by name is the owner's choice of releases, and that is the box's
+	channel, ok := entryFor(entries, "/var/lib/casaos/update-channel")
+	assert.Assert(t, ok && channel.Skip == "")
+}
+
 func TestASplitFolderThatIsNotThereIsAbsentNotAnError(t *testing.T) {
 	fs := boxFS(nil, nil)
 	fs.List = func(dir string) ([]systemChild, error) {

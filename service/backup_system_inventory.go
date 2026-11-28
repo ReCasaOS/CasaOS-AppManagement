@@ -33,6 +33,7 @@ var systemSplit = []string{"backups", "gateway", "git_apps"}
 // (path.Match), each with the reason.
 var systemExclusions = []struct{ pattern, reason string }{
 	{"apps", "the apps are backed up on their own"},
+	{"apps-removed", "the folders of apps that are gone, set aside by a cleanup: theirs, not the box's"},
 	{"files", "the storage merged into /DATA: apps' and people's data, not the box's"},
 	{"appstore", "downloaded again from the store"},
 	{"www", "the web files are put back by the installer"},
@@ -41,6 +42,9 @@ var systemExclusions = []struct{ pattern, reason string }{
 	{"cache", "a cache, rebuilt on use"},
 	{"stats", "statistics, rebuilt as they are taken"},
 	{"os-upgrade", "state of an upgrade under way, meaningless on another box"},
+	{"update", "the installers checked for an update, fetched and checked again at the next one"},
+	// put back, a move a backup caught half-way would be finished or undone again
+	{"docker-location.json", "where this machine keeps Docker's data and how its last move went: its disks, not its settings"},
 	{"*.notified", "a notice already shown, not state"},
 	{"upgraded-from", "a marker of this machine's last upgrade"},
 	{"fork-release", "a marker of this machine's release"},
